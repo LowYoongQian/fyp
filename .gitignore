@@ -1,0 +1,54 @@
+# Root-level safety-net .gitignore for FYP project
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor/IDE configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment Secrets (Crucial safety net for all subfolders)
+**/.env
+**/.env.*
+**/env.json
+**/env.*.json
+!**/.env.example
+!**/env.json.example
+!**/env.example.json
+
+# Local Python virtual environments & caches
+**/.venv/
+**/venv/
+**/env/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.cache/
+
+# Local Node/Vite build & dependency files
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# Flutter/Dart local caches & build outputs
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/build/
+**/coverage/
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/

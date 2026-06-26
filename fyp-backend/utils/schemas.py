@@ -1,0 +1,272 @@
+from pydantic import BaseModel
+from typing import Optional
+
+# Authentication Schemas
+class LoginRequest(BaseModel):
+    # Accepts an email OR a student_code / staff_id. `email` kept for backward
+    # compatibility with older app builds; `identifier` is preferred.
+    email: Optional[str] = None
+    identifier: Optional[str] = None
+    password: str
+    # Device fingerprint for multi-device session binding (optional; older
+    # clients that omit it are not locked to a device).
+    device_id: Optional[str] = None
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    role: str          # 'student' | 'lecturer'
+    name: str
+    code: Optional[str] = None          # student_code or staff_id
+    class_group: Optional[str] = None   # alias/fallback sent by some frontend UI versions
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+    user_id: int
+    # Profile details so the app never needs a direct DB connection to log in.
+    profile_id: Optional[int] = None        # students.id or lecturers.id
+    name: Optional[str] = None
+    code: Optional[str] = None              # student_code or staff_id
+    email: Optional[str] = None
+    is_face_registered: Optional[bool] = None
+
+# LLM Chatbot Schemas
+class QueryRequest(BaseModel):
+    question: str
+
+class QueryResponse(BaseModel):
+    answer: str
+    sql_used: Optional[str] = None
+    success: bool
+    row_count: int = 0
+
+# Generic Response
+class MessageResponse(BaseModel):
+    message: str
+    user_id: Optional[int] = None
+
+# Session & Attendance Schemas
+from datetime import datetime
+
+class SessionCreate(BaseModel):
+    course_id: int
+    class_group: str = "All"
+
+class SessionResponse(BaseModel):
+    id: int
+    course_id: int
+    opened_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    is_open: bool
+    class_group: str
+
+    class Config:
+        from_attributes = True
+
+class AttendanceSubmit(BaseModel):
+    wifi_ssid: str
+    image_base64: str
+    liveness_passed: bool = True
+    # Client-reported network facts (corroborating signals; spoofable individually)
+    bssid: Optional[str] = None         # connected access point MAC
+    gateway_ip: Optional[str] = None    # router/gateway IP the device routes through
+    local_ip: Optional[str] = None      # device's own LAN IP
+    subnet: Optional[str] = None        # device subnet mask, if available
+    # Behavioral biometrics — how long (ms) the liveness challenge took to pass.
+    # A suspiciously short value (<800 ms) may indicate replay or automation.
+    liveness_challenge_ms: Optional[int] = None
+
+class AttendanceResponse(BaseModel):
+    id: int
+    student_id: int
+    session_id: int
+    status: str
+    confidence_score: Optional[float] = None
+    wifi_verified: bool
+    liveness_passed: bool
+    marked_at: datetime
+    network_verified: Optional[bool] = None
+    verify_detail: Optional[str] = None
+    liveness_challenge_ms: Optional[int] = None
+    liveness_suspicious: Optional[bool] = None
+
+    class Config:
+        from_attributes = True
+
+class StudentAttendanceStatus(BaseModel):
+    student_id: int
+    student_name: str
+    student_code: str
+    status: str
+    marked_at: Optional[datetime] = None
+    confidence_score: Optional[float] = None
+    network_verified: Optional[bool] = None
+    source_ip: Optional[str] = None
+    verify_detail: Optional[str] = None
+
+class SessionAttendanceResponse(BaseModel):
+    session_id: int
+    course_name: str
+    course_code: str
+    class_group: str
+    is_open: bool
+    attendance_list: list[StudentAttendanceStatus]
+
+# Announcement Schemas
+class AnnouncementCreate(BaseModel):
+    title: str
+    content: str
+    faculty: str
+    department: str
+    is_draft: Optional[bool] = False
+    priority: Optional[str] = "Medium"
+    image_base64: Optional[str] = None
+    publish_start: Optional[datetime] = None
+    publish_end: Optional[datetime] = None
+    target_audience: Optional[str] = "all"
+    target_programme_code: Optional[str] = None
+
+class AnnouncementResponse(BaseModel):
+    id: int
+    title: str
+    content: str
+    faculty: str
+    department: str
+    created_at: datetime
+    is_draft: bool
+    priority: str
+    image_base64: Optional[str] = None
+    publish_start: Optional[datetime] = None
+    publish_end: Optional[datetime] = None
+    target_audience: str
+    target_programme_code: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+# Admin CRUD Schemas
+class AdminStudentCreate(BaseModel):
+    email: str
+    password: str
+    name: str
+    student_code: str
+
+class AdminStudentUpdate(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+    name: Optional[str] = None
+    student_code: Optional[str] = None
+
+class AdminStaffCreate(BaseModel):
+    email: str
+    password: str
+    name: str
+    staff_id: str
+    role: Optional[str] = "Lecturer"
+
+class AdminStaffUpdate(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+    name: Optional[str] = None
+    staff_id: Optional[str] = None
+    role: Optional[str] = None
+
+# Academic Schemas
+class ProgrammeCreate(BaseModel):
+    name: str
+    code: str
+
+class ProgrammeResponse(BaseModel):
+    id: int
+    name: str
+    code: str
+
+    class Config:
+        from_attributes = True
+
+class CourseCreate(BaseModel):
+    course_name: str
+    course_code: str
+    credit_hours: Optional[float] = 3.0
+    lecturer_id: Optional[int] = None
+    programme_id: Optional[int] = None
+    
+    schedule_day: Optional[str] = None
+    schedule_start: Optional[str] = None
+    schedule_end: Optional[str] = None
+    schedule_room: Optional[str] = None
+
+class CourseResponse(BaseModel):
+    id: int
+    course_name: str
+    course_code: str
+    credit_hours: Optional[float] = 3.0
+    lecturer_id: Optional[int] = None
+    programme_id: Optional[int] = None
+    
+    schedule_day: Optional[str] = None
+    schedule_start: Optional[str] = None
+    schedule_end: Optional[str] = None
+    schedule_room: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class AssignmentCreate(BaseModel):
+    course_id: int
+    lecturer_id: int
+    role: str
+
+class AssignmentResponse(BaseModel):
+    id: int
+    course_id: int
+    lecturer_id: int
+    role: str
+
+    class Config:
+        from_attributes = True
+
+class StudentProgrammeAssign(BaseModel):
+    programme_id: Optional[int] = None
+
+class AdminAttendanceUpdate(BaseModel):
+    status: str
+    wifi_verified: bool = True
+    liveness_passed: bool = True
+
+# Campus Network & Security Settings Schemas
+class CampusNetworkCreate(BaseModel):
+    label: str
+    cidr: Optional[str] = None
+    ssid: Optional[str] = None
+    bssid_prefix: Optional[str] = None
+    is_active: bool = True
+
+class CampusNetworkUpdate(BaseModel):
+    label: Optional[str] = None
+    cidr: Optional[str] = None
+    ssid: Optional[str] = None
+    bssid_prefix: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class CampusNetworkResponse(BaseModel):
+    id: int
+    label: str
+    cidr: Optional[str] = None
+    ssid: Optional[str] = None
+    bssid_prefix: Optional[str] = None
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+class SecuritySettingItem(BaseModel):
+    key: str
+    value: Optional[str] = None
+
+class SecuritySettingsUpdate(BaseModel):
+    # accepts any subset of the known keys
+    settings: dict[str, str]
+
