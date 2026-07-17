@@ -17,7 +17,10 @@ deepface
 tf-keras
 
 # Analytics / ML dependencies (at-risk prediction model)
-numpy
-scikit-learn
-pandas
+# numpy pinned <2.0: TensorFlow 2.14 (deepface backend) is incompatible with
+# numpy 2.x. scikit-learn 1.9.0 (risk_model.pkl) only needs numpy>=1.24.1, and
+# pandas 2.2.x supports numpy 1.26 — so this pin keeps face + risk modules working.
+numpy==1.26.4
+scikit-learn==1.9.0
+pandas==2.2.3
 joblib
