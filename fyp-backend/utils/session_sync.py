@@ -2,12 +2,24 @@ from datetime import datetime, timedelta, time
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from utils.models import Course, Enrolment, ClassSession, AttendanceRecord, Student, CourseStaffAssignment
+import time as time_module
 from utils.scheduler import calculate_schedule
+
+_last_sync_time = 0.0
+_is_syncing = False
+_SYNC_THROTTLE_SECONDS = 60.0 # Only sync once per minute max to prevent query storms
 
 def sync_class_sessions(db: Session):
     """Automatically opens and closes class sessions based on the timetable schedule,
     and runs batch processing to mark absent students at the end of the day.
     """
+    global _last_sync_time, _is_syncing
+    
+    current_time = time_module.time()
+    if _is_syncing or (current_time - _last_sync_time < _SYNC_THROTTLE_SECONDS):
+        return # Skip to avoid query storms and database locks
+        
+    _is_syncing = True
     try:
         now_utc = datetime.utcnow()
         
@@ -129,7 +141,10 @@ def sync_class_sessions(db: Session):
                                 )
                                 db.add(record)
                         db.commit()
+        _last_sync_time = time_module.time()
     except Exception as e:
         db.rollback()
         print(f"Error during class session sync: {e}")
+    finally:
+        _is_syncing = False
 
