@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Base URL is injected at build time via Vite env (VITE_API_BASE_URL).
 // Define it in fyp_web/.env (see .env.example). Falls back to the local backend.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8003';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -144,9 +144,12 @@ export interface RiskScore {
   student_code?: string;
   course_id: number;
   course_code?: string;
+  course_name?: string;
   risk_score: number;
-  risk_label: 'low' | 'medium' | 'high';
+  risk_label: 'low' | 'medium' | 'high' | 'observing';
   attendance_rate: number;
+  risk_factors?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AlertLog {

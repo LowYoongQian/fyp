@@ -64,6 +64,11 @@ class Course(Base):
     course_name  = Column(String, nullable=False)
     course_code  = Column(String, unique=True, nullable=False)
     credit_hours = Column(Float, default=3.0)
+    # Planned total contact hours for the WHOLE semester offering of this course
+    # (e.g. 5h/week * 14 weeks = 70). This is the denominator of the 80% rule and
+    # is set once at course setup. Nullable: if absent, the at-risk logic falls
+    # back to the ML model only (no "cannot recover" certainty layer).
+    planned_total_hours = Column(Float, nullable=True)
     lecturer_id  = Column(Integer, ForeignKey("lecturers.id"), index=True)
     programme_id = Column(Integer, ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
     
@@ -170,6 +175,10 @@ class RiskScore(Base):
     risk_score      = Column(Float, nullable=False)
     risk_label      = Column(String)
     attendance_rate = Column(Float)
+    # Human-readable reasons behind this verdict (e.g. "6 consecutive absences;
+    # attendance declining"). Populated at recompute so the dashboard can explain
+    # WHY a student is flagged. Nullable for backward compatibility.
+    risk_factors    = Column(String, nullable=True)
     updated_at      = Column(DateTime, server_default=func.now())
     
     student         = relationship("Student", back_populates="risk_scores")
