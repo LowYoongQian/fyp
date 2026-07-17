@@ -157,3 +157,27 @@ setup_backend.bat
 ```
 
 That will reuse the local `.venv` and reinstall from `requirements.txt`.
+
+## Face recognition (deepface / ArcFace) setup
+
+The face recognition engine uses the `deepface` library with the ArcFace model.
+Two things are required for **real** identity matching (otherwise the code
+silently falls back to a mock embedding and skips matching):
+
+1. **deepface must import successfully.** It depends on TensorFlow 2.14, which
+   only works with **numpy < 2.0**. `requirements.txt` pins `numpy==1.26.4` and
+   `pandas==2.2.3` for this reason — do not bump numpy to 2.x. Also use
+   **Python 3.11** (TensorFlow 2.14 has no wheels for 3.12+/3.14).
+
+2. **The ArcFace weights must be present.** On first use deepface tries to
+   download `arcface_weights.h5` (~137 MB) to `%USERPROFILE%\.deepface\weights\`.
+   If that auto-download fails (GitHub connectivity), download it manually:
+
+   ```bat
+   curl -L -o "%USERPROFILE%\.deepface\weights\arcface_weights.h5" ^
+     https://github.com/serengil/deepface_models/releases/download/v1.0/arcface_weights.h5
+   ```
+
+To confirm real matching is active, check that `_DEEPFACE_AVAILABLE` is `True`
+in `routers/students.py` at runtime — if deepface fails to import it is `False`
+and check-in returns a hardcoded `confidence_score=0.95` with no real face match.
