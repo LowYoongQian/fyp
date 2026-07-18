@@ -209,8 +209,12 @@ export interface Announcement {
   image_base64?: string | null;
   publish_start?: string | null;
   publish_end?: string | null;
-  target_audience: string;
+  target_scope: 'all' | 'programme' | 'course';
+  target_role: 'all' | 'students' | 'staff';
   target_programme_code?: string | null;
+  target_course_code?: string | null;
+  // Legacy — retained so older callers/tests still typecheck; no longer sent.
+  target_audience?: string | null;
 }
 
 export interface AdminStudent {

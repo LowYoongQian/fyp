@@ -474,8 +474,10 @@ class _AppRootState extends State<AppRoot> {
           'image_base64': a['image_base64'],
           'publish_start': a['publish_start'],
           'publish_end': a['publish_end'],
-          'target_audience': a['target_audience'],
+          'target_scope': a['target_scope'],
+          'target_role': a['target_role'],
           'target_programme_code': a['target_programme_code'],
+          'target_course_code': a['target_course_code'],
         });
       }
 
@@ -606,6 +608,20 @@ class _AppRootState extends State<AppRoot> {
           error = jsonDecode(response.body)['detail'] ?? error;
         } catch (_) {
           error = 'Server error ${response.statusCode}.';
+        }
+        // "Already checked in" is not a failure — the student is already marked
+        // present for this session (e.g. a double-tap). Show a friendly notice
+        // instead of a red error dialog, and refresh so their status reflects it.
+        if (response.statusCode == 400 && error.toLowerCase().contains('already registered')) {
+          await syncData(context);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("You're already checked in for this class."),
+              backgroundColor: Color(0xFF3B82F6),
+            ),
+          );
+          return;
         }
         throw Exception(error);
       }

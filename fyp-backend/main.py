@@ -64,7 +64,53 @@ try:
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS liveness_challenge_ms INTEGER;"))
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS liveness_suspicious BOOLEAN DEFAULT FALSE;"))
 
+        # One attendance record per (student, session): dedupe any historical
+        # duplicates first (keep present/leave over absent, then the newest id),
+        # then add the unique constraint. Ranking: status_rank 0 = attended,
+        # 1 = absent (lower is kept); within a rank the highest id (newest) wins.
+        conn.execute(text("""
+            DELETE FROM attendance_records a
+            USING attendance_records b
+            WHERE a.student_id = b.student_id
+              AND a.session_id = b.session_id
+              AND (
+                    (CASE WHEN a.status IN ('present','leave') THEN 0 ELSE 1 END,  -a.id)
+                  > (CASE WHEN b.status IN ('present','leave') THEN 0 ELSE 1 END,  -b.id)
+                  );
+        """))
+        # ADD CONSTRAINT has no IF NOT EXISTS in Postgres — guard against re-runs.
+        # A re-run raises duplicate_table (the backing index already exists) or
+        # duplicate_object (the constraint already exists); swallow both.
+        conn.execute(text("""
+            DO $$ BEGIN
+                ALTER TABLE attendance_records
+                  ADD CONSTRAINT uq_attendance_student_session UNIQUE (student_id, session_id);
+            EXCEPTION WHEN duplicate_object OR duplicate_table THEN NULL;
+            END $$;
+        """))
+
         # Multi-device session binding table (created by Base.metadata above; migration is idempotent)
+
+        # Announcement targeting: scope (all/programme/course) × role (all/students/staff).
+        # Adds the new columns and backfills them from the legacy target_audience value
+        # so existing announcements keep their reach. Idempotent.
+        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_scope VARCHAR DEFAULT 'all';"))
+        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_role VARCHAR DEFAULT 'all';"))
+        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_course_code VARCHAR;"))
+        conn.execute(text("ALTER TABLE announcements ALTER COLUMN target_audience DROP NOT NULL;"))
+        # Backfill only rows not yet migrated (scope still at default 'all' but a legacy
+        # audience implies otherwise). Safe to re-run: it only rewrites when they disagree.
+        conn.execute(text("""
+            UPDATE announcements SET
+                target_scope = CASE
+                    WHEN target_audience = 'students_specific' THEN 'programme'
+                    ELSE 'all' END,
+                target_role = CASE
+                    WHEN target_audience IN ('students_all','students_specific') THEN 'students'
+                    WHEN target_audience IN ('staff_all','staff_specific')       THEN 'staff'
+                    ELSE 'all' END
+            WHERE target_audience IS NOT NULL;
+        """))
 
         # Seed default security settings (idempotent) if the table is empty
         existing = conn.execute(text("SELECT COUNT(*) FROM security_settings;")).scalar()

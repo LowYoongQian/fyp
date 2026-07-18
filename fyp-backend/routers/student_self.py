@@ -134,34 +134,46 @@ def get_my_announcements(
         raise HTTPException(status_code=404, detail="Student profile not found")
         
     now = datetime.utcnow()
-    
+
+    # Course codes this student is enrolled in (for scope='course' matching).
+    my_course_codes = {
+        code.upper() for (code,) in (
+            db.query(Course.course_code)
+            .join(Enrolment, Enrolment.course_id == Course.id)
+            .filter(Enrolment.student_id == student.id)
+            .all()
+        ) if code
+    }
+    my_prog_code = student.programme.code.upper() if student.programme else None
+
     # Query all published announcements (not drafts)
     query = db.query(Announcement).filter(Announcement.is_draft == False)
     announcements = query.all()
-    
+
     filtered = []
     for a in announcements:
-        # Check start date
+        # Window checks
         if a.publish_start and now < a.publish_start:
             continue
-        # Check end date
         if a.publish_end and now >= a.publish_end:
             continue
-            
-        # Check target audience
-        # 'all', 'students_all', 'students_specific', 'staff_all', 'staff_specific'
-        if a.target_audience == 'all':
+
+        # Role gate: students only see 'all' or 'students'-targeted announcements.
+        if (a.target_role or "all") == "staff":
+            continue
+
+        # Scope gate
+        scope = a.target_scope or "all"
+        if scope == "all":
             filtered.append(a)
-        elif a.target_audience == 'students_all':
-            filtered.append(a)
-        elif a.target_audience == 'students_specific':
-            # Match by student's programme code if specified
-            if student.programme and a.target_programme_code:
-                if student.programme.code.upper() == a.target_programme_code.upper():
-                    filtered.append(a)
-            else:
+        elif scope == "programme":
+            if a.target_programme_code and my_prog_code and \
+               a.target_programme_code.upper() == my_prog_code:
                 filtered.append(a)
-                
+        elif scope == "course":
+            if a.target_course_code and a.target_course_code.upper() in my_course_codes:
+                filtered.append(a)
+
     # Sort by priority and created_at descending
     priority_weight = {'High': 3, 'Medium': 2, 'Low': 1}
     filtered_sorted = sorted(
@@ -182,8 +194,10 @@ def get_my_announcements(
             "image_base64": a.image_base64,
             "publish_start": a.publish_start.isoformat() if a.publish_start else None,
             "publish_end": a.publish_end.isoformat() if a.publish_end else None,
-            "target_audience": a.target_audience,
-            "target_programme_code": a.target_programme_code
+            "target_scope": a.target_scope,
+            "target_role": a.target_role,
+            "target_programme_code": a.target_programme_code,
+            "target_course_code": a.target_course_code,
         }
         for a in filtered_sorted
     ]

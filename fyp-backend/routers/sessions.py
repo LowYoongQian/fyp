@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
 from utils.database import get_db
@@ -18,7 +19,7 @@ from utils.schemas import (
 )
 from routers.students import (
     _extract_face_embedding, _embedding_to_floats,
-    _cosine_distance, _FACE_MATCH_THRESHOLD, _DEEPFACE_AVAILABLE,
+    _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
 
 router = APIRouter(prefix="/sessions", tags=["Attendance"])
@@ -445,34 +446,34 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
         raise HTTPException(status_code=400, detail="A captured face image is required to check in.")
 
     # 1b. Identity verification via face embedding cosine distance.
-    # Skipped when DeepFace is not installed (development fallback).
-    confidence_score = 0.95
-    if _DEEPFACE_AVAILABLE:
-        stored_emb = db.query(FaceEmbedding).filter(
-            FaceEmbedding.student_id == student.id,
-            FaceEmbedding.is_active == True,
-        ).first()
-        if not stored_emb:
+    # ArcFace identity matching is MANDATORY — it is the core anti-proxy mechanism
+    # (report §2.2.2). If deepface is unavailable, _extract_face_embedding raises 503;
+    # there is no mock/dev fallback that would let an unverified check-in through.
+    stored_emb = db.query(FaceEmbedding).filter(
+        FaceEmbedding.student_id == student.id,
+        FaceEmbedding.is_active == True,
+    ).first()
+    if not stored_emb:
+        raise HTTPException(
+            status_code=400,
+            detail="No registered face found. Please register your face before checking in."
+        )
+    try:
+        live_bytes  = _extract_face_embedding(body.image_base64, enforce_detection=False)
+        live_vec    = _embedding_to_floats(live_bytes)
+        stored_vec  = _embedding_to_floats(stored_emb.embedding)
+        distance    = _cosine_distance(live_vec, stored_vec)
+        confidence_score = round(1.0 - distance, 4)
+        if distance > _FACE_MATCH_THRESHOLD:
             raise HTTPException(
-                status_code=400,
-                detail="No registered face found. Please register your face before checking in."
+                status_code=403,
+                detail=f"Face identity could not be verified (distance {distance:.3f} > threshold {_FACE_MATCH_THRESHOLD}). "
+                       "Ensure good lighting and look directly at the camera."
             )
-        try:
-            live_bytes  = _extract_face_embedding(body.image_base64, enforce_detection=False)
-            live_vec    = _embedding_to_floats(live_bytes)
-            stored_vec  = _embedding_to_floats(stored_emb.embedding)
-            distance    = _cosine_distance(live_vec, stored_vec)
-            confidence_score = round(1.0 - distance, 4)
-            if distance > _FACE_MATCH_THRESHOLD:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Face identity could not be verified (distance {distance:.3f} > threshold {_FACE_MATCH_THRESHOLD}). "
-                           "Ensure good lighting and look directly at the camera."
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Face matching error: {exc}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Face matching error: {exc}")
 
     # Behavioral biometrics: flag abnormally fast completions as suspicious.
     # Legitimate users need at least ~800 ms per challenge (2 challenges → ~1600 ms minimum).
@@ -534,7 +535,15 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
         liveness_suspicious=liveness_suspicious,
     )
     db.add(record)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent double-submit (e.g. a double-tap or retry) raced past the
+        # "already checked in" guard above. The DB unique constraint on
+        # (student_id, session_id) is the authoritative backstop — one record
+        # per student per session. Roll back and report it as an idempotent 400.
+        db.rollback()
+        raise HTTPException(status_code=400, detail="You have already registered attendance for this session")
     db.refresh(record)
     return record
 

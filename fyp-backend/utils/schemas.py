@@ -125,8 +125,10 @@ class AnnouncementCreate(BaseModel):
     image_base64: Optional[str] = None
     publish_start: Optional[datetime] = None
     publish_end: Optional[datetime] = None
-    target_audience: Optional[str] = "all"
+    target_scope: Optional[str] = "all"        # 'all' | 'programme' | 'course'
+    target_role: Optional[str] = "all"         # 'all' | 'students' | 'staff'
     target_programme_code: Optional[str] = None
+    target_course_code: Optional[str] = None
 
 class AnnouncementResponse(BaseModel):
     id: int
@@ -140,8 +142,10 @@ class AnnouncementResponse(BaseModel):
     image_base64: Optional[str] = None
     publish_start: Optional[datetime] = None
     publish_end: Optional[datetime] = None
-    target_audience: str
+    target_scope: str
+    target_role: str
     target_programme_code: Optional[str] = None
+    target_course_code: Optional[str] = None
 
     class Config:
         from_attributes = True

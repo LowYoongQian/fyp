@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
-import type { Announcement, Programme } from '../../services/api';
+import type { Announcement, Programme, Course } from '../../services/api';
 import { swalSuccess, swalError, swalConfirmDelete } from '../../utils/swal';
 import {
   Megaphone,
@@ -21,18 +21,78 @@ import {
   UserCheck
 } from 'lucide-react';
 
-const DEPARTMENTS = [
-  'Department of Computer Science & Embedded Systems',
-  'Department of Software Engineering',
-  'Department of Information Technology & Security',
-  'Department of Applied Physics & Mathematics',
-  'Department of Mechanical & Electrical Engineering',
-  'All Departments'
-];
+interface TargetPickerProps {
+  scope: 'all' | 'programme' | 'course';
+  setScope: (v: 'all' | 'programme' | 'course') => void;
+  role: 'all' | 'students' | 'staff';
+  setRole: (v: 'all' | 'students' | 'staff') => void;
+  programmeCode: string;
+  setProgrammeCode: (v: string) => void;
+  courseCode: string;
+  setCourseCode: (v: string) => void;
+  programmes: Programme[];
+  courses: Course[];
+}
+
+const selectCls = "w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none";
+const chevron = <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />;
+
+const TargetPicker: React.FC<TargetPickerProps> = ({
+  scope, setScope, role, setRole, programmeCode, setProgrammeCode,
+  courseCode, setCourseCode, programmes, courses,
+}) => (
+  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div className="space-y-1">
+      <label className="font-semibold text-slate-700">Who can see this?</label>
+      <div className="relative">
+        <select value={role} onChange={(e) => setRole(e.target.value as any)} className={selectCls}>
+          <option value="all">Everyone (students &amp; staff)</option>
+          <option value="students">Students only</option>
+          <option value="staff">Staff only</option>
+        </select>
+        {chevron}
+      </div>
+    </div>
+    <div className="space-y-1">
+      <label className="font-semibold text-slate-700">Scope</label>
+      <div className="relative">
+        <select value={scope} onChange={(e) => setScope(e.target.value as any)} className={selectCls}>
+          <option value="all">Whole campus</option>
+          <option value="programme">A specific programme</option>
+          <option value="course">A specific course</option>
+        </select>
+        {chevron}
+      </div>
+    </div>
+    {scope === 'programme' && (
+      <div className="space-y-1 sm:col-span-2 animate-in slide-in-from-top-2 duration-150">
+        <label className="font-semibold text-slate-700">Target Programme</label>
+        <div className="relative">
+          <select value={programmeCode} onChange={(e) => setProgrammeCode(e.target.value)} className={selectCls}>
+            {programmes.map(p => <option key={p.id} value={p.code}>{p.name} ({p.code})</option>)}
+          </select>
+          {chevron}
+        </div>
+      </div>
+    )}
+    {scope === 'course' && (
+      <div className="space-y-1 sm:col-span-2 animate-in slide-in-from-top-2 duration-150">
+        <label className="font-semibold text-slate-700">Target Course</label>
+        <div className="relative">
+          <select value={courseCode} onChange={(e) => setCourseCode(e.target.value)} className={selectCls}>
+            {courses.map(c => <option key={c.id} value={c.course_code}>{c.course_name} ({c.course_code})</option>)}
+          </select>
+          {chevron}
+        </div>
+      </div>
+    )}
+  </div>
+);
 
 export const AnnouncementManager: React.FC = () => {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,13 +105,14 @@ export const AnnouncementManager: React.FC = () => {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [faculty, setFaculty] = useState('All Faculties');
-  const [department, setDepartment] = useState('All Departments');
   const [priority, setPriority] = useState<'High' | 'Medium' | 'Low'>('Medium');
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [publishStart, setPublishStart] = useState('');
   const [publishEnd, setPublishEnd] = useState('');
-  const [targetAudience, setTargetAudience] = useState<string>('all');
+  const [targetScope, setTargetScope] = useState<'all' | 'programme' | 'course'>('all');
+  const [targetRole, setTargetRole] = useState<'all' | 'students' | 'staff'>('all');
   const [targetProgrammeCode, setTargetProgrammeCode] = useState<string>('');
+  const [targetCourseCode, setTargetCourseCode] = useState<string>('');
 
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
@@ -68,12 +129,14 @@ export const AnnouncementManager: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [annData, progData] = await Promise.all([
+      const [annData, progData, courseData] = await Promise.all([
         apiService.adminGetAnnouncements(),
-        apiService.adminGetProgrammes()
+        apiService.adminGetProgrammes(),
+        apiService.adminGetCourses()
       ]);
       setAnnouncements(annData);
       setProgrammes(progData);
+      setCourses(courseData);
     } catch (err: any) {
       setError('Failed to fetch announcements or programmes. Please ensure backend is running.');
       console.error(err);
@@ -95,13 +158,14 @@ export const AnnouncementManager: React.FC = () => {
     setTitle('');
     setContent('');
     setFaculty('All Faculties');
-    setDepartment('All Departments');
     setPriority('Medium');
     setImageBase64(null);
     setPublishStart('');
     setPublishEnd('');
-    setTargetAudience('all');
+    setTargetScope('all');
+    setTargetRole('all');
     setTargetProgrammeCode(programmes[0]?.code || '');
+    setTargetCourseCode(courses[0]?.course_code || '');
     setFormError(null);
     setIsCreateOpen(true);
   };
@@ -111,13 +175,14 @@ export const AnnouncementManager: React.FC = () => {
     setTitle(ann.title);
     setContent(ann.content);
     setFaculty(ann.faculty || 'All Faculties');
-    setDepartment(ann.department || 'All Departments');
     setPriority(ann.priority || 'Medium');
     setImageBase64(ann.image_base64 || null);
     setPublishStart(ann.publish_start ? ann.publish_start.substring(0, 16) : '');
     setPublishEnd(ann.publish_end ? ann.publish_end.substring(0, 16) : '');
-    setTargetAudience(ann.target_audience || 'all');
+    setTargetScope(ann.target_scope || 'all');
+    setTargetRole(ann.target_role || 'all');
     setTargetProgrammeCode(ann.target_programme_code || (programmes[0]?.code || ''));
+    setTargetCourseCode(ann.target_course_code || (courses[0]?.course_code || ''));
     setFormError(null);
     setIsEditOpen(true);
   };
@@ -131,14 +196,16 @@ export const AnnouncementManager: React.FC = () => {
           title: title.trim() || 'Untitled Draft',
           content: content.trim(),
           faculty,
-          department: targetAudience === 'staff_specific' ? department : 'All Departments',
+          department: 'All Departments',
           is_draft: true,
           priority,
           image_base64: imageBase64,
           publish_start: publishStart ? new Date(publishStart).toISOString() : null,
           publish_end: publishEnd ? new Date(publishEnd).toISOString() : null,
-          target_audience: targetAudience,
-          target_programme_code: targetAudience === 'students_specific' ? targetProgrammeCode : null
+          target_scope: targetScope,
+          target_role: targetRole,
+          target_programme_code: targetScope === 'programme' ? targetProgrammeCode : null,
+          target_course_code: targetScope === 'course' ? targetCourseCode : null
         };
 
         if (isEdit && selectedAnnouncement) {
@@ -230,14 +297,16 @@ export const AnnouncementManager: React.FC = () => {
       title,
       content,
       faculty,
-      department: targetAudience === 'staff_specific' ? department : 'All Departments',
+      department: 'All Departments',
       is_draft: submitAsDraft,
       priority,
       image_base64: imageBase64,
       publish_start: publishStart ? new Date(publishStart).toISOString() : null,
       publish_end: publishEnd ? new Date(publishEnd).toISOString() : null,
-      target_audience: targetAudience,
-      target_programme_code: targetAudience === 'students_specific' ? targetProgrammeCode : null
+      target_scope: targetScope,
+      target_role: targetRole,
+      target_programme_code: targetScope === 'programme' ? targetProgrammeCode : null,
+      target_course_code: targetScope === 'course' ? targetCourseCode : null
     };
 
     try {
@@ -399,14 +468,16 @@ export const AnnouncementManager: React.FC = () => {
                         </>
                       )}
                       
-                      {/* Target Audience Badge */}
+                      {/* Target Audience Badge: scope × role */}
                       <span className="uipro-badge bg-slate-100 text-slate-700 border border-slate-200 text-[9px] py-0.5 px-2 font-medium flex items-center gap-1">
                         <UserCheck className="h-2.5 w-2.5" />
-                        {ann.target_audience === 'all' && 'All Public'}
-                        {ann.target_audience === 'students_all' && 'All Students'}
-                        {ann.target_audience === 'students_specific' && `Students: ${ann.target_programme_code}`}
-                        {ann.target_audience === 'staff_all' && 'All Staff'}
-                        {ann.target_audience === 'staff_specific' && `Staff: ${ann.department}`}
+                        {(() => {
+                          const roleLabel = ann.target_role === 'students' ? 'Students'
+                            : ann.target_role === 'staff' ? 'Staff' : 'Everyone';
+                          if (ann.target_scope === 'programme') return `${roleLabel} · ${ann.target_programme_code || '—'}`;
+                          if (ann.target_scope === 'course') return `${roleLabel} · ${ann.target_course_code || '—'}`;
+                          return `${roleLabel} · All`;
+                        })()}
                       </span>
                     </div>
 
@@ -517,63 +588,14 @@ export const AnnouncementManager: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Target Audience Picker */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="font-semibold text-slate-700">Target Audience</label>
-                    <div className="relative">
-                      <select
-                        value={targetAudience}
-                        onChange={(e) => setTargetAudience(e.target.value)}
-                        className="w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none"
-                      >
-                        <option value="all">All (General Public)</option>
-                        <option value="students_all">All Students</option>
-                        <option value="students_specific">Specific Programme Students</option>
-                        <option value="staff_all">All Staff</option>
-                        <option value="staff_specific">Specific Department Staff</option>
-                      </select>
-                      <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                    </div>
-                  </div>
-
-                  {/* Sub-targeting input conditional on selection */}
-                  {targetAudience === 'students_specific' && (
-                    <div className="space-y-1 animate-in slide-in-from-top-2 duration-150">
-                      <label className="font-semibold text-slate-700">Target Programme</label>
-                      <div className="relative">
-                        <select
-                          value={targetProgrammeCode}
-                          onChange={(e) => setTargetProgrammeCode(e.target.value)}
-                          className="w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none"
-                        >
-                          {programmes.map(p => (
-                            <option key={p.id} value={p.code}>{p.name} ({p.code})</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-                  )}
-
-                  {targetAudience === 'staff_specific' && (
-                    <div className="space-y-1 animate-in slide-in-from-top-2 duration-150">
-                      <label className="font-semibold text-slate-700">Target Department</label>
-                      <div className="relative">
-                        <select
-                          value={department}
-                          onChange={(e) => setDepartment(e.target.value)}
-                          className="w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none"
-                        >
-                          {DEPARTMENTS.map(dept => (
-                            <option key={dept} value={dept}>{dept}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-                  )}
-                </div>
+                {/* Target: scope (who broadly) × role (which population) */}
+                <TargetPicker
+                  scope={targetScope} setScope={setTargetScope}
+                  role={targetRole} setRole={setTargetRole}
+                  programmeCode={targetProgrammeCode} setProgrammeCode={setTargetProgrammeCode}
+                  courseCode={targetCourseCode} setCourseCode={setTargetCourseCode}
+                  programmes={programmes} courses={courses}
+                />
 
                 {/* Priority Segmented Button Group */}
                 <div className="space-y-1.5">
@@ -774,63 +796,14 @@ export const AnnouncementManager: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Target Audience Picker */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="font-semibold text-slate-700">Target Audience</label>
-                    <div className="relative">
-                      <select
-                        value={targetAudience}
-                        onChange={(e) => setTargetAudience(e.target.value)}
-                        className="w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none"
-                      >
-                        <option value="all">All (General Public)</option>
-                        <option value="students_all">All Students</option>
-                        <option value="students_specific">Specific Programme Students</option>
-                        <option value="staff_all">All Staff</option>
-                        <option value="staff_specific">Specific Department Staff</option>
-                      </select>
-                      <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                    </div>
-                  </div>
-
-                  {/* Sub-targeting input conditional on selection */}
-                  {targetAudience === 'students_specific' && (
-                    <div className="space-y-1 animate-in slide-in-from-top-2 duration-150">
-                      <label className="font-semibold text-slate-700">Target Programme</label>
-                      <div className="relative">
-                        <select
-                          value={targetProgrammeCode}
-                          onChange={(e) => setTargetProgrammeCode(e.target.value)}
-                          className="w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none"
-                        >
-                          {programmes.map(p => (
-                            <option key={p.id} value={p.code}>{p.name} ({p.code})</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-                  )}
-
-                  {targetAudience === 'staff_specific' && (
-                    <div className="space-y-1 animate-in slide-in-from-top-2 duration-150">
-                      <label className="font-semibold text-slate-700">Target Department</label>
-                      <div className="relative">
-                        <select
-                          value={department}
-                          onChange={(e) => setDepartment(e.target.value)}
-                          className="w-full uipro-input pr-10 bg-slate-50 cursor-pointer font-semibold text-slate-700 appearance-none"
-                        >
-                          {DEPARTMENTS.map(dept => (
-                            <option key={dept} value={dept}>{dept}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-                  )}
-                </div>
+                {/* Target: scope (who broadly) × role (which population) */}
+                <TargetPicker
+                  scope={targetScope} setScope={setTargetScope}
+                  role={targetRole} setRole={setTargetRole}
+                  programmeCode={targetProgrammeCode} setProgrammeCode={setTargetProgrammeCode}
+                  courseCode={targetCourseCode} setCourseCode={setTargetCourseCode}
+                  programmes={programmes} courses={courses}
+                />
 
                 {/* Priority Segmented Button Group */}
                 <div className="space-y-1.5">

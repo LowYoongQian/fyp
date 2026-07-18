@@ -34,8 +34,10 @@ def create_announcement(body: AnnouncementCreate, db: Session = Depends(get_db),
         image_base64=body.image_base64,
         publish_start=body.publish_start,
         publish_end=body.publish_end,
-        target_audience=body.target_audience,
-        target_programme_code=body.target_programme_code
+        target_scope=body.target_scope,
+        target_role=body.target_role,
+        target_programme_code=body.target_programme_code if body.target_scope == "programme" else None,
+        target_course_code=body.target_course_code if body.target_scope == "course" else None,
     )
     db.add(announcement)
     db.commit()
@@ -57,9 +59,11 @@ def update_announcement(announcement_id: int, body: AnnouncementCreate, db: Sess
     announcement.image_base64 = body.image_base64
     announcement.publish_start = body.publish_start
     announcement.publish_end = body.publish_end
-    announcement.target_audience = body.target_audience
-    announcement.target_programme_code = body.target_programme_code
-    
+    announcement.target_scope = body.target_scope
+    announcement.target_role = body.target_role
+    announcement.target_programme_code = body.target_programme_code if body.target_scope == "programme" else None
+    announcement.target_course_code = body.target_course_code if body.target_scope == "course" else None
+
     db.commit()
     db.refresh(announcement)
     return announcement

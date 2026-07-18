@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float,
-    ForeignKey, DateTime, LargeBinary, Text, func, Index
+    ForeignKey, DateTime, LargeBinary, Text, func, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -166,6 +166,12 @@ class AttendanceRecord(Base):
     student          = relationship("Student", back_populates="attendance_records")
     session          = relationship("ClassSession", back_populates="attendance_records")
 
+    # One attendance record per student per session — a student cannot check in
+    # twice for the same class. Matches the DB constraint added in main.py.
+    __table_args__ = (
+        UniqueConstraint("student_id", "session_id", name="uq_attendance_student_session"),
+    )
+
 # ML Risk scores table
 class RiskScore(Base):
     __tablename__ = "risk_scores"
@@ -209,8 +215,13 @@ class Announcement(Base):
     image_base64          = Column(Text, nullable=True)
     publish_start         = Column(DateTime, nullable=True)
     publish_end           = Column(DateTime, nullable=True)
-    target_audience       = Column(String, default="all", nullable=False) # 'all', 'students_all', 'students_specific', 'staff_all', 'staff_specific'
-    target_programme_code = Column(String, nullable=True)
+    # Targeting = scope (who broadly) × role (which population). See main.py migration.
+    target_scope          = Column(String, default="all", nullable=False)   # 'all' | 'programme' | 'course'
+    target_role           = Column(String, default="all", nullable=False)   # 'all' | 'students' | 'staff'
+    target_programme_code = Column(String, nullable=True)                   # set when scope='programme'
+    target_course_code    = Column(String, nullable=True)                   # set when scope='course'
+    # Legacy discriminator kept nullable for backward compat; superseded by scope+role.
+    target_audience       = Column(String, nullable=True)
 
 # Campus network whitelist table (allowed CIDR ranges / SSIDs / AP MAC prefixes)
 class CampusNetwork(Base):
