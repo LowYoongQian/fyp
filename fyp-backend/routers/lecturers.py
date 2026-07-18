@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -7,10 +7,12 @@ from utils.timeutil import utcnow
 from typing import List
 
 from utils.database import get_db
+from utils.scheduler import calculate_schedule
 from utils.models import (
     User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement, ClassMeeting
 )
 from utils.security import require_lecturer
+from utils.db_helpers import require_own_profile, get_or_404
 
 router = APIRouter(prefix="/lecturers", tags=["Lecturers"])
 
@@ -21,9 +23,7 @@ class AlertCreate(BaseModel):
 @router.get("/me/courses")
 def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     # Find the lecturer profile
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
     # Get courses assigned directly or via assignments
     assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
@@ -68,9 +68,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
 
 @router.get("/me/alerts")
 def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
     assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
     assigned_course_ids = [a.course_id for a in assigned_assignments]
@@ -110,15 +108,10 @@ def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depe
 
 @router.post("/me/alerts")
 def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
-    student = db.query(Student).filter(Student.id == body.student_id).first()
-    course = db.query(Course).filter(Course.id == body.course_id).first()
-    
-    if not student or not course:
-        raise HTTPException(status_code=404, detail="Student or Course not found")
+    student = get_or_404(db, Student, body.student_id, "Student")
+    course = get_or_404(db, Course, body.course_id, "Course")
         
     email_body = (
         f"DEAR {student.name.upper()},\n\n"
@@ -145,9 +138,7 @@ def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), curre
 @router.get("/me/timetable")
 def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     # Find the lecturer profile
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
     # Get all courses where this lecturer is primary OR has staff assignments
     assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
@@ -167,7 +158,6 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
     )
 
     # Calculate deterministic clash-free schedules
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
     
     result = []
@@ -250,9 +240,7 @@ def get_my_announcements(
     """Return published and targeted announcements for the authenticated staff member,
     ordered by priority (High -> Medium -> Low) and date.
     """
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
     now = utcnow()
 

@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from utils.database import get_db
+import ipaddress
 from utils.models import User, Announcement, CampusNetwork, SecuritySetting
 from utils.security import require_admin
+from utils.db_helpers import get_or_404
 from utils.schemas import (
     AnnouncementCreate, AnnouncementResponse,
     CampusNetworkCreate, CampusNetworkUpdate, CampusNetworkResponse,
@@ -46,9 +48,7 @@ def create_announcement(body: AnnouncementCreate, db: Session = Depends(get_db),
 
 @router.put("/announcements/{announcement_id}", response_model=AnnouncementResponse)
 def update_announcement(announcement_id: int, body: AnnouncementCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    announcement = db.query(Announcement).filter(Announcement.id == announcement_id).first()
-    if not announcement:
-        raise HTTPException(status_code=404, detail="Announcement not found")
+    announcement = get_or_404(db, Announcement, announcement_id, "Announcement")
         
     announcement.title = body.title
     announcement.content = body.content
@@ -70,9 +70,7 @@ def update_announcement(announcement_id: int, body: AnnouncementCreate, db: Sess
 
 @router.delete("/announcements/{announcement_id}", response_model=MessageResponse)
 def delete_announcement(announcement_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    announcement = db.query(Announcement).filter(Announcement.id == announcement_id).first()
-    if not announcement:
-        raise HTTPException(status_code=404, detail="Announcement not found")
+    announcement = get_or_404(db, Announcement, announcement_id, "Announcement")
         
     db.delete(announcement)
     db.commit()
@@ -89,7 +87,6 @@ def get_campus_networks(db: Session = Depends(get_db), current_user: User = Depe
 
 
 def _validate_cidr(cidr: str):
-    import ipaddress
     try:
         ipaddress.ip_network(cidr, strict=False)
     except ValueError:
@@ -117,9 +114,7 @@ def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_d
 
 @router.put("/campus-networks/{net_id}", response_model=CampusNetworkResponse)
 def update_campus_network(net_id: int, body: CampusNetworkUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    net = db.query(CampusNetwork).filter(CampusNetwork.id == net_id).first()
-    if not net:
-        raise HTTPException(status_code=404, detail="Campus network rule not found")
+    net = get_or_404(db, CampusNetwork, net_id, detail="Campus network rule not found")
     if body.cidr is not None and body.cidr != "":
         _validate_cidr(body.cidr)
     for field in ("label", "cidr", "ssid", "bssid_prefix", "is_active"):
@@ -133,9 +128,7 @@ def update_campus_network(net_id: int, body: CampusNetworkUpdate, db: Session = 
 
 @router.delete("/campus-networks/{net_id}", response_model=MessageResponse)
 def delete_campus_network(net_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    net = db.query(CampusNetwork).filter(CampusNetwork.id == net_id).first()
-    if not net:
-        raise HTTPException(status_code=404, detail="Campus network rule not found")
+    net = get_or_404(db, CampusNetwork, net_id, detail="Campus network rule not found")
     db.delete(net)
     db.commit()
     return {"message": "Campus network rule deleted"}
@@ -162,7 +155,6 @@ def update_security_settings(body: SecuritySettingsUpdate, db: Session = Depends
         if key not in ALLOWED_SETTING_KEYS:
             continue
         if key == "demo_simulated_ip" and value.strip():
-            import ipaddress
             try:
                 ipaddress.ip_address(value.strip())
             except ValueError:

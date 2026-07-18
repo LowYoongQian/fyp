@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel
 
 from utils.database import get_db
+from utils.scheduler import pick_slot_for_new
 from utils.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
+from utils.db_helpers import get_or_404, ensure_unique
 from utils.schemas import (
     MessageResponse,
     ProgrammeCreate, ProgrammeResponse,
@@ -26,8 +28,7 @@ def get_programmes(db: Session = Depends(get_db), current_user: User = Depends(r
 
 @router.post("/programmes", response_model=ProgrammeResponse, status_code=201)
 def create_programme(body: ProgrammeCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    if db.query(Programme).filter(Programme.code == body.code).first():
-        raise HTTPException(status_code=400, detail="Programme code already exists")
+    ensure_unique(db, Programme, Programme.code, body.code, detail="Programme code already exists")
     programme = Programme(name=body.name, code=body.code)
     db.add(programme)
     db.commit()
@@ -36,13 +37,9 @@ def create_programme(body: ProgrammeCreate, db: Session = Depends(get_db), curre
 
 @router.put("/programmes/{programme_id}", response_model=ProgrammeResponse)
 def update_programme(programme_id: int, body: ProgrammeCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    programme = db.query(Programme).filter(Programme.id == programme_id).first()
-    if not programme:
-        raise HTTPException(status_code=404, detail="Programme not found")
+    programme = get_or_404(db, Programme, programme_id, "Programme")
     
-    existing = db.query(Programme).filter(Programme.code == body.code, Programme.id != programme_id).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Programme code already exists")
+    ensure_unique(db, Programme, Programme.code, body.code, exclude_id=programme_id, detail="Programme code already exists")
         
     programme.name = body.name
     programme.code = body.code
@@ -52,9 +49,7 @@ def update_programme(programme_id: int, body: ProgrammeCreate, db: Session = Dep
 
 @router.delete("/programmes/{programme_id}", response_model=MessageResponse)
 def delete_programme(programme_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    programme = db.query(Programme).filter(Programme.id == programme_id).first()
-    if not programme:
-        raise HTTPException(status_code=404, detail="Programme not found")
+    programme = get_or_404(db, Programme, programme_id, "Programme")
         
     db.query(Student).filter(Student.programme_id == programme_id).update({Student.programme_id: None})
     db.query(Course).filter(Course.programme_id == programme_id).update({Course.programme_id: None})
@@ -100,8 +95,7 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
 
 @router.post("/courses", response_model=CourseResponse, status_code=201)
 def create_course(body: CourseCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    if db.query(Course).filter(Course.course_code == body.course_code).first():
-        raise HTTPException(status_code=400, detail="Course code already exists")
+    ensure_unique(db, Course, Course.course_code, body.course_code, detail="Course code already exists")
 
     # Validate foreign keys up front so a bad id returns a clear 400 instead of
     # a database IntegrityError surfacing as an opaque 500.
@@ -124,7 +118,6 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
 
     # Auto-assign a clash-free slot for this course's Lecture and record it in
     # class_meetings (the timetable source of truth). No free slot -> 400.
-    from utils.scheduler import pick_slot_for_new
     try:
         slot = pick_slot_for_new(db, course.id, course.lecturer_id, "Lecture")
     except ValueError as e:
@@ -141,13 +134,9 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
 
 @router.put("/courses/{course_id}", response_model=CourseResponse)
 def update_course(course_id: int, body: CourseCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    course = get_or_404(db, Course, course_id, "Course")
         
-    existing = db.query(Course).filter(Course.course_code == body.course_code, Course.id != course_id).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Course code already exists")
+    ensure_unique(db, Course, Course.course_code, body.course_code, exclude_id=course_id, detail="Course code already exists")
 
     # Validate foreign keys up front (see create_course) — clear 400, not a 500.
     if body.lecturer_id is not None and \
@@ -177,9 +166,7 @@ def update_course(course_id: int, body: CourseCreate, db: Session = Depends(get_
 
 @router.delete("/courses/{course_id}", response_model=MessageResponse)
 def delete_course(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    course = get_or_404(db, Course, course_id, "Course")
         
     db.query(Enrolment).filter(Enrolment.course_id == course_id).delete()
     db.query(RiskScore).filter(RiskScore.course_id == course_id).delete()
@@ -240,7 +227,6 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
     # clash-free slot and record it. (A "Lecturer" role assignment is not a
     # separate meeting; the course's Lecture already covers it.)
     if body.role in ("Tutor", "Practical"):
-        from utils.scheduler import pick_slot_for_new
         try:
             slot = pick_slot_for_new(db, assignment.course_id, assignment.lecturer_id, body.role)
         except ValueError as e:
@@ -258,9 +244,7 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
 
 @router.delete("/assignments/{assignment_id}", response_model=MessageResponse)
 def delete_assignment(assignment_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    assignment = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.id == assignment_id).first()
-    if not assignment:
-        raise HTTPException(status_code=404, detail="Assignment not found")
+    assignment = get_or_404(db, CourseStaffAssignment, assignment_id, "Assignment")
     db.delete(assignment)
     db.commit()
     return {"message": "Assignment deleted successfully"}
@@ -301,9 +285,7 @@ class TimetableSlotUpdate(BaseModel):
 @router.put("/timetable/{meeting_id}", response_model=MessageResponse)
 def update_timetable_slot(meeting_id: int, body: TimetableSlotUpdate,
                           db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first()
-    if not meeting:
-        raise HTTPException(status_code=404, detail="Timetable slot not found")
+    meeting = get_or_404(db, ClassMeeting, meeting_id, detail="Timetable slot not found")
 
     def _to_min(hhmm: str) -> int:
         try:
@@ -402,9 +384,7 @@ def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: Us
 
 @router.delete("/enrolments/{enrolment_id}", response_model=MessageResponse)
 def delete_enrolment(enrolment_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    enrol = db.query(Enrolment).filter(Enrolment.id == enrolment_id).first()
-    if not enrol:
-        raise HTTPException(status_code=404, detail="Enrolment not found")
+    enrol = get_or_404(db, Enrolment, enrolment_id, "Enrolment")
     db.delete(enrol)
     db.commit()
     return {"message": "Enrolment deleted successfully"}

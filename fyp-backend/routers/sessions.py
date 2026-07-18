@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils.timeutil import utcnow
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -7,12 +7,15 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
 from utils.database import get_db
+from utils.scheduler import calculate_schedule
+from utils.session_sync import sync_class_sessions
 from utils.models import (
     User, Student, Lecturer, Course, Enrolment, ClassSession,
     AttendanceRecord, CampusNetwork, SecuritySetting, FaceEmbedding,
     CourseStaffAssignment, ClassMeeting
 )
 from utils.security import require_lecturer, require_student
+from utils.db_helpers import require_own_profile, get_or_404
 from utils.network_verify import get_client_ip, verify_network
 from utils.schemas import (
     SessionCreate, SessionResponse, AttendanceSubmit,
@@ -42,7 +45,6 @@ def _truthy(v: str) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 def get_course_group_slots(db: Session, course_id: int, class_group: str) -> list:
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
     
     slots = []
@@ -89,7 +91,6 @@ def validate_session_opening(db: Session, course_id: int, class_group: str, now:
                 start_dt = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
                 end_dt = now.replace(hour=eh, minute=em, second=0, microsecond=0)
                 
-                from datetime import timedelta
                 open_start = start_dt - timedelta(hours=1)
                 
                 if open_start <= now <= end_dt:
@@ -136,7 +137,6 @@ def validate_student_checkin(db: Session, course_id: int, class_group: str, now:
                     valid = True
                     break
                 elif now < start_dt:
-                    from datetime import timedelta
                     if start_dt - timedelta(hours=1) <= now:
                         is_early = True
             except Exception:
@@ -161,9 +161,7 @@ def validate_student_checkin(db: Session, course_id: int, class_group: str, now:
 @router.post("/open", response_model=SessionResponse, status_code=201)
 def open_session(body: SessionCreate, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     # Verify course exists
-    course = db.query(Course).filter(Course.id == body.course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    course = get_or_404(db, Course, body.course_id, "Course")
 
     # Enforce session open window
     validate_session_opening(db, body.course_id, body.class_group, datetime.now())
@@ -199,9 +197,7 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
 # 2. Close Session (Lecturer/Admin only)
 @router.post("/{id}/close", response_model=SessionResponse)
 def close_session(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    session = db.query(ClassSession).filter(ClassSession.id == id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_404(db, ClassSession, id, "Session")
     
     if not session.is_open:
         raise HTTPException(status_code=400, detail="Session is already closed")
@@ -215,12 +211,9 @@ def close_session(id: int, db: Session = Depends(get_db), current_user: User = D
 # 3. List active sessions matching student enrolments (Student only)
 @router.get("/open", response_model=List[SessionResponse])
 def get_active_student_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
     # Get student profile
-    student = db.query(Student).filter(Student.user_id == current_user.id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = require_own_profile(db, Student, current_user.id, "Student")
 
     # Join ClassSession with Enrolments to filter active sessions student is enrolled in
     sessions = db.query(ClassSession).join(
@@ -231,8 +224,6 @@ def get_active_student_sessions(db: Session = Depends(get_db), current_user: Use
         (ClassSession.class_group == "All") | (ClassSession.class_group == Enrolment.class_group)
     ).all()
 
-    from datetime import datetime, timedelta
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
     now_utc = utcnow()
     # Calculate local timezone offset dynamically
@@ -281,13 +272,9 @@ def get_active_student_sessions(db: Session = Depends(get_db), current_user: Use
 @router.post("/{id}/attend", response_model=AttendanceResponse)
 def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     # Check if session exists and is active
-    session = db.query(ClassSession).filter(ClassSession.id == id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_404(db, ClassSession, id, "Session")
         
     if session.is_open:
-        from datetime import datetime, timedelta
-        from utils.scheduler import calculate_schedule
         schedule_map = calculate_schedule(db)
         now_utc = utcnow()
         
@@ -337,9 +324,7 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
         raise HTTPException(status_code=400, detail="Attendance check-in has closed for this session")
 
     # Get student profile
-    student = db.query(Student).filter(Student.user_id == current_user.id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = require_own_profile(db, Student, current_user.id, "Student")
 
     # Check if student is enrolled in this session's course
     enrolment = db.query(Enrolment).filter(
@@ -483,21 +468,15 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
 # 5. Live Lecturer Attendance List (Lecturer/Admin only)
 @router.get("/{id}/attendance", response_model=SessionAttendanceResponse)
 def get_session_attendance(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    session = db.query(ClassSession).filter(ClassSession.id == id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_404(db, ClassSession, id, "Session")
 
-    course = db.query(Course).filter(Course.id == session.course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course associated with session not found")
+    course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
 
     # A lecturer may only view the roster for a course they own or are assigned
     # to; admins may view any. Otherwise any lecturer could read another class's
     # attendance. (Same authorization rule as the attendance-override endpoint.)
     if current_user.role != "admin":
-        lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-        if not lecturer:
-            raise HTTPException(status_code=404, detail="Lecturer profile not found")
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         assigned_course_ids = [
             a.course_id for a in db.query(CourseStaffAssignment)
             .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
@@ -555,7 +534,6 @@ def get_session_attendance(id: int, db: Session = Depends(get_db), current_user:
 # 6. List active sessions created by/for the lecturer (Lecturer/Admin only)
 @router.get("/active", response_model=List[SessionResponse])
 def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
     lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
     if not lecturer:
@@ -572,8 +550,6 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
             ClassSession.is_open == True
         ).all()
 
-    from datetime import datetime, timedelta
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
     now_utc = utcnow()
     # Calculate local timezone offset dynamically
@@ -627,9 +603,7 @@ def get_my_taught_courses(db: Session = Depends(get_db), current_user: User = De
     if current_user.role == "admin":
         courses = db.query(Course).all()
     else:
-        lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-        if not lecturer:
-            raise HTTPException(status_code=404, detail="Lecturer profile not found")
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         courses = db.query(Course).filter(Course.lecturer_id == lecturer.id).all()
 
     # Lecture times come from class_meetings (source of truth), not Course.schedule_*.
@@ -670,9 +644,7 @@ def get_course_sessions(course_id: int, db: Session = Depends(get_db), current_u
         assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
         assigned_course_ids = [a.course_id for a in assigned_assignments]
         
-        course = db.query(Course).filter(Course.id == course_id).first()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course not found")
+        course = get_or_404(db, Course, course_id, "Course")
             
         if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
             raise HTTPException(status_code=403, detail="Not authorized to view sessions for this course")
@@ -695,14 +667,10 @@ def update_lecturer_attendance(
     if not lecturer and current_user.role != "admin":
         raise HTTPException(status_code=404, detail="Lecturer profile not found")
         
-    session = db.query(ClassSession).filter(ClassSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_404(db, ClassSession, session_id, "Session")
         
     if current_user.role != "admin":
-        course = db.query(Course).filter(Course.id == session.course_id).first()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course associated with session not found")
+        course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
             
         assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
         assigned_course_ids = [a.course_id for a in assigned_assignments]

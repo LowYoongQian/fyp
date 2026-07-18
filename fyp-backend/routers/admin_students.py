@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
 from utils.database import get_db
 from utils.models import User, Student, Enrolment, FaceEmbedding, AttendanceRecord, RiskScore, Alert
 from utils.security import require_admin, require_lecturer, hash_password
+from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
 from utils.schemas import (
     AdminStudentCreate, AdminStudentUpdate,
     MessageResponse, StudentProgrammeAssign
@@ -47,9 +48,7 @@ def assign_student_programme(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
+    student = get_or_404(db, Student, student_id, "Student")
     student.programme_id = body.programme_id
     db.commit()
     return {"message": "Programme assigned to student successfully"}
@@ -61,16 +60,13 @@ def create_student(
     current_user: User = Depends(require_admin)
 ):
     # Enforce email domain
-    if not body.email.endswith("@student.school.edu"):
-        raise HTTPException(status_code=400, detail="Student email must end with @student.school.edu")
+    require_email_domain(body.email, "@student.school.edu", "Student")
         
     # Check if email exists
-    if db.query(User).filter(User.email == body.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    ensure_unique(db, User, User.email, body.email, detail="Email already registered")
     
     # Check if student code exists
-    if db.query(Student).filter(Student.student_code == body.student_code).first():
-        raise HTTPException(status_code=400, detail="Student code already exists")
+    ensure_unique(db, Student, Student.student_code, body.student_code, detail="Student code already exists")
     
     # Create credentials
     hashed = hash_password(body.password)
@@ -92,20 +88,14 @@ def update_student(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = get_or_404(db, Student, student_id, detail="Student profile not found")
     
-    user = db.query(User).filter(User.id == student.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User account not found")
+    user = get_or_404(db, User, student.user_id, detail="User account not found")
         
     if body.email is not None and body.email != user.email:
-        if not body.email.endswith("@student.school.edu"):
-            raise HTTPException(status_code=400, detail="Student email must end with @student.school.edu")
+        require_email_domain(body.email, "@student.school.edu", "Student")
         # Check uniqueness
-        if db.query(User).filter(User.email == body.email).first():
-            raise HTTPException(status_code=400, detail="Email already registered")
+        ensure_unique(db, User, User.email, body.email, detail="Email already registered")
         user.email = body.email
         
     if body.password is not None and body.password.strip() != "":
@@ -116,8 +106,7 @@ def update_student(
         
     if body.student_code is not None and body.student_code != student.student_code:
         # Check uniqueness
-        if db.query(Student).filter(Student.student_code == body.student_code).first():
-            raise HTTPException(status_code=400, detail="Student code already exists")
+        ensure_unique(db, Student, Student.student_code, body.student_code, detail="Student code already exists")
         student.student_code = body.student_code
         
     db.commit()
@@ -129,9 +118,7 @@ def delete_student(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = get_or_404(db, Student, student_id, detail="Student profile not found")
     
     user_id = student.user_id
     

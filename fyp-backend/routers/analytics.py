@@ -30,17 +30,17 @@ GET  /analytics/risk-scores returns the latest snapshot, optionally filtered.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
 from sqlalchemy.orm import Session
-from datetime import datetime
 from utils.timeutil import utcnow
 
 from utils.database import get_db
+import math
 from utils.models import (
     Student, Course, Enrolment, ClassSession,
     AttendanceRecord, RiskScore, User, Lecturer, CourseStaffAssignment,
 )
 from utils.security import require_lecturer
+from utils.db_helpers import require_own_profile
 from utils.attendance import session_hours, build_attendance_sequence
 
 # --- At-risk decision policy ----------------------------------------------
@@ -124,7 +124,6 @@ def _assess(sequence: list[int], hours: list[float],
     # Layers 1 & 1b are two symmetric certainty gates: once the outcome is
     # arithmetically fixed, there is nothing left to *predict*, so ML steps aside.
     if total_hours and total_hours > 0:
-        import math
         attended_hours = rate * held_hours
         remaining_hours = max(0.0, total_hours - held_hours)
 
@@ -256,9 +255,7 @@ def get_risk_scores(
     """Return latest risk scores, optionally filtered."""
     allowed_course_ids = None
     if current_user.role == "lecturer":
-        lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-        if not lecturer:
-            raise HTTPException(status_code=404, detail="Lecturer profile not found")
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
         assigned_course_ids = [a.course_id for a in assigned_assignments]
         courses = db.query(Course).filter(

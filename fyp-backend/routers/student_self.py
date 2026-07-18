@@ -13,11 +13,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from utils.database import get_db
+from datetime import datetime
+from utils.session_sync import sync_class_sessions
 from utils.models import (
     User, Student, Course, Enrolment, ClassSession,
-    AttendanceRecord, Programme, Announcement, ClassMeeting
+    AttendanceRecord, Announcement, ClassMeeting
 )
 from utils.security import require_student
+from utils.db_helpers import require_own_profile
 from utils.attendance import session_hours, attendance_rate_percent
 from utils.timeutil import utcnow
 
@@ -57,11 +60,8 @@ def get_my_enrolments(
     current_user: User = Depends(require_student),
 ):
     """Return the authenticated student's course enrolments with dynamic attendance rate."""
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
-    student = db.query(Student).filter(Student.user_id == current_user.id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = require_own_profile(db, Student, current_user.id, "Student")
 
     enrolments = (
         db.query(Enrolment)
@@ -135,7 +135,6 @@ def get_my_announcements(
     """Return published and targeted announcements for the authenticated student,
     ordered by priority (High -> Medium -> Low) and date.
     """
-    from datetime import datetime
     student = (
         db.query(Student)
         .options(joinedload(Student.programme))

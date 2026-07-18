@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
 from utils.database import get_db
 from utils.models import User, Lecturer, Course, Enrolment, ClassSession, AttendanceRecord, RiskScore, Alert
 from utils.security import require_admin, hash_password
+from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
 from utils.schemas import (
     AdminStaffCreate, AdminStaffUpdate,
     MessageResponse
@@ -46,16 +47,13 @@ def create_staff(
     current_user: User = Depends(require_admin)
 ):
     # Enforce email domain
-    if not body.email.endswith("@staff.school.edu"):
-        raise HTTPException(status_code=400, detail="Staff email must end with @staff.school.edu")
+    require_email_domain(body.email, "@staff.school.edu", "Staff")
 
     # Check if email exists
-    if db.query(User).filter(User.email == body.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    ensure_unique(db, User, User.email, body.email, detail="Email already registered")
     
     # Check if staff code exists
-    if db.query(Lecturer).filter(Lecturer.staff_id == body.staff_id).first():
-        raise HTTPException(status_code=400, detail="Staff ID already exists")
+    ensure_unique(db, Lecturer, Lecturer.staff_id, body.staff_id, detail="Staff ID already exists")
     
     # Create credentials
     hashed = hash_password(body.password)
@@ -77,20 +75,14 @@ def update_staff(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    lecturer = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = get_or_404(db, Lecturer, lecturer_id, detail="Lecturer profile not found")
     
-    user = db.query(User).filter(User.id == lecturer.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User account not found")
+    user = get_or_404(db, User, lecturer.user_id, detail="User account not found")
         
     if body.email is not None and body.email != user.email:
-        if not body.email.endswith("@staff.school.edu"):
-            raise HTTPException(status_code=400, detail="Staff email must end with @staff.school.edu")
+        require_email_domain(body.email, "@staff.school.edu", "Staff")
         # Check uniqueness
-        if db.query(User).filter(User.email == body.email).first():
-            raise HTTPException(status_code=400, detail="Email already registered")
+        ensure_unique(db, User, User.email, body.email, detail="Email already registered")
         user.email = body.email
         
     if body.password is not None and body.password.strip() != "":
@@ -101,8 +93,7 @@ def update_staff(
         
     if body.staff_id is not None and body.staff_id != lecturer.staff_id:
         # Check uniqueness
-        if db.query(Lecturer).filter(Lecturer.staff_id == body.staff_id).first():
-            raise HTTPException(status_code=400, detail="Staff ID already exists")
+        ensure_unique(db, Lecturer, Lecturer.staff_id, body.staff_id, detail="Staff ID already exists")
         lecturer.staff_id = body.staff_id
 
     if body.role is not None:
@@ -117,9 +108,7 @@ def delete_staff(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    lecturer = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
-    if not lecturer:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    lecturer = get_or_404(db, Lecturer, lecturer_id, detail="Lecturer profile not found")
     
     user_id = lecturer.user_id
     

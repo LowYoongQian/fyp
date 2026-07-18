@@ -5,8 +5,11 @@ from utils.timeutil import utcnow
 from typing import List
 
 from utils.database import get_db
-from utils.models import User, Student, Lecturer, Course, Enrolment, ClassSession, AttendanceRecord, CourseStaffAssignment
+from utils.session_sync import sync_class_sessions
+from utils.scheduler import calculate_schedule
+from utils.models import User, Student, Course, Enrolment, ClassSession, AttendanceRecord, CourseStaffAssignment
 from utils.security import require_admin
+from utils.db_helpers import get_or_404
 from utils.schemas import (
     MessageResponse, AdminAttendanceUpdate
 )
@@ -21,14 +24,12 @@ router = APIRouter(prefix="/admin", tags=["Admin Attendance"])
 def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     # Persisting auto-open/close is owned by sync_class_sessions (throttled).
     # This handler then only READS and derives display status in-memory.
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
 
     sessions = db.query(ClassSession).options(
         joinedload(ClassSession.course).joinedload(Course.lecturer)
     ).order_by(ClassSession.opened_at.desc()).all()
 
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
 
     result = []
@@ -114,13 +115,9 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
 
 @router.get("/sessions/{session_id}/attendance", response_model=dict)
 def get_admin_session_attendance(session_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    session = db.query(ClassSession).filter(ClassSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_404(db, ClassSession, session_id, "Session")
 
-    course = db.query(Course).filter(Course.id == session.course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course associated with session not found")
+    course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
 
     # Fetch all students enrolled in this course group
     query = db.query(Student).join(Enrolment).filter(Enrolment.course_id == session.course_id)
@@ -182,13 +179,9 @@ def update_admin_attendance(
     if body.status not in ["present", "absent"]:
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'present' or 'absent'.")
         
-    session = db.query(ClassSession).filter(ClassSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_404(db, ClassSession, session_id, "Session")
         
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
+    student = get_or_404(db, Student, student_id, "Student")
 
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id,

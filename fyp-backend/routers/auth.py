@@ -3,9 +3,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from utils.database import get_db
+from datetime import datetime
 from utils.models import User, Student, Lecturer
 from utils.security import hash_password, verify_password, create_access_token
 from utils.schemas import LoginRequest, RegisterRequest, TokenResponse
+from utils.db_helpers import ensure_unique, require_email_domain
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -18,15 +20,12 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Student code or Staff ID is required")
 
     # Verify email uniqueness
-    if db.query(User).filter(User.email == body.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
+    ensure_unique(db, User, User.email, body.email, detail="Email already registered")
+
     # Verify student code or staff id uniqueness
     if body.role == "student":
-        if not body.email.endswith("@student.school.edu"):
-            raise HTTPException(status_code=400, detail="Student email must end with @student.school.edu")
-        if db.query(Student).filter(Student.student_code == user_code).first():
-            raise HTTPException(status_code=400, detail="Student code already exists")
+        require_email_domain(body.email, "@student.school.edu", "Student")
+        ensure_unique(db, Student, Student.student_code, user_code, detail="Student code already exists")
     elif body.role == "lecturer":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -126,5 +125,4 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
 @router.get("/server-time")
 def get_server_time():
-    from datetime import datetime
     return {"server_time": datetime.now().isoformat()}

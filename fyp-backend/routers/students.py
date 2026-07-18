@@ -2,7 +2,7 @@ import base64
 import struct
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -13,6 +13,11 @@ from utils.models import (
     ClassSession, AttendanceRecord, CourseStaffAssignment,
 )
 from utils.security import require_student
+from utils.db_helpers import require_own_profile
+import math
+from datetime import datetime, timedelta
+from utils.scheduler import calculate_schedule
+from utils.session_sync import sync_class_sessions
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
@@ -71,7 +76,6 @@ def _embedding_to_floats(b: bytes) -> list[float]:
 
 def _cosine_distance(a: list[float], b: list[float]) -> float:
     """Return cosine distance in [0, 2]; 0 = identical, 2 = opposite."""
-    import math
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
@@ -88,9 +92,7 @@ _FACE_MATCH_THRESHOLD = 0.40
 @router.post("/me/face", status_code=200)
 def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     # Get student profile
-    student = db.query(Student).filter(Student.user_id == current_user.id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = require_own_profile(db, Student, current_user.id, "Student")
 
     # Validate image payload is not empty
     if not body.image_base64.strip():
@@ -126,16 +128,13 @@ def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), curre
 
 
 def _require_student_profile(db: Session, current_user: User) -> Student:
-    student = db.query(Student).filter(Student.user_id == current_user.id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+    student = require_own_profile(db, Student, current_user.id, "Student")
     return student
 
 
 @router.get("/me/courses")
 def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Courses this student is enrolled in, with timetable info for the app."""
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
     student = _require_student_profile(db, current_user)
     rows = (
@@ -146,7 +145,6 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
     )
     
     # Calculate deterministic clash-free schedules
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
     
     result = []
@@ -154,7 +152,6 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
         assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == c.id).all()
         
         # Calculate attendance rate based on completed sessions
-        from datetime import datetime
         sessions = db.query(ClassSession).filter(
             ClassSession.course_id == c.id,
             (ClassSession.class_group == "All") | (ClassSession.class_group == group)
@@ -246,7 +243,6 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
 @router.get("/me/active-sessions")
 def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Open sessions matching this student's enrolments (course + group)."""
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
     student = _require_student_profile(db, current_user)
     rows = (
@@ -264,8 +260,6 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
     # Read-only: exclude sessions already past their scheduled end in-memory.
     # Persisting the close is owned by sync_class_sessions (called above) and the
     # check-in guard, so this GET stays idempotent (see J in the review doc).
-    from datetime import datetime, timedelta
-    from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
     now_utc = utcnow()
 
@@ -340,7 +334,6 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
 @router.get("/me/attendance")
 def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """This student's full attendance history, most recent first."""
-    from utils.session_sync import sync_class_sessions
     sync_class_sessions(db)
     student = _require_student_profile(db, current_user)
     rows = (
