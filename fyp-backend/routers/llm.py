@@ -49,11 +49,17 @@ def validate_sql(sql: str) -> tuple[bool, str]:
         return False, "Access to metadata is not allowed."
     return True, ""
 
-# Safe DB runner
+# Hard cap on returned rows — an occasional admin query should never dump a
+# whole table into memory (report §2.3.2: query feature is low-frequency).
+_MAX_ROWS = 500
+
+# Safe DB runner. Runs inside a READ ONLY transaction as defence-in-depth: even
+# if a write somehow passed validate_sql, PostgreSQL itself rejects it.
 def execute_sql(sql: str) -> list[dict]:
-    with engine.connect() as conn:
+    with engine.connect().execution_options(postgresql_readonly=True) as conn:
         result = conn.execute(text(sql))
-        return [dict(row._mapping) for row in result]
+        rows = result.mappings().fetchmany(_MAX_ROWS)
+        return [dict(r) for r in rows]
 
 @router.post("/natural", response_model=QueryResponse)
 def natural_query(body: QueryRequest, current_user: User = Depends(require_lecturer)):

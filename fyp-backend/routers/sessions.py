@@ -458,7 +458,7 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
                 detail="No registered face found. Please register your face before checking in."
             )
         try:
-            live_bytes  = _extract_face_embedding(body.image_base64)
+            live_bytes  = _extract_face_embedding(body.image_base64, enforce_detection=False)
             live_vec    = _embedding_to_floats(live_bytes)
             stored_vec  = _embedding_to_floats(stored_emb.embedding)
             distance    = _cosine_distance(live_vec, stored_vec)

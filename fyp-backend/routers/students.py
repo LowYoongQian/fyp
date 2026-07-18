@@ -1,8 +1,7 @@
 import base64
-import io
 import struct
-import tempfile
-import os
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -27,41 +26,41 @@ class FaceRegisterSubmit(BaseModel):
     image_base64: str
 
 
-def _extract_face_embedding(image_base64: str) -> bytes:
+def _extract_face_embedding(image_base64: str, enforce_detection: bool = True) -> bytes:
     """Extract a 512-d ArcFace embedding from a base64-encoded JPEG/PNG.
 
-    Uses DeepFace (ArcFace model) when available.  Falls back to a fixed mock
-    vector if DeepFace is not installed, preserving backwards compatibility for
-    development environments without the ML dependency.
+    Uses DeepFace with the ArcFace model (report §2.2.2). The returned bytes are
+    512 little-endian C floats (2048 bytes total), matching the
+    FaceEmbedding.embedding column schema.
 
-    The returned bytes are 512 little-endian C floats (2048 bytes total),
-    consistent with the FaceEmbedding.embedding column schema.
+    enforce_detection=True (registration): reject images with no detectable face,
+    so a garbage vector can never be stored as someone's identity. check-in
+    passes False for tolerance — a wrong face is caught by the cosine threshold.
     """
-    if _DEEPFACE_AVAILABLE:
-        try:
-            img_bytes = base64.b64decode(image_base64)
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-                f.write(img_bytes)
-                tmp_path = f.name
-            try:
-                result = DeepFace.represent(
-                    img_path=tmp_path,
-                    model_name="ArcFace",
-                    enforce_detection=False,
-                )
-                embedding = result[0]["embedding"]  # list of 512 floats
-            finally:
-                os.unlink(tmp_path)
-            return struct.pack("f" * len(embedding), *embedding)
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Face embedding extraction failed: {e}. Ensure a clear face is visible in the image."
-            )
-
-    # Fallback: mock 512-d vector (development only; no identity matching).
-    mock_floats = [0.01 * (i % 100) for i in range(512)]
-    return struct.pack("f" * 512, *mock_floats)
+    if not _DEEPFACE_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Face recognition is unavailable: the ArcFace model (deepface) is not installed."
+        )
+    try:
+        img_bytes = base64.b64decode(image_base64)
+        img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("could not decode image bytes")
+        result = DeepFace.represent(
+            img_path=img,
+            model_name="ArcFace",
+            enforce_detection=enforce_detection,
+        )
+        embedding = result[0]["embedding"]  # list of 512 floats
+        return struct.pack("f" * len(embedding), *embedding)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Face embedding extraction failed: {e}. Ensure a clear face is visible in the image."
+        )
 
 
 def _embedding_to_floats(b: bytes) -> list[float]:
@@ -96,9 +95,9 @@ def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), curre
     if not body.image_base64.strip():
         raise HTTPException(status_code=400, detail="Invalid face image payload")
 
-    # NOTE: mock embedding — see _extract_face_embedding docstring. Liveness is
-    # the real biometric gate; this stores a placeholder identity signature.
-    embedding_bytes = _extract_face_embedding(body.image_base64)
+    # Extract the ArcFace identity embedding. enforce_detection=True: a face must
+    # be present, so we never store a garbage vector as this student's identity.
+    embedding_bytes = _extract_face_embedding(body.image_base64, enforce_detection=True)
 
     # Check if embedding already exists
     existing_embedding = db.query(FaceEmbedding).filter(FaceEmbedding.student_id == student.id).first()
