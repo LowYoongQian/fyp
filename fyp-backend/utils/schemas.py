@@ -1,5 +1,19 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional
+from enum import Enum
+
+
+class StaffRole(str, Enum):
+    """Roles that drive scheduling/assignment logic. Constrained to prevent a
+    typo (e.g. 'Practical') from silently dropping a class from the timetable."""
+    lecturer = "Lecturer"
+    tutor = "Tutor"
+    practical = "Practical"
+
+
+class AccountRole(str, Enum):
+    student = "student"
+    lecturer = "lecturer"
 
 # Authentication Schemas
 class LoginRequest(BaseModel):
@@ -13,9 +27,10 @@ class LoginRequest(BaseModel):
     device_id: Optional[str] = None
 
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    role: str          # 'student' | 'lecturer'
+    model_config = ConfigDict(use_enum_values=True)
+    email: EmailStr
+    password: str = Field(min_length=8)
+    role: AccountRole          # 'student' | 'lecturer'
     name: str
     code: Optional[str] = None          # student_code or staff_id
     class_group: Optional[str] = None   # alias/fallback sent by some frontend UI versions
@@ -73,10 +88,11 @@ class AttendanceSubmit(BaseModel):
     bssid: Optional[str] = None         # connected access point MAC
     gateway_ip: Optional[str] = None    # router/gateway IP the device routes through
     local_ip: Optional[str] = None      # device's own LAN IP
-    subnet: Optional[str] = None        # device subnet mask, if available
     # Behavioral biometrics — how long (ms) the liveness challenge took to pass.
     # A suspiciously short value (<800 ms) may indicate replay or automation.
     liveness_challenge_ms: Optional[int] = None
+    # Device fingerprint of the phone checking in (recorded for audit only).
+    device_id: Optional[str] = None
 
 class AttendanceResponse(BaseModel):
     id: int
@@ -152,30 +168,32 @@ class AnnouncementResponse(BaseModel):
 
 # Admin CRUD Schemas
 class AdminStudentCreate(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=8)
     name: str
     student_code: str
 
 class AdminStudentUpdate(BaseModel):
-    email: Optional[str] = None
-    password: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(default=None, min_length=8)
     name: Optional[str] = None
     student_code: Optional[str] = None
 
 class AdminStaffCreate(BaseModel):
-    email: str
-    password: str
+    model_config = ConfigDict(use_enum_values=True, validate_default=True)
+    email: EmailStr
+    password: str = Field(min_length=8)
     name: str
     staff_id: str
-    role: Optional[str] = "Lecturer"
+    role: Optional[StaffRole] = StaffRole.lecturer
 
 class AdminStaffUpdate(BaseModel):
-    email: Optional[str] = None
-    password: Optional[str] = None
+    model_config = ConfigDict(use_enum_values=True)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(default=None, min_length=8)
     name: Optional[str] = None
     staff_id: Optional[str] = None
-    role: Optional[str] = None
+    role: Optional[StaffRole] = None
 
 # Academic Schemas
 class ProgrammeCreate(BaseModel):
@@ -219,9 +237,10 @@ class CourseResponse(BaseModel):
         from_attributes = True
 
 class AssignmentCreate(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
     course_id: int
     lecturer_id: int
-    role: str
+    role: StaffRole
 
 class AssignmentResponse(BaseModel):
     id: int

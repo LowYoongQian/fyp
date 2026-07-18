@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime, timedelta
+from utils.timeutil import utcnow
 from typing import List
 
 from utils.database import get_db
@@ -18,24 +19,28 @@ router = APIRouter(prefix="/admin", tags=["Admin Attendance"])
 
 @router.get("/sessions", response_model=List[dict])
 def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    # Persisting auto-open/close is owned by sync_class_sessions (throttled).
+    # This handler then only READS and derives display status in-memory.
+    from utils.session_sync import sync_class_sessions
+    sync_class_sessions(db)
+
     sessions = db.query(ClassSession).options(
         joinedload(ClassSession.course).joinedload(Course.lecturer)
     ).order_by(ClassSession.opened_at.desc()).all()
-    
+
     from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
-    
+
     result = []
-    has_changes = False
-    
+
     for s in sessions:
         course = s.course
         lecturer = course.lecturer if course else None
         
-        now_utc = datetime.utcnow()
+        now_utc = utcnow()
         # Calculate local timezone offset dynamically
         local_now = datetime.now()
-        utc_now = datetime.utcnow()
+        utc_now = utcnow()
         tz_offset = local_now - utc_now
         
         is_open = s.is_open
@@ -70,11 +75,8 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
                 sched_end_dt_utc = sched_end_dt_local - tz_offset
                 
                 if now_utc > sched_end_dt_utc:
-                    s.is_open = False
-                    s.closed_at = sched_end_dt_utc
                     is_open = False
                     closed_at = sched_end_dt_utc
-                    has_changes = True
                     status_str = "Closed"
                 elif now_utc < sched_start_dt_utc:
                     status_str = "Active"
@@ -84,11 +86,8 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
                 # Default fallback: 2 hours
                 default_end_dt = s.opened_at + timedelta(hours=2)
                 if now_utc > default_end_dt:
-                    s.is_open = False
-                    s.closed_at = default_end_dt
                     is_open = False
                     closed_at = default_end_dt
-                    has_changes = True
                     status_str = "Closed"
                 elif now_utc < s.opened_at + timedelta(minutes=10):
                     status_str = "Active"
@@ -110,10 +109,7 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
             "is_open": is_open,
             "status": status_str
         })
-        
-    if has_changes:
-        db.commit()
-        
+
     return result
 
 @router.get("/sessions/{session_id}/attendance", response_model=dict)
@@ -203,7 +199,7 @@ def update_admin_attendance(
         record.status = body.status
         record.wifi_verified = body.wifi_verified
         record.liveness_passed = body.liveness_passed
-        record.marked_at = datetime.utcnow()
+        record.marked_at = utcnow()
     else:
         record = AttendanceRecord(
             session_id=session_id,
@@ -212,7 +208,7 @@ def update_admin_attendance(
             confidence_score=1.0,
             wifi_verified=body.wifi_verified,
             liveness_passed=body.liveness_passed,
-            marked_at=datetime.utcnow()
+            marked_at=utcnow()
         )
         db.add(record)
 

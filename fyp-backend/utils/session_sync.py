@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, time
+from utils.timeutil import utcnow
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from utils.models import Course, Enrolment, ClassSession, AttendanceRecord, Student, CourseStaffAssignment
@@ -21,11 +22,11 @@ def sync_class_sessions(db: Session):
         
     _is_syncing = True
     try:
-        now_utc = datetime.utcnow()
+        now_utc = utcnow()
         
         # Calculate local timezone offset dynamically
         local_now = datetime.now()
-        utc_now = datetime.utcnow()
+        utc_now = utcnow()
         tz_offset = local_now - utc_now
         
         now_local = now_utc + tz_offset
@@ -56,9 +57,9 @@ def sync_class_sessions(db: Session):
                 for a in assignments:
                     slot = schedule_map.get(f"{a.role}-{a.id}")
                     if slot and slot["day"] == day_name:
-                        # Tutor/Practical slots apply to their assigned group
-                        role_group = "All" if a.role == "Lecture" else class_group
-                        slots.append((slot, role_group))
+                        # Only Tutor/Practical roles are queried above, so these
+                        # slots always apply to the student's own class group.
+                        slots.append((slot, class_group))
                 
                 for slot, group_name in slots:
                     start_time = datetime.strptime(slot["start"], "%H:%M").time()

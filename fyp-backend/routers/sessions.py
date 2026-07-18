@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import List, Optional
+from utils.timeutil import utcnow
+from typing import List
 from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -9,7 +10,7 @@ from utils.database import get_db
 from utils.models import (
     User, Student, Lecturer, Course, Enrolment, ClassSession,
     AttendanceRecord, CampusNetwork, SecuritySetting, FaceEmbedding,
-    CourseStaffAssignment
+    CourseStaffAssignment, ClassMeeting
 )
 from utils.security import require_lecturer, require_student
 from utils.network_verify import get_client_ip, verify_network
@@ -34,40 +35,7 @@ def _get_settings(db: Session) -> dict:
     cfg.setdefault("trust_proxy_header", "false")
     cfg.setdefault("demo_simulate_network", "false")
     cfg.setdefault("demo_simulated_ip", "")
-    cfg.setdefault("schedule_check_enabled", "false")
     return cfg
-
-
-def _within_schedule(course, now: datetime) -> tuple:
-    """Check whether `now` falls inside the course's scheduled window.
-
-    Schedule fields are stored as strings: schedule_day = full weekday name
-    (e.g. "Monday"), schedule_start / schedule_end = "HH:MM" (24h).
-    Returns (ok: bool, detail: str). When the course has no schedule set the
-    check is skipped (ok=True) so demo data without a timetable isn't blocked.
-    """
-    start_s = (course.schedule_start or "").strip()
-    end_s = (course.schedule_end or "").strip()
-    if not start_s or not end_s:
-        return True, "no schedule set"
-
-    # Day check (only if a day is configured)
-    day = (course.schedule_day or "").strip()
-    if day and day.lower() != now.strftime("%A").lower():
-        return False, f"class scheduled on {day}, today is {now.strftime('%A')}"
-
-    try:
-        sh, sm = (int(x) for x in start_s.split(":"))
-        eh, em = (int(x) for x in end_s.split(":"))
-    except (ValueError, TypeError):
-        return True, "schedule unparseable; skipped"
-
-    cur = now.hour * 60 + now.minute
-    start_min = sh * 60 + sm
-    end_min = eh * 60 + em
-    if start_min <= cur <= end_min:
-        return True, f"within window {start_s}-{end_s}"
-    return False, f"outside window {start_s}-{end_s}"
 
 
 def _truthy(v: str) -> bool:
@@ -212,48 +180,21 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
             detail=f"An active session already exists for this course under group '{body.class_group}'"
         )
 
-    # Create new session(s)
-    primary_session = None
-    groups_to_open = [body.class_group]
-    if body.class_group != "All":
-        enrolled_groups = db.query(Enrolment.class_group).filter(
-            Enrolment.course_id == body.course_id
-        ).distinct().all()
-        enrolled_groups = [g[0] for g in enrolled_groups if g[0] and g[0].startswith("G")]
-        for eg in enrolled_groups:
-            if eg not in groups_to_open:
-                groups_to_open.append(eg)
-                
-    for g in groups_to_open:
-        active_session = db.query(ClassSession).filter(
-            ClassSession.course_id == body.course_id,
-            ClassSession.class_group == g,
-            ClassSession.is_open == True
-        ).first()
-        if not active_session:
-            sess = ClassSession(
-                course_id=body.course_id,
-                opened_at=datetime.utcnow(),
-                is_open=True,
-                class_group=g
-            )
-            db.add(sess)
-            db.commit()
-            db.refresh(sess)
-            if g == body.class_group:
-                primary_session = sess
-        else:
-            if g == body.class_group:
-                primary_session = active_session
-                
-    if not primary_session:
-        primary_session = db.query(ClassSession).filter(
-            ClassSession.course_id == body.course_id,
-            ClassSession.class_group == body.class_group,
-            ClassSession.is_open == True
-        ).first()
-        
-    return primary_session
+    # Open a session for the requested group ONLY. Opening one group must not
+    # cascade to other groups — a G1 opening must not let G2/G3 students check
+    # in. ("All" is a course-wide lecture that every enrolled student attends.)
+    # The active-session guard above already ensured this group is not open, so
+    # a fresh session is always created and returned (no None fallback -> no 500).
+    sess = ClassSession(
+        course_id=body.course_id,
+        opened_at=utcnow(),
+        is_open=True,
+        class_group=body.class_group,
+    )
+    db.add(sess)
+    db.commit()
+    db.refresh(sess)
+    return sess
 
 # 2. Close Session (Lecturer/Admin only)
 @router.post("/{id}/close", response_model=SessionResponse)
@@ -266,7 +207,7 @@ def close_session(id: int, db: Session = Depends(get_db), current_user: User = D
         raise HTTPException(status_code=400, detail="Session is already closed")
 
     session.is_open = False
-    session.closed_at = datetime.utcnow()
+    session.closed_at = utcnow()
     db.commit()
     db.refresh(session)
     return session
@@ -293,14 +234,17 @@ def get_active_student_sessions(db: Session = Depends(get_db), current_user: Use
     from datetime import datetime, timedelta
     from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
-    now_utc = datetime.utcnow()
+    now_utc = utcnow()
     # Calculate local timezone offset dynamically
     local_now = datetime.now()
-    utc_now = datetime.utcnow()
+    utc_now = utcnow()
     tz_offset = local_now - utc_now
-    has_changes = False
     active_sessions = []
-    
+
+    # Read-only: decide in-memory which sessions are still within their window.
+    # A session past its end is simply excluded from the response; persisting the
+    # closed state is left to sync_class_sessions (and the check-in guard), so
+    # this GET stays idempotent.
     for s in sessions:
         slots = []
         if s.class_group == "All":
@@ -316,7 +260,7 @@ def get_active_student_sessions(db: Session = Depends(get_db), current_user: Use
                 slot = schedule_map.get(f"{a.role}-{a.id}")
                 if slot:
                     slots.append(slot)
-                    
+
         if slots:
             slot = slots[0]
             opened_at_local = s.opened_at + tz_offset
@@ -324,24 +268,12 @@ def get_active_student_sessions(db: Session = Depends(get_db), current_user: Use
             sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
             sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
             sched_end_dt_utc = sched_end_dt_local - tz_offset
-            
-            if now_utc > sched_end_dt_utc:
-                s.is_open = False
-                s.closed_at = sched_end_dt_utc
-                has_changes = True
-            else:
+            if now_utc <= sched_end_dt_utc:
                 active_sessions.append(s)
         else:
             default_end_dt = s.opened_at + timedelta(hours=2)
-            if now_utc > default_end_dt:
-                s.is_open = False
-                s.closed_at = default_end_dt
-                has_changes = True
-            else:
+            if now_utc <= default_end_dt:
                 active_sessions.append(s)
-                
-    if has_changes:
-        db.commit()
 
     return active_sessions
 
@@ -357,11 +289,11 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
         from datetime import datetime, timedelta
         from utils.scheduler import calculate_schedule
         schedule_map = calculate_schedule(db)
-        now_utc = datetime.utcnow()
+        now_utc = utcnow()
         
         # Calculate local timezone offset dynamically
         local_now = datetime.now()
-        utc_now = datetime.utcnow()
+        utc_now = utcnow()
         tz_offset = local_now - utc_now
         
         slots = []
@@ -524,7 +456,7 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
         confidence_score=confidence_score,
         wifi_verified=wifi_verified,
         liveness_passed=liveness_passed,
-        marked_at=datetime.utcnow(),
+        marked_at=utcnow(),
         source_ip=source_ip,
         reported_ssid=body.wifi_ssid,
         reported_bssid=body.bssid,
@@ -533,6 +465,7 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
         verify_detail=verify_detail,
         liveness_challenge_ms=challenge_ms,
         liveness_suspicious=liveness_suspicious,
+        device_id=body.device_id,
     )
     db.add(record)
     try:
@@ -557,6 +490,20 @@ def get_session_attendance(id: int, db: Session = Depends(get_db), current_user:
     course = db.query(Course).filter(Course.id == session.course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course associated with session not found")
+
+    # A lecturer may only view the roster for a course they own or are assigned
+    # to; admins may view any. Otherwise any lecturer could read another class's
+    # attendance. (Same authorization rule as the attendance-override endpoint.)
+    if current_user.role != "admin":
+        lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
+        if not lecturer:
+            raise HTTPException(status_code=404, detail="Lecturer profile not found")
+        assigned_course_ids = [
+            a.course_id for a in db.query(CourseStaffAssignment)
+            .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
+        ]
+        if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to view attendance for this course")
 
     # Fetch all students enrolled in this course group
     query = db.query(Student).join(Enrolment).filter(Enrolment.course_id == session.course_id)
@@ -628,14 +575,17 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
     from datetime import datetime, timedelta
     from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
-    now_utc = datetime.utcnow()
+    now_utc = utcnow()
     # Calculate local timezone offset dynamically
     local_now = datetime.now()
-    utc_now = datetime.utcnow()
+    utc_now = utcnow()
     tz_offset = local_now - utc_now
-    has_changes = False
     active_sessions = []
-    
+
+    # Read-only: decide in-memory which sessions are still within their window.
+    # A session past its end is simply excluded from the response; persisting the
+    # closed state is left to sync_class_sessions (and the check-in guard), so
+    # this GET stays idempotent.
     for s in sessions:
         slots = []
         if s.class_group == "All":
@@ -651,7 +601,7 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
                 slot = schedule_map.get(f"{a.role}-{a.id}")
                 if slot:
                     slots.append(slot)
-                    
+
         if slots:
             slot = slots[0]
             opened_at_local = s.opened_at + tz_offset
@@ -659,24 +609,12 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
             sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
             sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
             sched_end_dt_utc = sched_end_dt_local - tz_offset
-            
-            if now_utc > sched_end_dt_utc:
-                s.is_open = False
-                s.closed_at = sched_end_dt_utc
-                has_changes = True
-            else:
+            if now_utc <= sched_end_dt_utc:
                 active_sessions.append(s)
         else:
             default_end_dt = s.opened_at + timedelta(hours=2)
-            if now_utc > default_end_dt:
-                s.is_open = False
-                s.closed_at = default_end_dt
-                has_changes = True
-            else:
+            if now_utc <= default_end_dt:
                 active_sessions.append(s)
-                
-    if has_changes:
-        db.commit()
 
     return active_sessions
 
@@ -694,18 +632,25 @@ def get_my_taught_courses(db: Session = Depends(get_db), current_user: User = De
             raise HTTPException(status_code=404, detail="Lecturer profile not found")
         courses = db.query(Course).filter(Course.lecturer_id == lecturer.id).all()
 
-    return [
-        {
+    # Lecture times come from class_meetings (source of truth), not Course.schedule_*.
+    course_ids = [c.id for c in courses]
+    lecture_by_course = {
+        m.course_id: m for m in db.query(ClassMeeting)
+        .filter(ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(course_ids)).all()
+    }
+    result = []
+    for c in courses:
+        m = lecture_by_course.get(c.id)
+        result.append({
             "id": c.id,
             "course_name": c.course_name,
             "course_code": c.course_code,
-            "schedule_day": c.schedule_day,
-            "schedule_start": c.schedule_start,
-            "schedule_end": c.schedule_end,
-            "schedule_room": c.schedule_room,
-        }
-        for c in courses
-    ]
+            "schedule_day": m.day if m else None,
+            "schedule_start": m.start if m else None,
+            "schedule_end": m.end if m else None,
+            "schedule_room": m.room if m else None,
+        })
+    return result
 
 
 class LecturerAttendanceUpdate(BaseModel):
@@ -767,7 +712,24 @@ def update_lecturer_attendance(
             
     if body.status not in ["present", "absent"]:
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'present' or 'absent'")
-        
+
+    # The target student must actually belong to this session: enrolled in the
+    # course, and (for a group-specific session) in the matching group. Without
+    # this, a mistyped student_id would fabricate an orphan record for a student
+    # who never took the class.
+    enrolment = db.query(Enrolment).filter(
+        Enrolment.student_id == student_id,
+        Enrolment.course_id == session.course_id
+    ).first()
+    if not enrolment:
+        raise HTTPException(status_code=400, detail="That student is not enrolled in this course")
+    if session.class_group != "All" and session.class_group != enrolment.class_group:
+        raise HTTPException(
+            status_code=400,
+            detail=f"That student is in group '{enrolment.class_group}', "
+                   f"not this session's group '{session.class_group}'"
+        )
+
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id,
         AttendanceRecord.student_id == student_id
@@ -775,7 +737,7 @@ def update_lecturer_attendance(
     
     if record:
         record.status = body.status
-        record.marked_at = datetime.utcnow()
+        record.marked_at = utcnow()
         if body.status == "present":
             record.confidence_score = 1.0
             record.source_ip = "Staff Override"
@@ -790,7 +752,7 @@ def update_lecturer_attendance(
             confidence_score=1.0 if body.status == "present" else None,
             wifi_verified=True if body.status == "present" else False,
             liveness_passed=True if body.status == "present" else False,
-            marked_at=datetime.utcnow(),
+            marked_at=utcnow(),
             source_ip="Staff Override" if body.status == "present" else None
         )
         db.add(record)

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from utils.database import get_db
+from utils.timeutil import utcnow
 from utils.models import (
     User, Student, FaceEmbedding, Enrolment, Course,
     ClassSession, AttendanceRecord, CourseStaffAssignment,
@@ -159,7 +160,7 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
             (ClassSession.class_group == "All") | (ClassSession.class_group == group)
         ).all()
         
-        now = datetime.utcnow()
+        now = utcnow()
         completed_sessions = []
         for s in sessions:
             opened_at_day_end = datetime(s.opened_at.year, s.opened_at.month, s.opened_at.day, 23, 59, 59)
@@ -260,19 +261,19 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
         .all()
     )
 
-    # Filter out stale sessions and close them
+    # Read-only: exclude sessions already past their scheduled end in-memory.
+    # Persisting the close is owned by sync_class_sessions (called above) and the
+    # check-in guard, so this GET stays idempotent (see J in the review doc).
     from datetime import datetime, timedelta
     from utils.scheduler import calculate_schedule
     schedule_map = calculate_schedule(db)
-    now_utc = datetime.utcnow()
-    
+    now_utc = utcnow()
+
     # Calculate local timezone offset dynamically
     local_now = datetime.now()
-    utc_now = datetime.utcnow()
+    utc_now = utcnow()
     tz_offset = local_now - utc_now
-    
-    has_changes = False
-    
+
     valid_rows = []
     for s, c, cg in rows:
         slots = []
@@ -289,34 +290,23 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
                 slot = schedule_map.get(f"{a.role}-{a.id}")
                 if slot:
                     slots.append(slot)
-                    
+
         if slots:
             slot = slots[0]
             opened_at_local = s.opened_at + tz_offset
             opened_date_local = opened_at_local.date()
-            
+
             sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
             sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
             sched_end_dt_utc = sched_end_dt_local - tz_offset
-            
-            if now_utc > sched_end_dt_utc:
-                s.is_open = False
-                s.closed_at = sched_end_dt_utc
-                has_changes = True
-            else:
+
+            if now_utc <= sched_end_dt_utc:
                 valid_rows.append((s, c, cg))
         else:
             default_end_dt = s.opened_at + timedelta(hours=2)
-            if now_utc > default_end_dt:
-                s.is_open = False
-                s.closed_at = default_end_dt
-                has_changes = True
-            else:
+            if now_utc <= default_end_dt:
                 valid_rows.append((s, c, cg))
-                
-    if has_changes:
-        db.commit()
-        
+
     rows = valid_rows
 
     # Which of these sessions the student has already checked into.

@@ -55,6 +55,7 @@ const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) =>
 
 interface TimetableEvent {
   id: number;
+  meetingId?: number;   // class_meetings row id — present for admin, enables editing
   courseCode: string;
   courseName: string;
   group: string;
@@ -95,6 +96,29 @@ export const Timetable: React.FC = () => {
   const [events, setEvents] = useState<TimetableEvent[]>([]);
   const [studentCourses, setStudentCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<TimetableEvent | null>(null);
+  const [editForm, setEditForm] = useState({ day: 'Monday', start: '08:00', end: '10:00', room: '' });
+  const [saving, setSaving] = useState(false);
+
+  const openEdit = (ev: TimetableEvent) => {
+    setEditForm({ day: ev.day, start: ev.startTime, end: ev.endTime, room: ev.room });
+    setEditing(ev);
+  };
+
+  const saveEdit = async () => {
+    if (!editing?.meetingId) return;
+    setSaving(true);
+    try {
+      await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
+      setEditing(null);
+      await loadTimetable();
+      await customAlert('Timetable slot updated.', 'Saved');
+    } catch (err: any) {
+      await customAlert(err.response?.data?.detail || 'Failed to update slot.', 'Error');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     setSelectedWeekNum(getCurrentWeekNumber());
@@ -111,8 +135,9 @@ export const Timetable: React.FC = () => {
 
       if (user?.role === 'admin') {
         const adminTimetable = await apiService.adminGetTimetable();
-        mappedEvents = adminTimetable.map(slot => ({
+        mappedEvents = adminTimetable.map((slot: any) => ({
           id: slot.id,
+          meetingId: slot.meeting_id,
           courseCode: slot.course_code,
           courseName: slot.course_name,
           group: slot.role || 'Lecture',
@@ -648,6 +673,90 @@ export const Timetable: React.FC = () => {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {user?.role === 'admin' && (
+        <div className="uipro-card bg-white/75 p-5 border border-slate-200 shadow-premium space-y-4">
+          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider pb-3 border-b border-slate-100">
+            Manage Class Times :
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200/60 bg-slate-50/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="py-3 px-4">Course</th>
+                  <th className="py-3 px-4">Type</th>
+                  <th className="py-3 px-4">Day & Time</th>
+                  <th className="py-3 px-4">Room</th>
+                  <th className="py-3 px-4 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-150/50 text-xs text-slate-700 bg-white">
+                {events.map(ev => (
+                  <tr key={ev.id} className="hover:bg-slate-50/30 transition-colors">
+                    <td className="py-3 px-4">
+                      <span className="font-extrabold font-mono tracking-wider">{ev.courseCode}</span>
+                      <span className="font-bold text-slate-500 ml-2">{ev.courseName}</span>
+                    </td>
+                    <td className="py-3 px-4 font-semibold">{ev.group}</td>
+                    <td className="py-3 px-4 font-semibold">{ev.day.substring(0, 3)} {ev.startTime}-{ev.endTime}</td>
+                    <td className="py-3 px-4 font-semibold">{ev.room}</td>
+                    <td className="py-3 px-4 text-right">
+                      <button onClick={() => openEdit(ev)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 text-white text-[11px] font-bold hover:bg-slate-700 transition-colors">
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !saving && setEditing(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-slate-800">
+              Edit {editing.group} — {editing.courseCode}
+            </h3>
+            <div className="space-y-3 text-sm">
+              <label className="block">
+                <span className="text-xs font-bold text-slate-500 uppercase">Day</span>
+                <select value={editForm.day} onChange={e => setEditForm({ ...editForm, day: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2">
+                  {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </label>
+              <div className="flex gap-3">
+                <label className="flex-1">
+                  <span className="text-xs font-bold text-slate-500 uppercase">Start</span>
+                  <input type="time" value={editForm.start} onChange={e => setEditForm({ ...editForm, start: e.target.value })}
+                    className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+                </label>
+                <label className="flex-1">
+                  <span className="text-xs font-bold text-slate-500 uppercase">End</span>
+                  <input type="time" value={editForm.end} onChange={e => setEditForm({ ...editForm, end: e.target.value })}
+                    className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-xs font-bold text-slate-500 uppercase">Room</span>
+                <input type="text" value={editForm.room} onChange={e => setEditForm({ ...editForm, room: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setEditing(null)} disabled={saving}
+                className="px-4 py-2 rounded-lg text-slate-600 font-bold hover:bg-slate-100">Cancel</button>
+              <button onClick={saveEdit} disabled={saving}
+                className="px-4 py-2 rounded-lg bg-slate-800 text-white font-bold hover:bg-slate-700 disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
           </div>
         </div>
       )}

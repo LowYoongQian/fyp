@@ -9,7 +9,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from utils.database import get_db
-from utils.models import User, DeviceSession
+from utils.models import User
 
 # Configurations
 SECRET_KEY  = os.getenv("JWT_SECRET_KEY")
@@ -72,19 +72,6 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-
-    # Multi-device binding check: if the token carries a device_id, verify it
-    # matches the binding registered at login. A mismatch means the token is
-    # being used from a second device — reject it.
-    token_device_id: str | None = payload.get("device_id")
-    if token_device_id:
-        binding = db.query(DeviceSession).filter(DeviceSession.user_id == user_id).first()
-        if not binding or binding.device_id != token_device_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session invalidated: this account has been logged in from another device.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
 
     return user
 

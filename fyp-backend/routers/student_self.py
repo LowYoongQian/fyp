@@ -15,9 +15,11 @@ from sqlalchemy.orm import Session, joinedload
 from utils.database import get_db
 from utils.models import (
     User, Student, Course, Enrolment, ClassSession,
-    AttendanceRecord, Programme, Announcement
+    AttendanceRecord, Programme, Announcement, ClassMeeting
 )
 from utils.security import require_student
+from utils.attendance import session_hours, attendance_rate_percent
+from utils.timeutil import utcnow
 
 router = APIRouter(prefix="/students/me", tags=["Student Self-Service"])
 
@@ -68,33 +70,43 @@ def get_my_enrolments(
         .all()
     )
 
-    from datetime import datetime
-    now = datetime.utcnow()
+    # Lecture times come from class_meetings (source of truth), not Course.schedule_*.
+    course_ids = [e.course_id for e in enrolments]
+    lecture_by_course = {
+        m.course_id: m for m in db.query(ClassMeeting)
+        .filter(ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(course_ids)).all()
+    }
 
     result = []
     for e in enrolments:
-        # Calculate attendance rate based on completed sessions
-        sessions = db.query(ClassSession).filter(
+        m = lecture_by_course.get(e.course_id)
+        # Attendance rate: use the SAME hours-weighted, present+leave, closed-only
+        # computation as the risk model (utils/attendance) so the student's number
+        # always matches the lecturer's dashboard. See utils/attendance.py.
+        closed = db.query(
+            ClassSession.id, ClassSession.class_group,
+            ClassSession.opened_at, ClassSession.closed_at
+        ).filter(
             ClassSession.course_id == e.course_id,
-            (ClassSession.class_group == "All") | (ClassSession.class_group == e.class_group)
-        ).all()
-        
-        completed_sessions = []
-        for s in sessions:
-            opened_at_day_end = datetime(s.opened_at.year, s.opened_at.month, s.opened_at.day, 23, 59, 59)
-            if (not s.is_open) or (now > opened_at_day_end):
-                completed_sessions.append(s)
-                
-        if completed_sessions:
-            session_ids = [s.id for s in completed_sessions]
-            present_count = db.query(AttendanceRecord).filter(
+            ClassSession.is_open == False,
+        ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all()
+
+        course_sessions = [
+            (sid, group, session_hours(opened, cl))
+            for sid, group, opened, cl in closed
+        ]
+        session_ids = [row[0] for row in course_sessions]
+        present_set = set()
+        if session_ids:
+            present_rows = db.query(AttendanceRecord.session_id).filter(
                 AttendanceRecord.student_id == student.id,
                 AttendanceRecord.session_id.in_(session_ids),
-                AttendanceRecord.status == "present"
-            ).count()
-            attendance_rate = round((present_count / len(completed_sessions)) * 100.0, 1)
-        else:
-            attendance_rate = 100.0
+                AttendanceRecord.status.in_(["present", "leave"]),
+            ).all()
+            present_set = {(student.id, sid) for (sid,) in present_rows}
+
+        attendance_rate = attendance_rate_percent(
+            course_sessions, present_set, student.id, e.class_group)
 
         result.append({
             "id": e.id,
@@ -105,10 +117,10 @@ def get_my_enrolments(
             "credit_hours": e.course.credit_hours if e.course else 3.0,
             "semester": e.semester,
             "class_group": e.class_group,
-            "schedule_day": e.course.schedule_day if e.course else None,
-            "schedule_start": e.course.schedule_start if e.course else None,
-            "schedule_end": e.course.schedule_end if e.course else None,
-            "schedule_room": e.course.schedule_room if e.course else None,
+            "schedule_day": m.day if m else None,
+            "schedule_start": m.start if m else None,
+            "schedule_end": m.end if m else None,
+            "schedule_room": m.room if m else None,
             "attendance_rate": attendance_rate,
         })
 
@@ -133,7 +145,7 @@ def get_my_announcements(
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
         
-    now = datetime.utcnow()
+    now = utcnow()
 
     # Course codes this student is enrolled in (for scope='course' matching).
     my_course_codes = {

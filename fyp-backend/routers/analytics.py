@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import datetime
+from utils.timeutil import utcnow
 
 from utils.database import get_db
 from utils.models import (
@@ -40,6 +41,7 @@ from utils.models import (
     AttendanceRecord, RiskScore, User, Lecturer, CourseStaffAssignment,
 )
 from utils.security import require_lecturer
+from utils.attendance import session_hours, build_attendance_sequence
 
 # --- At-risk decision policy ----------------------------------------------
 BAR_THRESHOLD = 0.80     # university rule: < 80% attendance => barred
@@ -73,10 +75,10 @@ def _risk_label(score: float) -> str:
     return "high"
 
 
-def _ml_probability(sequence: list[int], hours: list[float]) -> float:
+def _ml_probability(feats: dict) -> float:
     """Probability of ending barred, from the trained classifier. Falls back to
-    the formula (1 - rate) if no model is loaded."""
-    feats = compute_features(sequence, hours)
+    the formula (1 - rate) if no model is loaded. Takes pre-computed features so
+    the caller (_assess) doesn't pay for compute_features twice."""
     if _RISK_MODEL is not None:
         import pandas as pd
         from ml.features import FEATURE_ORDER
@@ -141,7 +143,7 @@ def _assess(sequence: list[int], hours: list[float],
                     "factors": "Requirement already secured"}
 
     # Layer 2 — ML: still recoverable, let the classifier decide.
-    score = _ml_probability(sequence, hours)
+    score = _ml_probability(feats)
     label = _risk_label(score)
     return {"score": score, "label": label,
             "rate": rate, "factors": _reasons(feats, rate, label)}
@@ -178,10 +180,7 @@ def recompute_risk_scores(
     )
     sessions_by_course: dict = {}
     for sid, cid, group, opened, closed in closed_sessions:
-        if opened and closed:
-            hrs = max(0.5, min(6.0, (closed - opened).total_seconds() / 3600.0))
-        else:
-            hrs = 2.0   # sensible default when timestamps are missing
+        hrs = session_hours(opened, closed)
         sessions_by_course.setdefault(cid, []).append((sid, group, hrs))
 
     # Batch: set of (student_id, session_id) counted as attended.
@@ -206,17 +205,14 @@ def recompute_risk_scores(
     }
 
     updated = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     for enr in enrolments:
         # Build this enrolment's attendance sequence + hours in chronological
         # order. A session counts if it's "All" group or the student's group.
         course_sessions = sessions_by_course.get(enr.course_id, [])
-        sequence, hours = [], []
-        for sess_id, group, hrs in course_sessions:
-            if group == "All" or group == enr.class_group:
-                sequence.append(1 if (enr.student_id, sess_id) in present_set else 0)
-                hours.append(hrs)
+        sequence, hours = build_attendance_sequence(
+            course_sessions, present_set, enr.student_id, enr.class_group)
 
         if not sequence:
             continue

@@ -3,11 +3,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
+from utils.timeutil import utcnow
 from typing import List
 
 from utils.database import get_db
 from utils.models import (
-    User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement
+    User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement, ClassMeeting
 )
 from utils.security import require_lecturer
 
@@ -41,17 +42,24 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
         .all()
     )
 
+    # Lecture times come from class_meetings (source of truth).
+    lecture_by_course = {
+        m.course_id: m for m in db.query(ClassMeeting)
+        .filter(ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(course_ids)).all()
+    }
+
     result = []
     for c in courses:
+        m = lecture_by_course.get(c.id)
         result.append({
             "id": c.id,
             "course_code": c.course_code,
             "course_name": c.course_name,
             "credit_hours": c.credit_hours,
-            "schedule_day": c.schedule_day,
-            "schedule_start": c.schedule_start,
-            "schedule_end": c.schedule_end,
-            "schedule_room": c.schedule_room,
+            "schedule_day": m.day if m else None,
+            "schedule_start": m.start if m else None,
+            "schedule_end": m.end if m else None,
+            "schedule_room": m.room if m else None,
             "enrolled_students_count": enrol_counts.get(c.id, 0),
             "lecturer_id": c.lecturer_id,
             "lecturer_name": lecturer.name
@@ -125,8 +133,8 @@ def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), curre
         alert_type="manual_warning",
         email_body=email_body,
         triggered_by="lecturer",
-        triggered_at=datetime.utcnow(),
-        sent_at=datetime.utcnow()
+        triggered_at=utcnow(),
+        sent_at=utcnow()
     )
     db.add(new_alert)
     db.commit()
@@ -246,7 +254,7 @@ def get_my_announcements(
     if not lecturer:
         raise HTTPException(status_code=404, detail="Lecturer profile not found")
         
-    now = datetime.utcnow()
+    now = utcnow()
 
     # Courses this lecturer teaches: owned (Course.lecturer_id) + staff assignments.
     owned = db.query(Course).filter(Course.lecturer_id == lecturer.id).all()

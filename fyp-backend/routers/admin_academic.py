@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-import random
+from pydantic import BaseModel
 
 from utils.database import get_db
-from utils.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord
+from utils.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
 from utils.schemas import (
     MessageResponse,
@@ -64,20 +64,6 @@ def delete_programme(programme_id: int, db: Session = Depends(get_db), current_u
     return {"message": "Programme deleted successfully"}
 
 
-def assign_random_schedule(seed_val: str):
-    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    starts = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00"]
-    rooms = ["Theatre 1", "Theatre 2", "Lab 1", "Lab 2", "Lab 3", "Seminar Room 1", "Seminar Room 2"]
-    
-    # Stable seed based on course code
-    random.seed(hash(seed_val))
-    day = random.choice(days)
-    start_t = random.choice(starts)
-    hour = int(start_t.split(":")[0])
-    end_t = f"{hour + 2:02d}:00"
-    room = random.choice(rooms)
-    return day, start_t, end_t, room
-
 # =====================================================================
 # COURSES CRUD
 # =====================================================================
@@ -88,8 +74,14 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
         joinedload(Course.lecturer),
         joinedload(Course.programme)
     ).all()
+    # Lecture times come from class_meetings (source of truth), not the dead
+    # Course.schedule_* columns.
+    lecture_by_course = {
+        m.course_id: m for m in db.query(ClassMeeting).filter(ClassMeeting.role == "Lecture").all()
+    }
     result = []
     for c in courses:
+        m = lecture_by_course.get(c.id)
         result.append({
             "id": c.id,
             "course_name": c.course_name,
@@ -99,10 +91,10 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
             "lecturer_name": c.lecturer.name if c.lecturer else None,
             "programme_id": c.programme_id,
             "programme_name": c.programme.name if c.programme else None,
-            "schedule_day": c.schedule_day,
-            "schedule_start": c.schedule_start,
-            "schedule_end": c.schedule_end,
-            "schedule_room": c.schedule_room
+            "schedule_day": m.day if m else None,
+            "schedule_start": m.start if m else None,
+            "schedule_end": m.end if m else None,
+            "schedule_room": m.room if m else None,
         })
     return result
 
@@ -110,15 +102,15 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
 def create_course(body: CourseCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     if db.query(Course).filter(Course.course_code == body.course_code).first():
         raise HTTPException(status_code=400, detail="Course code already exists")
-    
-    # Generate random schedule if not provided
-    day = body.schedule_day
-    start_t = body.schedule_start
-    end_t = body.schedule_end
-    room = body.schedule_room
-    
-    if not day or not start_t or not room:
-        day, start_t, end_t, room = assign_random_schedule(body.course_code)
+
+    # Validate foreign keys up front so a bad id returns a clear 400 instead of
+    # a database IntegrityError surfacing as an opaque 500.
+    if body.lecturer_id is not None and \
+       not db.query(Lecturer).filter(Lecturer.id == body.lecturer_id).first():
+        raise HTTPException(status_code=400, detail="Selected lecturer does not exist")
+    if body.programme_id is not None and \
+       not db.query(Programme).filter(Programme.id == body.programme_id).first():
+        raise HTTPException(status_code=400, detail="Selected programme does not exist")
 
     course = Course(
         course_name=body.course_name,
@@ -126,22 +118,23 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
         credit_hours=body.credit_hours,
         lecturer_id=body.lecturer_id,
         programme_id=body.programme_id,
-        schedule_day=day,
-        schedule_start=start_t,
-        schedule_end=end_t,
-        schedule_room=room
     )
     db.add(course)
-    
-    # Verify slot availability under deterministic scheduler
+    db.flush()  # assign course.id
+
+    # Auto-assign a clash-free slot for this course's Lecture and record it in
+    # class_meetings (the timetable source of truth). No free slot -> 400.
+    from utils.scheduler import pick_slot_for_new
     try:
-        db.flush()
-        from utils.scheduler import calculate_schedule
-        calculate_schedule(db)
+        slot = pick_slot_for_new(db, course.id, course.lecturer_id, "Lecture")
     except ValueError as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-        
+    db.add(ClassMeeting(
+        meeting_key=f"Lecture-{course.id}", course_id=course.id, assignment_id=None,
+        role="Lecture", lecturer_id=course.lecturer_id, **slot,
+    ))
+
     db.commit()
     db.refresh(course)
     return course
@@ -155,23 +148,29 @@ def update_course(course_id: int, body: CourseCreate, db: Session = Depends(get_
     existing = db.query(Course).filter(Course.course_code == body.course_code, Course.id != course_id).first()
     if existing:
         raise HTTPException(status_code=400, detail="Course code already exists")
-        
+
+    # Validate foreign keys up front (see create_course) — clear 400, not a 500.
+    if body.lecturer_id is not None and \
+       not db.query(Lecturer).filter(Lecturer.id == body.lecturer_id).first():
+        raise HTTPException(status_code=400, detail="Selected lecturer does not exist")
+    if body.programme_id is not None and \
+       not db.query(Programme).filter(Programme.id == body.programme_id).first():
+        raise HTTPException(status_code=400, detail="Selected programme does not exist")
+
     course.course_name = body.course_name
     course.course_code = body.course_code
     course.credit_hours = body.credit_hours
     course.lecturer_id = body.lecturer_id
     course.programme_id = body.programme_id
-    
-    # Update schedule if provided in body
-    if body.schedule_day:
-        course.schedule_day = body.schedule_day
-    if body.schedule_start:
-        course.schedule_start = body.schedule_start
-    if body.schedule_end:
-        course.schedule_end = body.schedule_end
-    if body.schedule_room:
-        course.schedule_room = body.schedule_room
-        
+
+    # Timetable times live in class_meetings, not on the course. Keep the
+    # Lecture meeting's lecturer in sync so clash detection stays correct.
+    lecture_meeting = db.query(ClassMeeting).filter(
+        ClassMeeting.meeting_key == f"Lecture-{course.id}"
+    ).first()
+    if lecture_meeting:
+        lecture_meeting.lecturer_id = body.lecturer_id
+
     db.commit()
     db.refresh(course)
     return course
@@ -235,16 +234,24 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
         role=body.role
     )
     db.add(assignment)
-    
-    # Verify slot availability under deterministic scheduler
-    try:
-        db.flush()
-        from utils.scheduler import calculate_schedule
-        calculate_schedule(db)
-    except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-        
+    db.flush()  # assign assignment.id
+
+    # Tutor/Practical assignments are their own weekly meeting — auto-assign a
+    # clash-free slot and record it. (A "Lecturer" role assignment is not a
+    # separate meeting; the course's Lecture already covers it.)
+    if body.role in ("Tutor", "Practical"):
+        from utils.scheduler import pick_slot_for_new
+        try:
+            slot = pick_slot_for_new(db, assignment.course_id, assignment.lecturer_id, body.role)
+        except ValueError as e:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+        db.add(ClassMeeting(
+            meeting_key=f"{body.role}-{assignment.id}", course_id=assignment.course_id,
+            assignment_id=assignment.id, role=body.role,
+            lecturer_id=assignment.lecturer_id, **slot,
+        ))
+
     db.commit()
     db.refresh(assignment)
     return assignment
@@ -261,53 +268,76 @@ def delete_assignment(assignment_id: int, db: Session = Depends(get_db), current
 
 @router.get("/timetable", response_model=List[dict])
 def get_global_timetable(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    from utils.scheduler import calculate_schedule
-    schedule_map = calculate_schedule(db)
-    
-    courses = db.query(Course).options(joinedload(Course.lecturer)).all()
-    assignments = db.query(CourseStaffAssignment).options(
-        joinedload(CourseStaffAssignment.course),
-        joinedload(CourseStaffAssignment.lecturer)
+    # Read the class_meetings table (source of truth). meeting_id lets the admin
+    # UI edit a specific slot.
+    meetings = db.query(ClassMeeting).options(
+        joinedload(ClassMeeting.course), joinedload(ClassMeeting.lecturer)
     ).all()
-    
     result = []
-    # 1. Lectures
-    for c in courses:
-        lect_slot = schedule_map.get(f"Lecture-{c.id}")
-        if lect_slot:
-            lecturer_name = c.lecturer.name if c.lecturer else "TBA"
-            result.append({
-                "id": c.id * 10,
-                "course_code": c.course_code,
-                "course_name": c.course_name,
-                "schedule_day": lect_slot["day"],
-                "schedule_start": lect_slot["start"],
-                "schedule_end": lect_slot["end"],
-                "schedule_room": lect_slot["room"],
-                "lecturer_name": lecturer_name,
-                "role": "Lecture"
-            })
-            
-    # 2. Staff assignments (Tutors / Practicals)
-    for a in assignments:
-        if a.role in ("Tutor", "Practical"):
-            slot = schedule_map.get(f"{a.role}-{a.id}")
-            if slot:
-                c = a.course
-                lecturer_name = a.lecturer.name if a.lecturer else "TBA"
-                result.append({
-                    "id": a.id * 1000 + 9999,
-                    "course_code": c.course_code if c else "Unknown",
-                    "course_name": c.course_name if c else "Unknown",
-                    "schedule_day": slot["day"],
-                    "schedule_start": slot["start"],
-                    "schedule_end": slot["end"],
-                    "schedule_room": slot["room"],
-                    "lecturer_name": lecturer_name,
-                    "role": a.role
-                })
-                
+    for m in meetings:
+        c = m.course
+        result.append({
+            "meeting_id": m.id,
+            "id": m.id,
+            "course_code": c.course_code if c else "Unknown",
+            "course_name": c.course_name if c else "Unknown",
+            "schedule_day": m.day,
+            "schedule_start": m.start,
+            "schedule_end": m.end,
+            "schedule_room": m.room,
+            "lecturer_name": m.lecturer.name if m.lecturer else "TBA",
+            "role": m.role,
+        })
     return result
+
+
+class TimetableSlotUpdate(BaseModel):
+    day: str
+    start: str
+    end: str
+    room: str
+
+
+@router.put("/timetable/{meeting_id}", response_model=MessageResponse)
+def update_timetable_slot(meeting_id: int, body: TimetableSlotUpdate,
+                          db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Timetable slot not found")
+
+    def _to_min(hhmm: str) -> int:
+        try:
+            h, m = hhmm.split(":")
+            v = int(h) * 60 + int(m)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail=f"Invalid time '{hhmm}', expected HH:MM")
+        if not (0 <= v < 24 * 60):
+            raise HTTPException(status_code=400, detail=f"Time '{hhmm}' out of range")
+        return v
+
+    new_start, new_end = _to_min(body.start), _to_min(body.end)
+    if new_start >= new_end:
+        raise HTTPException(status_code=400, detail="Start time must be before end time")
+
+    # Clash check against every OTHER meeting on the same day. Two classes clash
+    # when their time ranges OVERLAP (not just when identical): [a,b) overlaps
+    # [c,d) iff a < d and c < b. No shared room, no double-booked lecturer.
+    others = db.query(ClassMeeting).filter(ClassMeeting.id != meeting_id).all()
+    for o in others:
+        if o.day != body.day:
+            continue
+        if not (new_start < _to_min(o.end) and _to_min(o.start) < new_end):
+            continue  # no time overlap
+        if o.room == body.room:
+            raise HTTPException(status_code=400,
+                detail=f"Room {body.room} is already booked on {body.day} during {o.start}-{o.end}")
+        if meeting.lecturer_id and o.lecturer_id == meeting.lecturer_id:
+            raise HTTPException(status_code=400,
+                detail=f"This lecturer already teaches another class on {body.day} during {o.start}-{o.end}")
+
+    meeting.day, meeting.start, meeting.end, meeting.room = body.day, body.start, body.end, body.room
+    db.commit()
+    return {"message": "Timetable slot updated successfully"}
 
 
 # =====================================================================

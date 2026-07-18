@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from utils.database import get_db
-from utils.models import User, Student, Lecturer, DeviceSession
+from utils.models import User, Student, Lecturer
 from utils.security import hash_password, verify_password, create_access_token
 from utils.schemas import LoginRequest, RegisterRequest, TokenResponse
 
@@ -41,13 +41,11 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.flush()   # Flushes user to retrieve user.id
 
-    # Create matching Profile record
-    if body.role == "student":
-        student = Student(user_id=user.id, name=body.name, student_code=user_code)
-        db.add(student)
-    elif body.role == "lecturer":
-        lecturer = Lecturer(user_id=user.id, name=body.name, staff_id=user_code)
-        db.add(lecturer)
+    # Create matching Profile record. Only "student" can reach here — the
+    # "lecturer" and invalid-role paths already raised above — so there is just
+    # one profile type to create.
+    student = Student(user_id=user.id, name=body.name, student_code=user_code)
+    db.add(student)
 
     # Commit transactions cleanly
     try:
@@ -96,15 +94,10 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
     token_data: dict = {"user_id": user.id, "role": user.role}
 
-    # Multi-device session binding: if the client sends a device_id, register it
-    # and embed it in the JWT. Any subsequent request carrying this token from a
-    # different device_id will be rejected by get_current_user.
-    if body.device_id:
-        # Replace any previous device binding for this user (single-device policy).
-        db.query(DeviceSession).filter(DeviceSession.user_id == user.id).delete()
-        db.add(DeviceSession(user_id=user.id, device_id=body.device_id))
-        db.commit()
-        token_data["device_id"] = body.device_id
+    # NOTE: the single-device login lock was removed. device_id is no longer used
+    # to bind the session; it is only recorded per attendance check-in (see
+    # /sessions/{id}/attend) as an audit signal. body.device_id is ignored here
+    # but kept in the schema so older clients that still send it don't break.
 
     token = create_access_token(token_data)
 

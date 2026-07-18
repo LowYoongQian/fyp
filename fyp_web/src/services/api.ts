@@ -529,6 +529,13 @@ export const apiService = {
     const response = await api.get('/admin/timetable');
     return response.data;
   },
+  adminUpdateTimetableSlot: async (
+    meetingId: number,
+    slot: { day: string; start: string; end: string; room: string }
+  ): Promise<any> => {
+    const response = await api.put(`/admin/timetable/${meetingId}`, slot);
+    return response.data;
+  },
   adminCreateAssignment: async (assignment: { course_id: number; lecturer_id: number; role: string }): Promise<CourseStaffAssignment> => {
     const response = await api.post('/admin/assignments', assignment);
     return response.data;

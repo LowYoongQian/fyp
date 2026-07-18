@@ -109,9 +109,6 @@ def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_d
         bssid_prefix=body.bssid_prefix,
         is_active=body.is_active,
     )
-    net_id = body.id if hasattr(body, 'id') else None
-    if net_id is not None:
-        net.id = net_id
     db.add(net)
     db.commit()
     db.refresh(net)
@@ -150,7 +147,7 @@ def delete_campus_network(net_id: int, db: Session = Depends(get_db), current_us
 
 ALLOWED_SETTING_KEYS = {
     "network_check_enabled", "fail_closed", "trust_proxy_header",
-    "demo_simulate_network", "demo_simulated_ip", "schedule_check_enabled"
+    "demo_simulate_network", "demo_simulated_ip"
 }
 
 @router.get("/security-settings", response_model=dict)

@@ -558,6 +558,8 @@ class _AppRootState extends State<AppRoot> {
       // 2. Submit to the backend (authoritative path — no direct DB write).
       final apiUrl = ApiConfig.getEffectiveUrl();
       final http.Response response;
+      // Device fingerprint of this phone, recorded per check-in for audit.
+      final deviceId = await LocalCacheService.getOrCreateDeviceId();
       Map<String, dynamic> checkInPayload = {
         'wifi_ssid': effectiveSsid,
         'image_base64': imageBase64,
@@ -566,6 +568,7 @@ class _AppRootState extends State<AppRoot> {
         'gateway_ip': netPayload['gateway_ip'],
         'local_ip': netPayload['local_ip'],
         'liveness_challenge_ms': challengeMs,
+        'device_id': deviceId,
       };
       try {
         response = await http.post(

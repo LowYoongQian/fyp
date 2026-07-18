@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 import os
 
-from utils.database import engine
-from utils.models import Base
+from utils.database import engine, SessionLocal
+from utils.models import Base, ClassMeeting
 from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers
 
 # Automatically create all tables in PostgreSQL on startup
@@ -24,33 +24,9 @@ try:
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_start VARCHAR;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_end VARCHAR;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_room VARCHAR;"))
-        
-        # Populate existing courses that lack schedules
-        courses_res = conn.execute(text("SELECT id, course_code FROM courses WHERE schedule_day IS NULL;")).fetchall()
-        if courses_res:
-            import random
-            days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-            starts = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00"]
-            rooms = ["Theatre 1", "Theatre 2", "Lab 1", "Lab 2", "Lab 3", "Seminar Room 1", "Seminar Room 2"]
-            for row in courses_res:
-                cid = row[0]
-                ccode = row[1]
-                # Seed deterministically by course code hash to ensure stable assignments
-                random.seed(hash(ccode))
-                day = random.choice(days)
-                start_t = random.choice(starts)
-                hour = int(start_t.split(":")[0])
-                end_t = f"{hour + 2:02d}:00"
-                room = random.choice(rooms)
-                conn.execute(text("""
-                    UPDATE courses
-                    SET schedule_day = :day,
-                        schedule_start = :start,
-                        schedule_end = :end,
-                        schedule_room = :room
-                    WHERE id = :id;
-                """), {"day": day, "start": start_t, "end": end_t, "room": room, "id": cid})
-            print(f"Provisioned random timetable schedules for {len(courses_res)} courses.")
+        # NOTE: courses' timetable times now live in the class_meetings table
+        # (seeded below via _seed_class_meetings), not in courses.schedule_*.
+        # Those columns are kept for backward-compat but are no longer written.
 
         # Network-based location verification: attendance audit columns
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS source_ip VARCHAR;"))
@@ -89,7 +65,10 @@ try:
             END $$;
         """))
 
-        # Multi-device session binding table (created by Base.metadata above; migration is idempotent)
+        # Single-device login lock removed: device_id is now recorded per
+        # check-in (audit only). Add the column and drop the old lock table.
+        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS device_id VARCHAR;"))
+        conn.execute(text("DROP TABLE IF EXISTS device_sessions;"))
 
         # Announcement targeting: scope (all/programme/course) × role (all/students/staff).
         # Adds the new columns and backfills them from the legacy target_audience value
@@ -120,8 +99,7 @@ try:
                 "fail_closed": "true",             # reject check-in when network not verified
                 "trust_proxy_header": "false",     # honour X-Forwarded-For (only behind a trusted proxy)
                 "demo_simulate_network": "false",  # demo: override observed IP with a simulated one
-                "demo_simulated_ip": "10.52.13.77", # the simulated campus IP used in demo mode
-                "schedule_check_enabled": "false"  # enforce attendance only during scheduled class time
+                "demo_simulated_ip": "10.52.13.77" # the simulated campus IP used in demo mode
             }
             for k, v in defaults.items():
                 conn.execute(
@@ -132,6 +110,27 @@ try:
     print("Database migrations applied successfully.")
 except Exception as e:
     print("Database migration execution warning:", e)
+
+
+# Seed the class_meetings timetable (single source of truth) once, from the
+# deterministic scheduler — reproducing the legacy schedule exactly so behaviour
+# is unchanged on day one. Fail-loud: if seeding errors, we must know (a silent
+# empty table would leave every session on the 2h fallback window).
+def _seed_class_meetings():
+    from utils.scheduler import generate_clashfree_slots
+    db = SessionLocal()
+    try:
+        if db.query(ClassMeeting).first() is not None:
+            return  # already seeded
+        rows = generate_clashfree_slots(db)
+        for r in rows:
+            db.add(ClassMeeting(**r))
+        db.commit()
+        print(f"Seeded class_meetings timetable with {len(rows)} meetings.")
+    finally:
+        db.close()
+
+_seed_class_meetings()
 
 
 app = FastAPI(

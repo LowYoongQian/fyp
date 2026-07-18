@@ -93,6 +93,28 @@ class CourseStaffAssignment(Base):
     course        = relationship("Course")
     lecturer      = relationship("Lecturer")
 
+# Class meetings table — the SINGLE SOURCE OF TRUTH for the timetable.
+# One row per fixed weekly class: a course's Lecture, or one Tutor/Practical
+# staff assignment. meeting_key mirrors the old in-memory schedule dict key
+# ("Lecture-{course_id}" / "Tutor-{assignment_id}" / "Practical-{assignment_id}")
+# so calculate_schedule() can rebuild the same dict shape by reading this table.
+# Rows are seeded once by the deterministic scheduler, then editable by admin.
+class ClassMeeting(Base):
+    __tablename__ = "class_meetings"
+    id            = Column(Integer, primary_key=True, index=True)
+    meeting_key   = Column(String, unique=True, nullable=False, index=True)
+    course_id     = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    assignment_id = Column(Integer, ForeignKey("course_staff_assignments.id", ondelete="CASCADE"), nullable=True, index=True)
+    role          = Column(String, nullable=False)   # Lecture / Tutor / Practical
+    day           = Column(String, nullable=False)
+    start         = Column(String, nullable=False)
+    end           = Column(String, nullable=False)
+    room          = Column(String, nullable=False)
+    lecturer_id   = Column(Integer, ForeignKey("lecturers.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    course        = relationship("Course")
+    lecturer      = relationship("Lecturer")
+
 # Course enrolment table
 class Enrolment(Base):
     __tablename__ = "enrolments"
@@ -129,16 +151,6 @@ class ClassSession(Base):
     course    = relationship("Course", back_populates="sessions")
     attendance_records = relationship("AttendanceRecord", back_populates="session")
 
-# Active device-session bindings (multi-device lock)
-class DeviceSession(Base):
-    __tablename__ = "device_sessions"
-    id         = Column(Integer, primary_key=True, index=True)
-    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    device_id  = Column(String, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
-
-    user       = relationship("User")
-
 # Attendance log table
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
@@ -162,6 +174,10 @@ class AttendanceRecord(Base):
     # Behavioral biometrics — liveness gesture timing
     liveness_challenge_ms = Column(Integer, nullable=True)  # ms to complete both challenges
     liveness_suspicious   = Column(Boolean, default=False)  # flagged as abnormally fast
+
+    # Device fingerprint of the phone used for THIS check-in (audit only; not a
+    # login lock). Null for older records / clients that don't report it.
+    device_id             = Column(String, nullable=True)
 
     student          = relationship("Student", back_populates="attendance_records")
     session          = relationship("ClassSession", back_populates="attendance_records")
