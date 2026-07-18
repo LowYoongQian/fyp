@@ -1,6 +1,5 @@
 import random
 import threading
-from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from utils.models import Course, CourseStaffAssignment
 
@@ -143,24 +142,11 @@ def _compute_schedule(db: Session) -> dict:
             success = True
             break
 
-    # Force BMCS2073 (Software Information Security) to be scheduled right now for the demo.
-    try:
-        course_bmcs = db.query(Course).filter(Course.course_code == 'BMCS2073').first()
-        if course_bmcs:
-            now_local = datetime.now()
-            day_name = now_local.strftime("%A")
-            start_str = (now_local - timedelta(hours=1)).strftime("%H:00")
-            end_str = (now_local + timedelta(hours=2)).strftime("%H:00")
-            
-            key = f"Lecture-{course_bmcs.id}"
-            allocated[key] = {
-                "day": day_name,
-                "start": start_str,
-                "end": end_str,
-                "room": "Demo Lab"
-            }
-    except Exception as e:
-        print(f"Error overriding demo schedule: {e}")
+        if not success:
+            raise ValueError(
+                f"Academic schedule slots are fully booked. "
+                f"No clash-free slot available for {cls['type']} of {cls['course_code']}."
+            )
 
     return allocated
 
