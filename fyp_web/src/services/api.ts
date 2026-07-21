@@ -22,6 +22,36 @@ api.interceptors.request.use((config) => {
   return Promise.reject(error);
 });
 
+// Memory cache for client-side API caching
+const apiCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 30000; // 30 seconds cache TTL
+
+// Helper to handle cached GET requests
+export const cachedGet = async (url: string, params?: any): Promise<any> => {
+  const cacheKey = JSON.stringify({ url, params });
+  const cached = apiCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+    return cached.data;
+  }
+  const response = await api.get(url, { params });
+  apiCache.set(cacheKey, { data: response.data, timestamp: Date.now() });
+  return response.data;
+};
+
+// Invalidate memory cache whenever a mutating request (POST, PUT, DELETE) succeeds
+api.interceptors.response.use(
+  (response) => {
+    const method = response.config.method?.toUpperCase();
+    if (method && ['POST', 'PUT', 'DELETE'].includes(method)) {
+      apiCache.clear();
+    }
+    return response;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 // Seed data storage keys for local dashboard simulation
 const KEYS = {
   COURSES: 'sas_courses',
@@ -206,6 +236,7 @@ export interface Announcement {
   created_at: string;
   is_draft: boolean;
   priority: 'High' | 'Medium' | 'Low';
+  publisher: string;
   image_base64?: string | null;
   publish_start?: string | null;
   publish_end?: string | null;
@@ -334,8 +365,8 @@ export interface StudentActiveSession {
 
 export const apiService = {
   // Real Backend Auth APIs
-  login: async (email: string, password: string) => {
-    const response = await api.post('/auth/login', { email, password });
+  login: async (email: string, password: string, portal?: string) => {
+    const response = await api.post('/auth/login', { email, password, portal });
     return response.data; // returns { access_token, token_type, role, user_id }
   },
 
@@ -360,8 +391,7 @@ export const apiService = {
 
   getActiveSessions: async () => {
     try {
-      const response = await api.get<ActiveSession[]>('/sessions/active');
-      return response.data;
+      return await cachedGet('/sessions/active');
     } catch (err) {
       console.warn("Backend connection failed or no sessions, returning empty list.");
       return [];
@@ -374,8 +404,7 @@ export const apiService = {
   },
 
   getCourseSessions: async (courseId: number): Promise<ActiveSession[]> => {
-    const response = await api.get<ActiveSession[]>(`/sessions/course/${courseId}/sessions`);
-    return response.data;
+    return cachedGet(`/sessions/course/${courseId}/sessions`);
   },
 
   updateLecturerAttendance: async (sessionId: number, studentId: number, status: 'present' | 'absent'): Promise<any> => {
@@ -392,33 +421,28 @@ export const apiService = {
   // Mock / Simulated Admin APIs
   // Live Backend Lecturer & Analytics APIs
   getCourses: async (): Promise<Course[]> => {
-    const response = await api.get('/lecturers/me/courses');
-    return response.data;
+    return cachedGet('/lecturers/me/courses');
   },
 
   getLecturerTimetable: async (): Promise<Course[]> => {
-    const response = await api.get('/lecturers/me/timetable');
-    return response.data;
+    return cachedGet('/lecturers/me/timetable');
   },
 
   getStudents: async (): Promise<Student[]> => {
-    const response = await api.get('/admin/students');
-    return response.data.items;
+    const res = await cachedGet('/admin/students');
+    return res.items;
   },
 
   getEnrolments: async (): Promise<Enrolment[]> => {
-    const response = await api.get('/admin/enrolments');
-    return response.data;
+    return cachedGet('/admin/enrolments');
   },
 
   getRiskScores: async (): Promise<RiskScore[]> => {
-    const response = await api.get('/analytics/risk-scores');
-    return response.data;
+    return cachedGet('/analytics/risk-scores');
   },
 
   getAlertLogs: async (): Promise<AlertLog[]> => {
-    const response = await api.get('/lecturers/me/alerts');
-    return response.data;
+    return cachedGet('/lecturers/me/alerts');
   },
 
   triggerManualAlert: async (studentId: number, courseId: number) => {
@@ -435,9 +459,8 @@ export const apiService = {
   },
 
   // Admin backend CRUD endpoints
-  adminGetStudents: async (skip?: number, limit?: number): Promise<{ items: AdminStudent[]; total: number }> => {
-    const response = await api.get('/admin/students', { params: { skip, limit } });
-    return response.data;
+  adminGetStudents: async (skip?: number, limit?: number, search?: string): Promise<{ items: AdminStudent[]; total: number }> => {
+    return cachedGet('/admin/students', { skip, limit, search });
   },
   adminCreateStudent: async (student: any): Promise<any> => {
     const response = await api.post('/admin/students', student);
@@ -451,9 +474,8 @@ export const apiService = {
     const response = await api.delete(`/admin/students/${studentId}`);
     return response.data;
   },
-  adminGetStaff: async (skip?: number, limit?: number): Promise<{ items: AdminStaff[]; total: number }> => {
-    const response = await api.get('/admin/staff', { params: { skip, limit } });
-    return response.data;
+  adminGetStaff: async (skip?: number, limit?: number, search?: string): Promise<{ items: AdminStaff[]; total: number }> => {
+    return cachedGet('/admin/staff', { skip, limit, search });
   },
   adminCreateStaff: async (staff: any): Promise<any> => {
     const response = await api.post('/admin/staff', staff);
@@ -468,8 +490,7 @@ export const apiService = {
     return response.data;
   },
   adminGetAnnouncements: async (): Promise<Announcement[]> => {
-    const response = await api.get('/admin/announcements');
-    return response.data;
+    return cachedGet('/admin/announcements');
   },
   adminCreateAnnouncement: async (announcement: any): Promise<Announcement> => {
     const response = await api.post('/admin/announcements', announcement);
@@ -486,8 +507,7 @@ export const apiService = {
 
   // Programmes CRUD
   adminGetProgrammes: async (): Promise<Programme[]> => {
-    const response = await api.get('/admin/programmes');
-    return response.data;
+    return cachedGet('/admin/programmes');
   },
   adminCreateProgramme: async (programme: Omit<Programme, 'id'>): Promise<Programme> => {
     const response = await api.post('/admin/programmes', programme);
@@ -504,8 +524,7 @@ export const apiService = {
 
   // Courses CRUD
   adminGetCourses: async (): Promise<Course[]> => {
-    const response = await api.get('/admin/courses');
-    return response.data;
+    return cachedGet('/admin/courses');
   },
   adminCreateCourse: async (course: Omit<Course, 'id'>): Promise<Course> => {
     const response = await api.post('/admin/courses', course);
@@ -522,12 +541,10 @@ export const apiService = {
 
   // Course Staff Assignments CRUD
   adminGetAssignments: async (): Promise<CourseStaffAssignment[]> => {
-    const response = await api.get('/admin/assignments');
-    return response.data;
+    return cachedGet('/admin/assignments');
   },
   adminGetTimetable: async (): Promise<Course[]> => {
-    const response = await api.get('/admin/timetable');
-    return response.data;
+    return cachedGet('/admin/timetable');
   },
   adminUpdateTimetableSlot: async (
     meetingId: number,
@@ -553,8 +570,7 @@ export const apiService = {
 
   // Student Enrolments CRUD
   adminGetEnrolments: async (): Promise<Enrolment[]> => {
-    const response = await api.get('/admin/enrolments');
-    return response.data;
+    return cachedGet('/admin/enrolments');
   },
   adminCreateEnrolment: async (enrolment: { student_id: number; course_id: number; semester?: string; class_group?: string }): Promise<any> => {
     const response = await api.post('/admin/enrolments', enrolment);
@@ -567,8 +583,7 @@ export const apiService = {
 
   // Admin Attendance APIs
   adminGetSessions: async (): Promise<AdminSession[]> => {
-    const response = await api.get('/admin/sessions');
-    return response.data;
+    return cachedGet('/admin/sessions');
   },
   adminGetSessionAttendance: async (sessionId: number): Promise<AdminSessionAttendanceResponse> => {
     const response = await api.get(`/admin/sessions/${sessionId}/attendance`);
@@ -581,8 +596,7 @@ export const apiService = {
 
   // Campus Network whitelist + security settings
   adminGetCampusNetworks: async (): Promise<CampusNetwork[]> => {
-    const response = await api.get('/admin/campus-networks');
-    return response.data;
+    return cachedGet('/admin/campus-networks');
   },
   adminCreateCampusNetwork: async (net: Omit<CampusNetwork, 'id'>): Promise<CampusNetwork> => {
     const response = await api.post('/admin/campus-networks', net);
@@ -597,8 +611,7 @@ export const apiService = {
     return response.data;
   },
   adminGetSecuritySettings: async (): Promise<SecuritySettings> => {
-    const response = await api.get('/admin/security-settings');
-    return response.data;
+    return cachedGet('/admin/security-settings');
   },
   adminUpdateSecuritySettings: async (settings: SecuritySettings): Promise<SecuritySettings> => {
     const response = await api.put('/admin/security-settings', { settings });
@@ -609,31 +622,24 @@ export const apiService = {
   // These call /students/me/* endpoints that are scoped to the logged-in student.
 
   studentGetProfile: async (): Promise<StudentProfile> => {
-    const response = await api.get('/students/me/profile');
-    return response.data;
+    return cachedGet('/students/me/profile');
   },
   studentGetEnrolments: async (): Promise<StudentEnrolmentDetail[]> => {
-    const response = await api.get('/students/me/enrolments');
-    return response.data;
+    return cachedGet('/students/me/enrolments');
   },
   studentGetCourses: async (): Promise<Course[]> => {
-    const response = await api.get('/students/me/courses');
-    return response.data;
+    return cachedGet('/students/me/courses');
   },
   studentGetAttendance: async (): Promise<StudentAttendanceRecord[]> => {
-    const response = await api.get('/students/me/attendance');
-    return response.data;
+    return cachedGet('/students/me/attendance');
   },
   studentGetActiveSessions: async (): Promise<StudentActiveSession[]> => {
-    const response = await api.get('/students/me/active-sessions');
-    return response.data;
+    return cachedGet('/students/me/active-sessions');
   },
   studentGetAnnouncements: async (): Promise<Announcement[]> => {
-    const response = await api.get('/students/me/announcements');
-    return response.data;
+    return cachedGet('/students/me/announcements');
   },
   lecturerGetAnnouncements: async (): Promise<Announcement[]> => {
-    const response = await api.get('/lecturers/me/announcements');
-    return response.data;
+    return cachedGet('/lecturers/me/announcements');
   },
 };

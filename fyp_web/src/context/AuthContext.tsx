@@ -11,7 +11,7 @@ interface AuthContextType {
   user: UserSession | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<any>;
+  login: (email: string, password: string, portal?: string) => Promise<any>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -35,10 +35,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(false);
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, portal?: string) => {
     setLoading(true);
     try {
-      const data = await apiService.login(email, password);
+      const data = await apiService.login(email, password, portal);
       // Backend returns: { access_token, token_type, role, user_id }
       const sessionUser: UserSession = {
         user_id: data.user_id,

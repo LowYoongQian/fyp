@@ -25,6 +25,7 @@ class LoginRequest(BaseModel):
     # Device fingerprint for multi-device session binding (optional; older
     # clients that omit it are not locked to a device).
     device_id: Optional[str] = None
+    portal: Optional[str] = None
 
 class RegisterRequest(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
@@ -138,6 +139,7 @@ class AnnouncementCreate(BaseModel):
     department: str
     is_draft: Optional[bool] = False
     priority: Optional[str] = "Medium"
+    publisher: Optional[str] = "ADMIN"
     image_base64: Optional[str] = None
     publish_start: Optional[datetime] = None
     publish_end: Optional[datetime] = None
@@ -155,6 +157,7 @@ class AnnouncementResponse(BaseModel):
     created_at: datetime
     is_draft: bool
     priority: str
+    publisher: str
     image_base64: Optional[str] = None
     publish_start: Optional[datetime] = None
     publish_end: Optional[datetime] = None

@@ -17,11 +17,19 @@ router = APIRouter(prefix="/admin", tags=["Admin Staff"])
 def get_staff(
     skip: Optional[int] = None,
     limit: Optional[int] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    total = db.query(Lecturer).count()
     query = db.query(Lecturer).options(joinedload(Lecturer.user))
+    if search:
+        search_val = f"%{search}%"
+        query = query.outerjoin(User, User.id == Lecturer.user_id).filter(
+            (Lecturer.name.ilike(search_val)) |
+            (Lecturer.staff_id.ilike(search_val)) |
+            (User.email.ilike(search_val))
+        )
+    total = query.count()
     if skip is not None:
         query = query.offset(skip)
     if limit is not None:
@@ -57,7 +65,8 @@ def create_staff(
     
     # Create credentials
     hashed = hash_password(body.password)
-    user = User(email=body.email, password_hash=hashed, role="lecturer")
+    user_role = "admin" if body.role.lower() == "admin" else "lecturer"
+    user = User(email=body.email, password_hash=hashed, role=user_role)
     db.add(user)
     db.flush()
     
@@ -98,6 +107,7 @@ def update_staff(
 
     if body.role is not None:
         lecturer.role = body.role
+        user.role = "admin" if body.role.lower() == "admin" else "lecturer"
         
     db.commit()
     return {"message": "Staff updated successfully", "user_id": user.id}

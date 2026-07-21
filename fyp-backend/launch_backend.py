@@ -8,8 +8,8 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent
 BACKEND_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
-HOST = "127.0.0.1"
-PORT = "8003"
+HOST = "0.0.0.0"
+PORT = "8000"
 
 
 def stop_process_tree(process: subprocess.Popen[bytes]) -> None:

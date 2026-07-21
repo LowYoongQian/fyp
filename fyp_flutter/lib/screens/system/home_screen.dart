@@ -1,12 +1,21 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../widgets/glass_card.dart';
 import '../../main.dart';
 
 class HomeScreen extends StatefulWidget {
+  final List<Map<String, dynamic>> announcements;
+  final Future<void> Function() onRefresh;
   final VoidCallback onSettingsPressed;
   final Function(int) onTabSelected;
-  const HomeScreen({super.key, required this.onSettingsPressed, required this.onTabSelected});
+  const HomeScreen({
+    super.key,
+    required this.announcements,
+    required this.onRefresh,
+    required this.onSettingsPressed,
+    required this.onTabSelected,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -138,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
+                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
                         colors: [Color(0xFF2563EB), Color(0xFF3B82F6)],
                         begin: Alignment.topLeft,
@@ -351,199 +360,169 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // Banner 1: Intakes
-                  Container(
-                    width: double.infinity,
-                    height: 140,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+                  if (widget.announcements.isEmpty)
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24.0),
+                        child: Text(
+                          "No announcements at this time",
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: slateTextColor,
+                          ),
+                        ),
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        )
-                      ],
-                    ),
-                    child: Stack(
-                      children: [
-                        // Decorative lines background
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: LinesPainter(),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.all(18.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  "UNIVERSITY INTAKES",
-                                  style: GoogleFonts.inter(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                    letterSpacing: 1.0,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                "2026 INTAKES IN PROGRESS",
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                "Register online and secure your future pathway today.",
-                                style: GoogleFonts.inter(
-                                  fontSize: 10,
-                                  color: const Color(0xFF94A3B8),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Positioned(
-                          bottom: 16,
-                          right: 16,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2563EB),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              children: [
-                                Text(
-                                  "APPLY NOW",
-                                  style: GoogleFonts.inter(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 8),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+                    )
+                  else
+                    ...widget.announcements.asMap().entries.map((entry) {
+                      final int idx = entry.key;
+                      final Map<String, dynamic> ann = entry.value;
 
-                  // Banner 2: Career Test
-                  Container(
-                    width: double.infinity,
-                    height: 140,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF0369A1), Color(0xFF0EA5E9)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        )
-                      ],
-                    ),
-                    child: Stack(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(18.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
+                      // Handle background image
+                      DecorationImage? bgImage;
+                      final imageBase64 = ann['image_base64'] as String?;
+                      if (imageBase64 != null && imageBase64.isNotEmpty) {
+                        try {
+                          final base64Clean = imageBase64.split(',').last;
+                          final decodedBytes = base64Decode(base64Clean);
+                           bgImage = DecorationImage(
+                            image: MemoryImage(decodedBytes),
+                            fit: BoxFit.cover,
+                            colorFilter: ColorFilter.mode(
+                              Colors.black.withValues(alpha: 0.55),
+                              BlendMode.darken,
+                            ),
+                          );
+                        } catch (e) {
+                          debugPrint("Failed to decode announcement image: $e");
+                        }
+                      }
+
+                      // Alternating default gradients if no image
+                      final decoration = BoxDecoration(
+                        borderRadius: BorderRadius.circular(18),
+                        image: bgImage,
+                        gradient: bgImage == null
+                            ? LinearGradient(
+                                colors: idx % 2 == 0
+                                    ? [const Color(0xFF0F172A), const Color(0xFF1E293B)]
+                                    : [const Color(0xFF0369A1), const Color(0xFF0EA5E9)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              )
+                            : null,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.08),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          )
+                        ],
+                      );
+
+                      final String badgeText = (ann['faculty'] ?? ann['publisher'] ?? 'ADMIN').toString().toUpperCase();
+                      final String titleText = (ann['title'] ?? '').toString();
+                      final String contentText = (ann['content'] ?? '').toString();
+
+                      // Action button text and colors
+                      final bool isIntake = titleText.toUpperCase().contains("INTAKE");
+                      final String btnText = isIntake ? "APPLY NOW" : "More";
+                      final Color btnBgColor = idx % 2 == 0 ? const Color(0xFF2563EB) : Colors.white;
+                      final Color btnTextColor = idx % 2 == 0 ? Colors.white : const Color(0xFF0369A1);
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 16.0),
+                        child: Container(
+                          width: double.infinity,
+                          height: 140,
+                          decoration: decoration,
+                          child: Stack(
                             children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
+                              Padding(
+                                padding: const EdgeInsets.all(18.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        badgeText,
+                                        style: GoogleFonts.inter(
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                          letterSpacing: 1.0,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    SizedBox(
+                                      width: MediaQuery.of(context).size.width - 160,
+                                      child: Text(
+                                        titleText,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: GoogleFonts.spaceGrotesk(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                          letterSpacing: -0.5,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    SizedBox(
+                                      width: MediaQuery.of(context).size.width - 160,
+                                      child: Text(
+                                        contentText,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          color: const Color(0xFFE2E8F0),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                child: Text(
-                                  "STUDENT GUIDANCE",
-                                  style: GoogleFonts.inter(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                    letterSpacing: 1.0,
+                              ),
+                              Positioned(
+                                bottom: 16,
+                                right: 16,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: btnBgColor,
+                                    borderRadius: BorderRadius.circular(10),
                                   ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                "CAREER INTEREST TEST",
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                "Discover your profile, potentials, and study strengths.",
-                                style: GoogleFonts.inter(
-                                  fontSize: 10,
-                                  color: const Color(0xFFE0F2FE),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        btnText,
+                                        style: GoogleFonts.inter(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                          color: btnTextColor,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Icon(Icons.arrow_forward_ios, color: btnTextColor, size: 8),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        Positioned(
-                          bottom: 16,
-                          right: 16,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              children: [
-                                Text(
-                                  "More",
-                                  style: GoogleFonts.inter(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    color: const Color(0xFF0369A1),
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Icon(Icons.arrow_forward_ios, color: Color(0xFF0369A1), size: 8),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
+                      );
+                    }),
+                  const SizedBox(height: 8),
                 ],
               ),
             ),

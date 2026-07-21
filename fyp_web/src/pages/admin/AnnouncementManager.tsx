@@ -16,7 +16,6 @@ import {
   ChevronDown,
   Upload,
   Image as ImageIcon,
-  Tag,
   Clock,
   UserCheck
 } from 'lucide-react';
@@ -106,6 +105,7 @@ export const AnnouncementManager: React.FC = () => {
   const [content, setContent] = useState('');
   const [faculty, setFaculty] = useState('All Faculties');
   const [priority, setPriority] = useState<'High' | 'Medium' | 'Low'>('Medium');
+  const [publisher, setPublisher] = useState('ADMIN');
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [publishStart, setPublishStart] = useState('');
   const [publishEnd, setPublishEnd] = useState('');
@@ -159,6 +159,7 @@ export const AnnouncementManager: React.FC = () => {
     setContent('');
     setFaculty('All Faculties');
     setPriority('Medium');
+    setPublisher('ADMIN');
     setImageBase64(null);
     setPublishStart('');
     setPublishEnd('');
@@ -176,6 +177,7 @@ export const AnnouncementManager: React.FC = () => {
     setContent(ann.content);
     setFaculty(ann.faculty || 'All Faculties');
     setPriority(ann.priority || 'Medium');
+    setPublisher(ann.publisher || 'ADMIN');
     setImageBase64(ann.image_base64 || null);
     setPublishStart(ann.publish_start ? ann.publish_start.substring(0, 16) : '');
     setPublishEnd(ann.publish_end ? ann.publish_end.substring(0, 16) : '');
@@ -199,6 +201,7 @@ export const AnnouncementManager: React.FC = () => {
           department: 'All Departments',
           is_draft: true,
           priority,
+          publisher: publisher || 'ADMIN',
           image_base64: imageBase64,
           publish_start: publishStart ? new Date(publishStart).toISOString() : null,
           publish_end: publishEnd ? new Date(publishEnd).toISOString() : null,
@@ -300,6 +303,7 @@ export const AnnouncementManager: React.FC = () => {
       department: 'All Departments',
       is_draft: submitAsDraft,
       priority,
+      publisher: publisher || 'ADMIN',
       image_base64: imageBase64,
       publish_start: publishStart ? new Date(publishStart).toISOString() : null,
       publish_end: publishEnd ? new Date(publishEnd).toISOString() : null,
@@ -433,14 +437,8 @@ export const AnnouncementManager: React.FC = () => {
                         <Clock className="h-3 w-3" /> Draft
                       </span>
                     )}
-                    <span
-                      className={`absolute top-3 right-3 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded-md shadow-md ${
-                        ann.priority === 'High' ? 'bg-rose-600 text-white' :
-                        ann.priority === 'Medium' ? 'bg-amber-500 text-slate-900' :
-                        'bg-blue-600 text-white'
-                      }`}
-                    >
-                      {ann.priority} Priority
+                    <span className="absolute top-3 right-3 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded-md shadow-md bg-brand-blue text-white">
+                      Publisher: {ann.publisher || 'ADMIN'}
                     </span>
                   </div>
                 )}
@@ -456,14 +454,8 @@ export const AnnouncementManager: React.FC = () => {
                               Draft
                             </span>
                           )}
-                          <span
-                            className={`uipro-badge text-[9px] py-0.5 px-2 font-bold uppercase ${
-                              ann.priority === 'High' ? 'bg-rose-100 text-rose-800 border border-rose-200' :
-                              ann.priority === 'Medium' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
-                              'bg-blue-100 text-blue-800 border border-blue-200'
-                            }`}
-                          >
-                            {ann.priority}
+                          <span className="uipro-badge text-[9px] py-0.5 px-2 font-bold uppercase bg-blue-100 text-blue-800 border border-blue-200">
+                            Publisher: {ann.publisher || 'ADMIN'}
                           </span>
                         </>
                       )}
@@ -597,31 +589,21 @@ export const AnnouncementManager: React.FC = () => {
                   programmes={programmes} courses={courses}
                 />
 
-                {/* Priority Segmented Button Group */}
-                <div className="space-y-1.5">
-                  <label className="font-semibold text-slate-700 flex items-center gap-1">
-                    <Tag className="h-3.5 w-3.5 text-slate-400" /> Announcement Priority
-                  </label>
-                  <div className="grid grid-cols-3 gap-2.5 p-1 bg-slate-100 rounded-xl">
-                    {(['High', 'Medium', 'Low'] as const).map((p) => {
-                      const active = priority === p;
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setPriority(p)}
-                          className={`py-2 px-3 rounded-lg font-bold transition-all duration-200 cursor-pointer text-center ${
-                            active
-                              ? p === 'High' ? 'bg-rose-600 text-white shadow-sm' :
-                                p === 'Medium' ? 'bg-amber-500 text-slate-950 shadow-sm' :
-                                'bg-blue-600 text-white shadow-sm'
-                              : 'text-slate-500 hover:text-slate-800'
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      );
-                    })}
+                {/* Publisher Dropdown */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">Notice Publisher</label>
+                  <div className="relative">
+                    <select
+                      value={publisher}
+                      onChange={(e) => setPublisher(e.target.value)}
+                      className={selectCls}
+                    >
+                      <option value="ADMIN">ADMIN</option>
+                      {programmes.map(p => (
+                        <option key={p.id} value={p.code}>{p.code}</option>
+                      ))}
+                    </select>
+                    {chevron}
                   </div>
                 </div>
 
@@ -805,31 +787,21 @@ export const AnnouncementManager: React.FC = () => {
                   programmes={programmes} courses={courses}
                 />
 
-                {/* Priority Segmented Button Group */}
-                <div className="space-y-1.5">
-                  <label className="font-semibold text-slate-700 flex items-center gap-1">
-                    <Tag className="h-3.5 w-3.5 text-slate-400" /> Announcement Priority
-                  </label>
-                  <div className="grid grid-cols-3 gap-2.5 p-1 bg-slate-100 rounded-xl">
-                    {(['High', 'Medium', 'Low'] as const).map((p) => {
-                      const active = priority === p;
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setPriority(p)}
-                          className={`py-2 px-3 rounded-lg font-bold transition-all duration-200 cursor-pointer text-center ${
-                            active
-                              ? p === 'High' ? 'bg-rose-600 text-white shadow-sm' :
-                                p === 'Medium' ? 'bg-amber-500 text-slate-950 shadow-sm' :
-                                'bg-blue-600 text-white shadow-sm'
-                              : 'text-slate-500 hover:text-slate-800'
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      );
-                    })}
+                {/* Publisher Dropdown */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">Notice Publisher</label>
+                  <div className="relative">
+                    <select
+                      value={publisher}
+                      onChange={(e) => setPublisher(e.target.value)}
+                      className={selectCls}
+                    >
+                      <option value="ADMIN">ADMIN</option>
+                      {programmes.map(p => (
+                        <option key={p.id} value={p.code}>{p.code}</option>
+                      ))}
+                    </select>
+                    {chevron}
                   </div>
                 </div>
 

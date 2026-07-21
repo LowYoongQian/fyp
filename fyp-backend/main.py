@@ -1,7 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import text
 import os
+import hashlib
 
 from utils.database import engine, SessionLocal
 from utils.models import Base, ClassMeeting
@@ -39,6 +41,9 @@ try:
         # Behavioral biometrics columns
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS liveness_challenge_ms INTEGER;"))
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS liveness_suspicious BOOLEAN DEFAULT FALSE;"))
+
+        # Announcement publisher column
+        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS publisher VARCHAR DEFAULT 'ADMIN';"))
 
         # One attendance record per (student, session): dedupe any historical
         # duplicates first (keep present/leave over absent, then the newest id),
@@ -133,6 +138,48 @@ def _seed_class_meetings():
 _seed_class_meetings()
 
 
+class ETagMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.method not in ("GET", "HEAD"):
+            return await call_next(request)
+        
+        response = await call_next(request)
+        
+        if response.status_code != 200:
+            return response
+            
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type and "text/" not in content_type:
+            return response
+            
+        # Consume response body to calculate md5 hash
+        response_body = b""
+        async for chunk in response.body_iterator:
+            response_body += chunk
+            
+        etag = f'W/"{hashlib.md5(response_body).hexdigest()}"'
+        
+        # Check If-None-Match header
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match and if_none_match == etag:
+            return Response(
+                status_code=304,
+                headers={"ETag": etag, "Cache-Control": "private, max-age=30"}
+            )
+            
+        # Add ETag and Cache-Control headers
+        headers = dict(response.headers)
+        headers["ETag"] = etag
+        headers["Cache-Control"] = "private, max-age=30"
+        headers["content-length"] = str(len(response_body))
+        
+        return Response(
+            content=response_body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=response.media_type
+        )
+
 app = FastAPI(
     title="Smart Attendance API",
     version="1.0.0",
@@ -158,6 +205,7 @@ else:
 # Regex matches localhost, 127.0.0.1, and local private network IPs (192.168.x.x, 10.x.x.x, 172.16.x.x-172.31.x.x) on any port
 local_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?"
 
+app.add_middleware(ETagMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -180,6 +228,37 @@ app.include_router(admin_config.router)
 app.include_router(student_self.router)
 app.include_router(analytics.router)
 app.include_router(lecturers.router)
+
+# Public announcements endpoint for home screen
+@app.get("/public/announcements", response_model=list)
+def get_public_announcements():
+    db = SessionLocal()
+    try:
+        from utils.models import Announcement
+        # Return all published announcements (is_draft=False) sorted by created_at desc
+        announcements = db.query(Announcement).filter(Announcement.is_draft == False).order_by(Announcement.created_at.desc()).all()
+        return [
+            {
+                "id": a.id,
+                "title": a.title,
+                "content": a.content,
+                "faculty": a.faculty,
+                "department": a.department,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "priority": a.priority,
+                "publisher": a.publisher,
+                "image_base64": a.image_base64,
+                "publish_start": a.publish_start,
+                "publish_end": a.publish_end,
+                "target_scope": a.target_scope,
+                "target_role": a.target_role,
+                "target_programme_code": a.target_programme_code,
+                "target_course_code": a.target_course_code,
+            }
+            for a in announcements
+        ]
+    finally:
+        db.close()
 
 # Basic health check endpoint
 @app.get("/")

@@ -25,8 +25,30 @@ export const StudentDashboard: React.FC = () => {
   }, [user]);
 
   const loadStudentData = async () => {
-    setLoading(true);
+    // 1. Try loading from cache first
+    const cachedProfile = localStorage.getItem('cached_student_profile');
+    const cachedEnrolments = localStorage.getItem('cached_student_enrolments');
+    const cachedSessions = localStorage.getItem('cached_student_active_sessions');
+
+    let hasCached = false;
+    if (cachedProfile && cachedEnrolments && cachedSessions) {
+      try {
+        setStudent(JSON.parse(cachedProfile));
+        setEnrolments(JSON.parse(cachedEnrolments));
+        setActiveSessions(JSON.parse(cachedSessions));
+        setLoading(false); // Render instantly, avoiding skeleton animation
+        hasCached = true;
+      } catch (e) {
+        console.error("Failed to parse cached data:", e);
+      }
+    }
+
+    if (!hasCached) {
+      setLoading(true);
+    }
+
     try {
+      // 2. Fetch fresh data from backend
       const [profile, enrolmentsList, activeSessionsList] = await Promise.all([
         apiService.studentGetProfile(),
         apiService.studentGetEnrolments(),
@@ -36,6 +58,11 @@ export const StudentDashboard: React.FC = () => {
       setStudent(profile);
       setEnrolments(enrolmentsList);
       setActiveSessions(activeSessionsList);
+
+      // Save fresh data to local cache
+      localStorage.setItem('cached_student_profile', JSON.stringify(profile));
+      localStorage.setItem('cached_student_enrolments', JSON.stringify(enrolmentsList));
+      localStorage.setItem('cached_student_active_sessions', JSON.stringify(activeSessionsList));
     } catch (err) {
       console.error("Failed to load student dashboard data:", err);
     } finally {

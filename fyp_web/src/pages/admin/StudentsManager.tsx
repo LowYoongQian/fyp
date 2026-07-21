@@ -45,16 +45,21 @@ export const StudentsManager: React.FC = () => {
 
   useEffect(() => {
     fetchStudents();
-  }, [page]);
+  }, [page, searchQuery]);
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    setPage(1);
+  };
 
   const fetchStudents = async () => {
     setLoading(true);
     setError(null);
     try {
       const skip = (page - 1) * limit;
-      const res = await apiService.adminGetStudents(skip, limit);
-      setStudents(res.items);
-      setTotalCount(res.total);
+      const res = await apiService.adminGetStudents(skip, limit, searchQuery);
+      setStudents(res.items || []);
+      setTotalCount(res.total || 0);
     } catch (err: any) {
       setError('Failed to fetch student registry. Please ensure backend is running.');
       console.error(err);
@@ -140,11 +145,12 @@ export const StudentsManager: React.FC = () => {
     }
   };
 
-  const filteredStudents = students.filter(s =>
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.student_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredStudents = students.map(s => ({
+    ...s,
+    name: s.name || '',
+    student_code: s.student_code || '',
+    email: s.email || ''
+  }));
 
   return (
     <div className="space-y-6">
@@ -180,7 +186,7 @@ export const StudentsManager: React.FC = () => {
             type="text"
             placeholder="Search by name, student code (TP-ID), or email..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             className="w-full uipro-input !pl-10"
           />
         </div>
@@ -261,6 +267,14 @@ export const StudentsManager: React.FC = () => {
                 <button
                   type="button"
                   disabled={page === 1}
+                  onClick={() => setPage(1)}
+                  className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  First
+                </button>
+                <button
+                  type="button"
+                  disabled={page === 1}
                   onClick={() => setPage(p => Math.max(p - 1, 1))}
                   className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
@@ -276,6 +290,14 @@ export const StudentsManager: React.FC = () => {
                   className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Next
+                </button>
+                <button
+                  type="button"
+                  disabled={page >= Math.ceil(totalCount / limit)}
+                  onClick={() => setPage(Math.max(1, Math.ceil(totalCount / limit)))}
+                  className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Last
                 </button>
               </div>
             </div>

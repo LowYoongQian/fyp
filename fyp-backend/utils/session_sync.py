@@ -32,13 +32,33 @@ def sync_class_sessions(db: Session):
         now_local = now_utc + tz_offset
         schedule_map = calculate_schedule(db)
         
+        # Query distinct enrolment combinations once
+        enrolments_summary = db.query(Enrolment.course_id, Enrolment.class_group).distinct().all()
+        
+        # Fetch staff assignments for Tutor/Practical roles once
+        assignments_list = db.query(CourseStaffAssignment).filter(
+            CourseStaffAssignment.role.in_(["Tutor", "Practical"])
+        ).all()
+        assignments_by_course = {}
+        for a in assignments_list:
+            assignments_by_course.setdefault(a.course_id, []).append(a)
+            
+        # Fetch existing class sessions for the last 7 days to avoid query storms inside the loop
+        min_date_utc = datetime.combine(now_local - timedelta(days=7), time(0, 0, 0)) - tz_offset
+        sessions_list = db.query(ClassSession).filter(
+            ClassSession.opened_at >= min_date_utc
+        ).all()
+        
+        # Index sessions in memory for O(1) retrieval
+        sessions_by_key = {}
+        for s in sessions_list:
+            s_date = (s.opened_at + tz_offset).date()
+            sessions_by_key[(s.course_id, s.class_group, s_date)] = s
+            
         # Check the last 7 days (including today) to sync past and present classes
         for i in range(7):
             date_check = (now_local - timedelta(days=i)).date()
             day_name = (now_local - timedelta(days=i)).strftime("%A") # Monday, Tuesday, etc.
-            
-            # Find all distinct enrolments to know which courses and groups exist
-            enrolments_summary = db.query(Enrolment.course_id, Enrolment.class_group).distinct().all()
             
             for course_id, class_group in enrolments_summary:
                 # Determine scheduled slots for this course and group
@@ -50,15 +70,10 @@ def sync_class_sessions(db: Session):
                     slots.append((lect_slot, "All"))
                 
                 # 2. Tutor/Practical Slots matching this group
-                assignments = db.query(CourseStaffAssignment).filter(
-                    CourseStaffAssignment.course_id == course_id,
-                    CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-                ).all()
+                assignments = assignments_by_course.get(course_id, [])
                 for a in assignments:
                     slot = schedule_map.get(f"{a.role}-{a.id}")
                     if slot and slot["day"] == day_name:
-                        # Only Tutor/Practical roles are queried above, so these
-                        # slots always apply to the student's own class group.
                         slots.append((slot, class_group))
                 
                 for slot, group_name in slots:
@@ -68,7 +83,6 @@ def sync_class_sessions(db: Session):
                     start_dt = datetime.combine(date_check, start_time)
                     end_dt = datetime.combine(date_check, end_time)
                     
-                    # Convert to UTC for comparing and storing in database
                     start_dt_utc = start_dt - tz_offset
                     end_dt_utc = end_dt - tz_offset
                     
@@ -76,17 +90,7 @@ def sync_class_sessions(db: Session):
                     if now_utc < start_dt_utc:
                         continue
                         
-                    # Check if session already exists for this slot on this day
-                    # Use a range query to be robust and timezone-proof
-                    day_start_utc = datetime.combine(date_check, time(0, 0, 0)) - tz_offset
-                    day_end_utc = datetime.combine(date_check, time(23, 59, 59)) - tz_offset
-                    
-                    session = db.query(ClassSession).filter(
-                        ClassSession.course_id == course_id,
-                        ClassSession.class_group == group_name,
-                        ClassSession.opened_at >= day_start_utc,
-                        ClassSession.opened_at <= day_end_utc
-                    ).first()
+                    session = sessions_by_key.get((course_id, group_name, date_check))
                     
                     if not session:
                         # Auto-open session on time
@@ -101,6 +105,8 @@ def sync_class_sessions(db: Session):
                         db.add(session)
                         db.commit()
                         db.refresh(session)
+                        # Add to our local index map
+                        sessions_by_key[(course_id, group_name, date_check)] = session
                     else:
                         # Auto-close session on time if it reaches the end of class time
                         if session.is_open and now_utc >= end_dt_utc:
@@ -120,28 +126,33 @@ def sync_class_sessions(db: Session):
                             Enrolment.class_group == class_group
                         ).all()
                         
-                        for student in enrolled_students:
-                            # Check if attendance record exists
-                            record = db.query(AttendanceRecord).filter(
-                                AttendanceRecord.session_id == session.id,
-                                AttendanceRecord.student_id == student.id
-                            ).first()
+                        if enrolled_students:
+                            # Fetch all existing attendance records for this session in one query
+                            existing_records = db.query(AttendanceRecord).filter(
+                                AttendanceRecord.session_id == session.id
+                            ).all()
+                            recorded_student_ids = {r.student_id for r in existing_records}
                             
-                            if not record:
-                                # Create absent record
-                                marked_time_local = datetime.combine(date_check, time(23, 0, 0))
-                                marked_time_utc = marked_time_local - tz_offset
-                                record = AttendanceRecord(
-                                    student_id=student.id,
-                                    session_id=session.id,
-                                    status="absent",
-                                    wifi_verified=False,
-                                    liveness_passed=False,
-                                    marked_at=marked_time_utc,
-                                    verify_detail=marked_time_local.strftime("System on %a %d/%m/%y %I:%M%p")
-                                )
-                                db.add(record)
-                        db.commit()
+                            needs_commit = False
+                            for student in enrolled_students:
+                                if student.id not in recorded_student_ids:
+                                    marked_time_local = datetime.combine(date_check, time(23, 0, 0))
+                                    marked_time_utc = marked_time_local - tz_offset
+                                    record = AttendanceRecord(
+                                        student_id=student.id,
+                                        session_id=session.id,
+                                        status="absent",
+                                        wifi_verified=False,
+                                        liveness_passed=False,
+                                        marked_at=marked_time_utc,
+                                        verify_detail=marked_time_local.strftime("System on %a %d/%m/%y %I:%M%p")
+                                    )
+                                    db.add(record)
+                                    needs_commit = True
+                            
+                            if needs_commit:
+                                db.commit()
+                                
         _last_sync_time = time_module.time()
     except Exception as e:
         db.rollback()

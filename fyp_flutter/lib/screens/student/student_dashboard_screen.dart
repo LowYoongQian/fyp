@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../main.dart'; // for ApiConfig
 import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
@@ -99,42 +100,25 @@ class _MainScreenState extends State<MainScreen> {
     return months[month - 1];
   }
 
-  Widget _buildPriorityBadge(String priority) {
-    Color bgColor;
-    Color textColor;
-    IconData icon;
-
-    if (priority == 'High') {
-      bgColor = const Color(0xFFFEE2E2); // soft red
-      textColor = const Color(0xFFEF4444); // red
-      icon = Icons.error_outline;
-    } else if (priority == 'Medium') {
-      bgColor = const Color(0xFFFEF3C7); // soft amber
-      textColor = const Color(0xFFD97706); // amber
-      icon = Icons.warning_amber_outlined;
-    } else {
-      bgColor = const Color(0xFFF1F5F9); // soft slate
-      textColor = const Color(0xFF64748B); // slate
-      icon = Icons.info_outline;
-    }
-
+  Widget _buildPublisherBadge(String publisher) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: bgColor,
+        color: const Color(0xFFEFF6FF), // soft blue
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBFDBFE).withOpacity(0.5)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: textColor, size: 10),
+          const Icon(Icons.person_outline, color: Color(0xFF2563EB), size: 10),
           const SizedBox(width: 4),
           Text(
-            priority,
+            publisher,
             style: GoogleFonts.inter(
               fontSize: 9,
               fontWeight: FontWeight.bold,
-              color: textColor,
+              color: const Color(0xFF2563EB),
             ),
           ),
         ],
@@ -258,10 +242,28 @@ class _MainScreenState extends State<MainScreen> {
   // Query active lectures matching this student's enrolments (backend API).
   Future<void> fetchActiveSessions() async {
     if (isLoadingSessions) return;
-    setState(() {
-      isLoadingSessions = true;
-      sessionsError = null;
-    });
+    
+    // 1. Try loading cached active sessions from SharedPreferences first
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedSessionsStr = prefs.getString('cached_active_sessions');
+      if (cachedSessionsStr != null && cachedSessionsStr.isNotEmpty) {
+        final List<dynamic> decoded = jsonDecode(cachedSessionsStr);
+        final List<Map<String, dynamic>> mapped = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        setState(() {
+          activeSessions = mapped;
+          sessionsError = null;
+        });
+      }
+    } catch (_) {}
+
+    // Only show loading if we don't have cached sessions yet
+    if (activeSessions.isEmpty) {
+      setState(() {
+        isLoadingSessions = true;
+        sessionsError = null;
+      });
+    }
 
     try {
       final response = await _authedGet('/students/me/active-sessions');
@@ -280,10 +282,22 @@ class _MainScreenState extends State<MainScreen> {
           'alreadyCheckedIn': item['already_checked_in'] ?? false,
         });
       }
-      setState(() => activeSessions = loadedList);
+      
+      setState(() {
+        activeSessions = loadedList;
+        sessionsError = null;
+      });
+
+      // Save to cache
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_active_sessions', jsonEncode(loadedList));
     } catch (e) {
       debugPrint("Error loading active sessions: $e");
-      setState(() => sessionsError = _friendlyError(e));
+      
+      // Only set error and show the Cloud Off block if we have absolutely no cached data
+      if (activeSessions.isEmpty) {
+        setState(() => sessionsError = _friendlyError(e));
+      }
     } finally {
       if (mounted) setState(() => isLoadingSessions = false);
     }
@@ -1195,7 +1209,7 @@ class _MainScreenState extends State<MainScreen> {
                   }
                 }
                 
-                final hasImage = ann['image_base64'] != null && ann['image_base64'].toString().isNotEmpty;
+
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12.0),
@@ -1204,18 +1218,7 @@ class _MainScreenState extends State<MainScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (hasImage)
-                          ClipRRect(
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                            child: AspectRatio(
-                              aspectRatio: 16 / 9,
-                              child: Image.memory(
-                                base64Decode(ann['image_base64'].toString().split(',').last),
-                                width: double.infinity,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          ),
+                        // Banner image hidden inside student dashboard per user request
                         Padding(
                           padding: const EdgeInsets.all(16.0),
                           child: Column(
@@ -1253,7 +1256,7 @@ class _MainScreenState extends State<MainScreen> {
                                               ),
                                             ),
                                             const SizedBox(width: 8),
-                                            _buildPriorityBadge(ann['priority'] as String? ?? 'Low'),
+                                            _buildPublisherBadge(ann['publisher'] as String? ?? 'ADMIN'),
                                           ],
                                         ),
                                         const SizedBox(height: 2),

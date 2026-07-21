@@ -17,11 +17,19 @@ router = APIRouter(prefix="/admin", tags=["Admin Students"])
 def get_students(
     skip: Optional[int] = None,
     limit: Optional[int] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer)
 ):
-    total = db.query(Student).count()
     query = db.query(Student).options(joinedload(Student.user))
+    if search:
+        search_val = f"%{search}%"
+        query = query.outerjoin(User, User.id == Student.user_id).filter(
+            (Student.name.ilike(search_val)) |
+            (Student.student_code.ilike(search_val)) |
+            (User.email.ilike(search_val))
+        )
+    total = query.count()
     if skip is not None:
         query = query.offset(skip)
     if limit is not None:

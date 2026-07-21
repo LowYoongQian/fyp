@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../main.dart';
+import '../../services/server_discovery_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,6 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _themeModeStr = 'light';
   bool _notificationsEnabled = true;
   bool _isLoading = true;
+  bool _isScanning = false;
 
   @override
   void initState() {
@@ -32,6 +34,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       debugPrint("Failed to load settings: $e");
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _runAutoDiscovery() async {
+    setState(() => _isScanning = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final discoveredUrl = await ServerDiscoveryService.discoverServer();
+      final prefs = await SharedPreferences.getInstance();
+      if (discoveredUrl != null) {
+        await prefs.setString('custom_api_url', discoveredUrl);
+        setState(() {
+          ApiConfig.customUrl = discoveredUrl;
+        });
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text("Server discovered successfully at $discoveredUrl!"),
+            backgroundColor: const Color(0xFF10B981),
+          ),
+        );
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text("No server found on the network. Using default configuration."),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Settings discovery action failed: $e");
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text("Discovery error: $e"),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
     }
   }
 
@@ -111,6 +153,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 value: _notificationsEnabled,
                 onChanged: _saveNotificationSettings,
+              ),
+            ]),
+            const SizedBox(height: 24),
+
+            // API Server Configuration Section
+            _buildSectionHeader("API Server Config"),
+            _buildCard([
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.dns,
+                            color: Color(0xFF2563EB),
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "Server Connection Status",
+                                style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13.5),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                "Active URL:\n${ApiConfig.getEffectiveUrl()}",
+                                style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B), height: 1.3),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      "The app automatically scans your WiFi subnet to discover the PC running the FastAPI server. No manual IP setup is needed.",
+                      style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B), height: 1.4),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: _isScanning ? null : _runAutoDiscovery,
+                      icon: _isScanning
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.sync_alt, size: 14),
+                      label: Text(_isScanning ? "Scanning Local Network..." : "Auto-Discover Server"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: const Color(0xFF2563EB).withValues(alpha: 0.6),
+                        disabledForegroundColor: Colors.white.withValues(alpha: 0.8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        textStyle: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ]),
             const SizedBox(height: 24),

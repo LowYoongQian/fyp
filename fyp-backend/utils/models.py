@@ -228,6 +228,7 @@ class Announcement(Base):
     created_at            = Column(DateTime, server_default=func.now())
     is_draft              = Column(Boolean, default=False, nullable=False)
     priority              = Column(String, default="Medium", nullable=False) # 'High', 'Medium', 'Low'
+    publisher             = Column(String, default="ADMIN", nullable=False)
     image_base64          = Column(Text, nullable=True)
     publish_start         = Column(DateTime, nullable=True)
     publish_end           = Column(DateTime, nullable=True)

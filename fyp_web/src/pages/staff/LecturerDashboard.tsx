@@ -133,7 +133,7 @@ export const LecturerDashboard: React.FC = () => {
     try {
       const data = await apiService.getActiveSessions();
       const listToUse = coursesList || courses;
-      const detailed = data.map(s => {
+      const detailed = data.map((s: any) => {
         const c = listToUse.find(course => course.id === s.course_id);
         return {
           ...s,
@@ -252,7 +252,7 @@ export const LecturerDashboard: React.FC = () => {
         title: a.title,
         body: a.content,
         date: new Date(a.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
-        type: a.priority
+        type: a.publisher || 'ADMIN'
       }))
     : [
         {
@@ -426,10 +426,10 @@ export const LecturerDashboard: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-3">
-                   <span className="text-[10px] font-bold text-success-green bg-success-green/10 border border-success-green/20 px-3 py-1.5 rounded-lg uppercase tracking-wider">
-                     Gate Open
-                   </span>
-                 </div>
+                  <span className="text-[10px] font-bold text-success-green bg-success-green/10 border border-success-green/20 px-3 py-1.5 rounded-lg uppercase tracking-wider">
+                    Gate Open
+                  </span>
+                </div>
               </div>
 
               {loadingAttendance ? (

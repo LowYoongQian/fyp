@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
+import 'services/server_discovery_service.dart';
 import 'config/app_config.dart';
 import 'widgets/aurora_background.dart';
 import 'screens/security/login_screen.dart';
@@ -123,6 +124,7 @@ class ApiConfig {
   // EMULATOR_API_BASE_URL -> used on an emulator when the tunnel is OFF.
   static String baseUrl = AppConfig.apiBaseUrl;
   static String emulatorBaseUrl = AppConfig.emulatorApiBaseUrl;
+  static String? customUrl;
 
   // true  = tunnel active: use baseUrl (localhost) on every device.
   // false = no tunnel: rewrite to the emulator URL on Android.
@@ -135,6 +137,13 @@ class ApiConfig {
   static DateTime get now => DateTime.now().add(serverOffset);
 
   static String getEffectiveUrl() {
+    if (customUrl != null && customUrl!.trim().isNotEmpty) {
+      String url = customUrl!.trim();
+      if (url.endsWith('/')) {
+        url = url.substring(0, url.length - 1);
+      }
+      return url;
+    }
     String url = baseUrl.trim();
     if (!useAdbReverse && defaultTargetPlatform == TargetPlatform.android) {
       // No tunnel — fall back to the emulator host alias.
@@ -176,6 +185,7 @@ class _AppRootState extends State<AppRoot> {
   List<Map<String, dynamic>> attendanceHistory = [];
   List<Map<String, dynamic>> studentSchedule = [];
   List<Map<String, dynamic>> studentAnnouncements = [];
+  List<Map<String, dynamic>> publicAnnouncements = [];
 
   // Staff State
   bool isStaffLoggedIn = false;
@@ -187,13 +197,59 @@ class _AppRootState extends State<AppRoot> {
   @override
   void initState() {
     super.initState();
-    syncClock();
+    _initApp();
+  }
+
+  Future<void> _initApp() async {
+    setState(() => isSyncing = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedCustomUrl = prefs.getString('custom_api_url');
+      
+      // 1. Try saved/cached URL first if exists
+      if (savedCustomUrl != null && savedCustomUrl.isNotEmpty) {
+        final isAlive = await ServerDiscoveryService.checkUrl(savedCustomUrl);
+        if (isAlive) {
+          ApiConfig.customUrl = savedCustomUrl;
+          debugPrint("Using working cached API Server: $savedCustomUrl");
+        } else {
+          // If cached URL is dead, run discovery
+          debugPrint("Cached API Server is unreachable. Initiating auto-discovery...");
+          final discovered = await ServerDiscoveryService.discoverServer();
+          if (discovered != null) {
+            ApiConfig.customUrl = discovered;
+            await prefs.setString('custom_api_url', discovered);
+          } else {
+            ApiConfig.customUrl = null;
+          }
+        }
+      } else {
+        // 2. No cached URL, perform auto-discovery
+        debugPrint("No cached server address. Initiating auto-discovery...");
+        final discovered = await ServerDiscoveryService.discoverServer();
+        if (discovered != null) {
+          ApiConfig.customUrl = discovered;
+          await prefs.setString('custom_api_url', discovered);
+        } else {
+          ApiConfig.customUrl = null;
+        }
+      }
+    } catch (e) {
+      debugPrint("Server auto-discovery/init failed: $e");
+    }
+
+    try {
+      await syncClock();
+    } catch (_) {}
+    try {
+      await fetchPublicAnnouncements();
+    } catch (_) {}
+
+    setState(() => isSyncing = false);
   }
 
   Future<void> syncClock() async {
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _performClockSync(retries: 5);
-    });
+    await _performClockSync(retries: 2);
   }
 
   Future<void> _performClockSync({int retries = 5}) async {
@@ -348,16 +404,123 @@ class _AppRootState extends State<AppRoot> {
     }
   }
 
+  Future<void> fetchPublicAnnouncements() async {
+    try {
+      final effectiveUrl = ApiConfig.getEffectiveUrl();
+      final response = await http.get(
+        Uri.parse('$effectiveUrl/public/announcements'),
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 200) {
+        final List<dynamic> raw = jsonDecode(response.body) as List<dynamic>;
+        final List<Map<String, dynamic>> loaded = [];
+        for (final item in raw) {
+          loaded.add({
+            'id': item['id'],
+            'title': item['title'],
+            'content': item['content'],
+            'faculty': item['faculty'],
+            'department': item['department'],
+            'created_at': item['created_at'],
+            'priority': item['priority'],
+            'publisher': item['publisher'],
+            'image_base64': item['image_base64'],
+          });
+        }
+        if (mounted) {
+          setState(() {
+            publicAnnouncements = loaded;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Failed to fetch public announcements: $e");
+    }
+  }
+
   // Load attendance history + today's check-in status + course timetable from backend.
   Future<void> syncData(BuildContext context) async {
-    setState(() => isSyncing = true);
+    final prefs = await SharedPreferences.getInstance();
+    
+    // 1. Try loading cached data first for instant user rendering
+    final cachedHistory = await LocalCacheService.loadAttendanceCache();
+    final cachedScheduleStr = prefs.getString('cached_student_schedule');
+    final cachedAnnouncementsStr = prefs.getString('cached_student_announcements');
+    
+    bool hasCachedData = false;
+    
+    if (cachedHistory.isNotEmpty || cachedScheduleStr != null || cachedAnnouncementsStr != null) {
+      hasCachedData = true;
+      final months = const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      
+      // Load cached history
+      final List<Map<String, dynamic>> mappedHistory = [];
+      bool checkedIn = false;
+      for (final r in cachedHistory) {
+        final markedRaw = r['marked_at'] as String?;
+        final markedAt = markedRaw != null ? DateTime.tryParse(markedRaw)?.toLocal() : null;
+        final status = (r['status'] ?? 'present') as String;
+        String dateLabel = 'Unknown';
+        if (markedAt != null) {
+          final isToday = markedAt.year == ApiConfig.now.year &&
+              markedAt.month == ApiConfig.now.month &&
+              markedAt.day == ApiConfig.now.day;
+          final timeStr = "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
+          dateLabel = isToday
+              ? 'Today, $timeStr'
+              : "${months[markedAt.month - 1]} ${markedAt.day}, ${markedAt.year}, $timeStr";
+          if (isToday) checkedIn = true;
+        }
+        mappedHistory.add({
+          'courseCode': r['course_code'] ?? 'Unknown',
+          'courseName': r['course_name'] ?? 'Unknown',
+          'group': r['class_group'] ?? '-',
+          'date': dateLabel,
+          'status': (status == 'present') ? 'Verified' : 'Absent',
+          'wifiVerified': r['network_verified'] ?? false,
+          'faceVerified': true,
+        });
+      }
+
+      // Load cached schedule/timetable
+      List<Map<String, dynamic>> mappedSchedule = [];
+      if (cachedScheduleStr != null) {
+        try {
+          final List<dynamic> decoded = jsonDecode(cachedScheduleStr);
+          mappedSchedule = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        } catch (_) {}
+      }
+
+      // Load cached announcements
+      List<Map<String, dynamic>> mappedAnnouncements = [];
+      if (cachedAnnouncementsStr != null) {
+        try {
+          final List<dynamic> decoded = jsonDecode(cachedAnnouncementsStr);
+          mappedAnnouncements = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        } catch (_) {}
+      }
+
+      setState(() {
+        attendanceHistory = mappedHistory;
+        isCheckedInToday = checkedIn;
+        studentSchedule = mappedSchedule;
+        studentAnnouncements = mappedAnnouncements;
+      });
+    }
+
+    // Only show full screen overlay if there is absolutely no cached data
+    if (!hasCachedData) {
+      setState(() => isSyncing = true);
+    }
+
     try {
       // Sync clock with backend server time
       try {
         final serverTimeRes = await http.get(
           Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/server-time'),
           headers: {'Content-Type': 'application/json'},
-        ).timeout(const Duration(seconds: 5));
+        ).timeout(const Duration(seconds: 4));
         if (serverTimeRes.statusCode == 200) {
           final serverTimeStr = jsonDecode(serverTimeRes.body)['server_time'];
           final serverTime = DateTime.parse(serverTimeStr).toLocal();
@@ -489,44 +652,21 @@ class _AppRootState extends State<AppRoot> {
         isDatabaseOffline = false;
       });
 
-      // Persist to local cache so the UI can render offline on next launch.
+      // Persist to local cache
       final rawRecords = rows.cast<Map<String, dynamic>>();
       await LocalCacheService.saveAttendanceCache(rawRecords);
+      await prefs.setString('cached_student_schedule', jsonEncode(loadedSchedule));
+      await prefs.setString('cached_student_announcements', jsonEncode(loadedAnnouncements));
     } catch (e) {
       debugPrint("Attendance sync failed: $e");
-      // Fall back to locally cached records when the server is unreachable.
-      final cached = await LocalCacheService.loadAttendanceCache();
-      if (cached.isNotEmpty) {
-        final months = const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        final fallback = cached.map((r) {
-          final markedRaw = r['marked_at'] as String?;
-          final markedAt = markedRaw != null ? DateTime.tryParse(markedRaw)?.toLocal() : null;
-          String dateLabel = 'Unknown';
-          if (markedAt != null) {
-            final timeStr = "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
-            dateLabel = "${months[markedAt.month - 1]} ${markedAt.day}, ${markedAt.year}, $timeStr";
-          }
-          return {
-            'courseCode': r['course_code'] ?? 'Unknown',
-            'courseName': r['course_name'] ?? 'Unknown',
-            'group': r['class_group'] ?? '-',
-            'date': dateLabel,
-            'status': (r['status'] == 'present') ? 'Verified' : 'Absent',
-            'wifiVerified': r['network_verified'] ?? false,
-            'faceVerified': true,
-          };
-        }).toList();
-        setState(() {
-          attendanceHistory = fallback;
-          isDatabaseOffline = true;
-        });
-      } else {
-        setState(() => isDatabaseOffline = true);
-      }
-      if (mounted) {
+      
+      setState(() => isDatabaseOffline = true);
+
+      // If we don't have any cached data at all, show the offline snackbar alert
+      if (!hasCachedData && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_friendlyError(e)),
+            content: Text("Working Offline: ${_friendlyError(e)}"),
             backgroundColor: const Color(0xFFDC2626),
           ),
         );
@@ -809,6 +949,13 @@ class _AppRootState extends State<AppRoot> {
       attendanceHistory = [];
       studentAnnouncements = [];
     });
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('cached_student_schedule');
+      prefs.remove('cached_student_announcements');
+      prefs.remove('cached_active_sessions');
+    }).catchError((e) {
+      debugPrint("Failed to clear logout cache: $e");
+    });
   }
 
   void handleStaffLogout() {
@@ -840,6 +987,8 @@ class _AppRootState extends State<AppRoot> {
     switch (selectedTab) {
       case 0: // Home Landing
         bodyContent = HomeScreen(
+          announcements: publicAnnouncements,
+          onRefresh: fetchPublicAnnouncements,
           onSettingsPressed: () {
             Navigator.push(
               context,
@@ -899,6 +1048,8 @@ class _AppRootState extends State<AppRoot> {
         break;
       default:
         bodyContent = HomeScreen(
+          announcements: publicAnnouncements,
+          onRefresh: fetchPublicAnnouncements,
           onSettingsPressed: () {
             Navigator.push(
               context,

@@ -33,6 +33,7 @@ def create_announcement(body: AnnouncementCreate, db: Session = Depends(get_db),
         department=body.department,
         is_draft=body.is_draft,
         priority=body.priority,
+        publisher=body.publisher or "ADMIN",
         image_base64=body.image_base64,
         publish_start=body.publish_start,
         publish_end=body.publish_end,
@@ -56,6 +57,7 @@ def update_announcement(announcement_id: int, body: AnnouncementCreate, db: Sess
     announcement.department = body.department
     announcement.is_draft = body.is_draft
     announcement.priority = body.priority
+    announcement.publisher = body.publisher or "ADMIN"
     announcement.image_base64 = body.image_base64
     announcement.publish_start = body.publish_start
     announcement.publish_end = body.publish_end

@@ -85,6 +85,19 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
             detail="Invalid email or password"
         )
 
+    # Validate portal role matching
+    if body.portal:
+        if body.portal == "student" and user.role != "student":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Students only portal"
+            )
+        elif body.portal in ("staff_admin", "staff") and user.role not in ("lecturer", "admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Staff and Admin only portal"
+            )
+
     # Load the matching profile so the app gets everything in one round trip.
     if user.role == "student" and student is None:
         student = db.query(Student).filter(Student.user_id == user.id).first()

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap } from 'lucide-react';
+import { swalError } from '../../utils/swal';
 
 export const Login: React.FC = () => {
   const { login } = useAuth();
@@ -45,14 +46,12 @@ export const Login: React.FC = () => {
     setSubmitting(true);
 
     try {
-      await login(email, password);
+      await login(email, password, portalMode === 'student' ? 'student' : 'staff_admin');
     } catch (err: any) {
       console.error(err);
-      if (err.response && err.response.data && err.response.data.detail) {
-        setError(err.response.data.detail);
-      } else {
-        setError(err.message || 'An error occurred. Make sure the backend server (FastAPI) is running at port 8000.');
-      }
+      const detail = err.response?.data?.detail || err.message || 'An error occurred. Make sure the backend server (FastAPI) is running at port 8000.';
+      setError(detail);
+      await swalError('Login Failed', detail);
     } finally {
       setSubmitting(false);
     }
