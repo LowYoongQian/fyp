@@ -200,6 +200,7 @@ else:
         "http://127.0.0.1:5175",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
+        "https://smart-web.up.railway.app",
     ]
 
 # Regex matches localhost, 127.0.0.1, and local private network IPs (192.168.x.x, 10.x.x.x, 172.16.x.x-172.31.x.x) on any port
