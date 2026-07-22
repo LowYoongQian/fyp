@@ -137,6 +137,16 @@ class ApiConfig {
   static DateTime get now => DateTime.now().add(serverOffset);
 
   static String getEffectiveUrl() {
+    if (kIsWeb) {
+      if (customUrl != null && customUrl!.trim().isNotEmpty && customUrl!.trim().startsWith('https://')) {
+        String url = customUrl!.trim();
+        if (url.endsWith('/')) url = url.substring(0, url.length - 1);
+        return url;
+      }
+      String url = baseUrl.trim();
+      if (url.endsWith('/')) url = url.substring(0, url.length - 1);
+      return url;
+    }
     if (customUrl != null && customUrl!.trim().isNotEmpty) {
       String url = customUrl!.trim();
       if (url.endsWith('/')) {
@@ -202,19 +212,31 @@ class _AppRootState extends State<AppRoot> {
 
   Future<void> _initApp() async {
     setState(() => isSyncing = true);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedCustomUrl = prefs.getString('custom_api_url');
-      
-      // 1. Try saved/cached URL first if exists
-      if (savedCustomUrl != null && savedCustomUrl.isNotEmpty) {
-        final isAlive = await ServerDiscoveryService.checkUrl(savedCustomUrl);
-        if (isAlive) {
-          ApiConfig.customUrl = savedCustomUrl;
-          debugPrint("Using working cached API Server: $savedCustomUrl");
+    if (!kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final savedCustomUrl = prefs.getString('custom_api_url');
+        
+        // 1. Try saved/cached URL first if exists
+        if (savedCustomUrl != null && savedCustomUrl.isNotEmpty) {
+          final isAlive = await ServerDiscoveryService.checkUrl(savedCustomUrl);
+          if (isAlive) {
+            ApiConfig.customUrl = savedCustomUrl;
+            debugPrint("Using working cached API Server: $savedCustomUrl");
+          } else {
+            // If cached URL is dead, run discovery
+            debugPrint("Cached API Server is unreachable. Initiating auto-discovery...");
+            final discovered = await ServerDiscoveryService.discoverServer();
+            if (discovered != null) {
+              ApiConfig.customUrl = discovered;
+              await prefs.setString('custom_api_url', discovered);
+            } else {
+              ApiConfig.customUrl = null;
+            }
+          }
         } else {
-          // If cached URL is dead, run discovery
-          debugPrint("Cached API Server is unreachable. Initiating auto-discovery...");
+          // 2. No cached URL, perform auto-discovery
+          debugPrint("No cached server address. Initiating auto-discovery...");
           final discovered = await ServerDiscoveryService.discoverServer();
           if (discovered != null) {
             ApiConfig.customUrl = discovered;
@@ -223,19 +245,9 @@ class _AppRootState extends State<AppRoot> {
             ApiConfig.customUrl = null;
           }
         }
-      } else {
-        // 2. No cached URL, perform auto-discovery
-        debugPrint("No cached server address. Initiating auto-discovery...");
-        final discovered = await ServerDiscoveryService.discoverServer();
-        if (discovered != null) {
-          ApiConfig.customUrl = discovered;
-          await prefs.setString('custom_api_url', discovered);
-        } else {
-          ApiConfig.customUrl = null;
-        }
+      } catch (e) {
+        debugPrint("Server auto-discovery/init failed: $e");
       }
-    } catch (e) {
-      debugPrint("Server auto-discovery/init failed: $e");
     }
 
     try {
@@ -271,7 +283,7 @@ class _AppRootState extends State<AppRoot> {
       debugPrint("Clock sync failed ($retries retries left): $e");
       
       // Fallback from localhost (adb reverse) to emulator host alias (10.0.2.2) if on Android and initial connection fails.
-      if (ApiConfig.useAdbReverse && defaultTargetPlatform == TargetPlatform.android) {
+      if (!kIsWeb && ApiConfig.useAdbReverse && defaultTargetPlatform == TargetPlatform.android) {
         debugPrint("Android connection failed, switching adb-reverse tunnel off to use 10.0.2.2.");
         ApiConfig.useAdbReverse = false;
       }

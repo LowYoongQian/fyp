@@ -13,13 +13,13 @@ class AppConfig {
   // Backend API base URL (FastAPI server).
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'https://fyps.up.railway.app',
   );
 
   // Backend API base URL used when running on an Android emulator without an
   // adb-reverse tunnel. The emulator reaches the host PC via 10.0.2.2.
   static const String emulatorApiBaseUrl = String.fromEnvironment(
     'EMULATOR_API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
+    defaultValue: 'https://fyps.up.railway.app',
   );
 }
