@@ -29701,7 +29701,7 @@ $S:2}
 A.azZ.prototype={
 $1(a){var s=A.dD().b
 s=s==null?null:s.canvasKitBaseUrl
-return(s==null?"https://www.gstatic.com/flutter-canvaskit/e4b8dca3f1b4ede4c30371002441c88c12187ed6/":s)+a},
+return(s==null?"canvaskit/":s)+a},
 $S:121}
 A.Ob.prototype={
 gA(a){var s=this.a
