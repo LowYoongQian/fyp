@@ -1,25 +1,25 @@
 // -----------------------------------------------------------------
-// APP CONFIG: all sensitive / environment-specific values.
-//
-// Values are injected at build/run time via --dart-define-from-file so
-// secrets never live in source control. Run the app with:
-//
-//   flutter run --dart-define-from-file=env.json
-//   flutter build apk --dart-define-from-file=env.json
-//
-// See env.json.example for the expected keys. env.json is gitignored.
+// APP CONFIG: Centralized environment & platform configuration.
 // -----------------------------------------------------------------
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
-  // Backend API base URL (FastAPI server).
-  static const String apiBaseUrl = String.fromEnvironment(
+  // Production Railway Backend URL (HTTPS)
+  static const String productionApiUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'https://fyps.up.railway.app',
   );
 
-  // Backend API base URL used when running on an Android emulator without an
-  // adb-reverse tunnel. The emulator reaches the host PC via 10.0.2.2.
-  static const String emulatorApiBaseUrl = String.fromEnvironment(
+  // Android Emulator fallback URL
+  static const String emulatorApiUrl = String.fromEnvironment(
     'EMULATOR_API_BASE_URL',
-    defaultValue: 'https://fyps.up.railway.app',
+    defaultValue: 'http://10.0.2.2:8000',
   );
+
+  // Local Desktop debugging URL
+  static const String desktopApiUrl = 'http://localhost:8000';
+
+  // Backward compatibility getters
+  static String get apiBaseUrl => kIsWeb ? productionApiUrl : productionApiUrl;
+  static String get emulatorApiBaseUrl => emulatorApiUrl;
 }

@@ -137,32 +137,30 @@ class ApiConfig {
   static DateTime get now => DateTime.now().add(serverOffset);
 
   static String getEffectiveUrl() {
+    // 1. Flutter Web -> ALWAYS use Production Railway HTTPS Backend
     if (kIsWeb) {
       if (customUrl != null && customUrl!.trim().isNotEmpty && customUrl!.trim().startsWith('https://')) {
         String url = customUrl!.trim();
         if (url.endsWith('/')) url = url.substring(0, url.length - 1);
         return url;
       }
-      String url = baseUrl.trim();
+      return AppConfig.productionApiUrl;
+    }
+
+    // 2. Custom URL explicitly set via settings or discovery
+    if (customUrl != null && customUrl!.trim().isNotEmpty) {
+      String url = customUrl!.trim();
       if (url.endsWith('/')) url = url.substring(0, url.length - 1);
       return url;
     }
-    if (customUrl != null && customUrl!.trim().isNotEmpty) {
-      String url = customUrl!.trim();
-      if (url.endsWith('/')) {
-        url = url.substring(0, url.length - 1);
-      }
-      return url;
-    }
-    String url = baseUrl.trim();
+
+    // 3. Android Emulator without adb-reverse tunnel
     if (!useAdbReverse && defaultTargetPlatform == TargetPlatform.android) {
-      // No tunnel — fall back to the emulator host alias.
-      url = emulatorBaseUrl.trim();
+      return AppConfig.emulatorApiUrl;
     }
-    if (url.endsWith('/')) {
-      url = url.substring(0, url.length - 1);
-    }
-    return url;
+
+    // 4. Default Production / Desktop
+    return AppConfig.productionApiUrl;
   }
 }
 
