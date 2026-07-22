@@ -21,6 +21,7 @@ class ServerDiscoveryService {
   /// and probes all hosts in the local WiFi subnet on the configured port.
   /// Returns the first URL that responds successfully to `/auth/server-time`.
   static Future<String?> discoverServer() async {
+    if (kIsWeb) return null;
     final int port = _configuredPort;
     final List<String> primaryCandidates = [
       'http://localhost:$port',
@@ -87,6 +88,7 @@ class ServerDiscoveryService {
 
   /// Lists all unique private IPv4 subnets on this device using standard socket APIs (no permissions needed).
   static Future<List<String>> getLocalSubnets() async {
+    if (kIsWeb) return [];
     final List<String> subnets = [];
     try {
       final interfaces = await NetworkInterface.list(

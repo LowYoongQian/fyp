@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
@@ -58,6 +59,7 @@ class LocalCacheService {
   // ── Attendance history cache ──────────────────────────────────────────────
 
   static Future<void> saveAttendanceCache(List<Map<String, dynamic>> records) async {
+    if (kIsWeb) return;
     final db = await _open();
     await db.delete('attendance_cache');
     for (final r in records) {
@@ -74,6 +76,7 @@ class LocalCacheService {
   }
 
   static Future<List<Map<String, dynamic>>> loadAttendanceCache() async {
+    if (kIsWeb) return [];
     final db = await _open();
     final rows = await db.query('attendance_cache', orderBy: 'marked_at DESC');
     return rows.map((r) => {
@@ -90,6 +93,7 @@ class LocalCacheService {
   // ── Pending check-in queue ────────────────────────────────────────────────
 
   static Future<void> enqueueCheckIn(int sessionId, Map<String, dynamic> payload) async {
+    if (kIsWeb) return;
     final db = await _open();
     await db.insert('pending_checkins', {
       'session_id':   sessionId,
@@ -105,6 +109,7 @@ class LocalCacheService {
   static Future<int> syncPendingCheckIns(
     Future<bool> Function(int sessionId, Map<String, dynamic> payload) submitFn,
   ) async {
+    if (kIsWeb) return 0;
     final db = await _open();
     final pending = await db.query('pending_checkins', orderBy: 'queued_at ASC');
     int synced = 0;
@@ -121,6 +126,7 @@ class LocalCacheService {
   }
 
   static Future<int> pendingCount() async {
+    if (kIsWeb) return 0;
     final db = await _open();
     final result = await db.rawQuery('SELECT COUNT(*) as c FROM pending_checkins');
     return (result.first['c'] as int?) ?? 0;
