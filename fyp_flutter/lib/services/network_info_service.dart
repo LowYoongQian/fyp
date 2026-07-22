@@ -35,13 +35,12 @@ class NetworkLocationInfo {
 }
 
 class NetworkInfoService {
-  static final NetworkInfo _info = NetworkInfo();
-
   /// Collects WiFi network details. On Android 10+ reading SSID/BSSID requires
   /// location permission AND location services enabled, so we request it first.
   /// Every step is time-boxed so a stalled platform call can never freeze the
   /// attendance check-in flow.
   static Future<NetworkLocationInfo> collect() async {
+    if (kIsWeb) return NetworkLocationInfo();
     try {
       return await _collect().timeout(
         const Duration(seconds: 8),
@@ -57,17 +56,17 @@ class NetworkInfoService {
   }
 
   static Future<NetworkLocationInfo> _collect() async {
+    if (kIsWeb) return NetworkLocationInfo();
+    final info = NetworkInfo();
     // SSID/BSSID need location permission on modern Android.
-    if (!kIsWeb) {
-      try {
-        final status = await Permission.locationWhenInUse.status;
-        if (!status.isGranted) {
-          await Permission.locationWhenInUse
-              .request()
-              .timeout(const Duration(seconds: 4), onTimeout: () => status);
-        }
-      } catch (_) {}
-    }
+    try {
+      final status = await Permission.locationWhenInUse.status;
+      if (!status.isGranted) {
+        await Permission.locationWhenInUse
+            .request()
+            .timeout(const Duration(seconds: 4), onTimeout: () => status);
+      }
+    } catch (_) {}
 
     String? ssid;
     String? bssid;
@@ -82,10 +81,10 @@ class NetworkInfoService {
       }
     }
 
-    ssid = await safe(_info.getWifiName);
-    bssid = await safe(_info.getWifiBSSID);
-    gateway = await safe(_info.getWifiGatewayIP);
-    localIp = await safe(_info.getWifiIP);
+    ssid = await safe(info.getWifiName);
+    bssid = await safe(info.getWifiBSSID);
+    gateway = await safe(info.getWifiGatewayIP);
+    localIp = await safe(info.getWifiIP);
 
     return NetworkLocationInfo(
       ssid: ssid,
