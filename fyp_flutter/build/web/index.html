@@ -43,6 +43,16 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    // Clear legacy Service Worker caches so browsers immediately fetch fresh main.dart.js assets
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (let registration of registrations) {
+          registration.unregister();
+        }
+      });
+    }
+  </script>
+  <script src="flutter_bootstrap.js?v=3" async></script>
 </body>
 </html>
