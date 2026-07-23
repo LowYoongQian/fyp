@@ -200,17 +200,19 @@ else:
         "http://127.0.0.1:5175",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
+        "https://flutter.up.railway.app",
+        "https://smart-web.up.railway.app",
         "https://fyps.up.railway.app",
     ]
 
-# Regex matches localhost, 127.0.0.1, and local private network IPs (192.168.x.x, 10.x.x.x, 172.16.x.x-172.31.x.x) on any port
-local_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?"
+# Regex matches localhost, 127.0.0.1, local private IPs, and all Railway subdomains (*.up.railway.app)
+origin_regex = r"https?://((localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?|.*\.up\.railway\.app)"
 
 app.add_middleware(ETagMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_origin_regex=local_origin_regex,
+    allow_origin_regex=origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
