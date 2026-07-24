@@ -533,7 +533,7 @@ export const AttendanceManager: React.FC = () => {
                       <td className="py-3.5 px-4 text-right">
                         <button
                           onClick={() => openAttendanceModal(session)}
-                          className="uipro-button uipro-button-primary py-1.5 px-3.5 text-[10px] cursor-pointer"
+                          className="uipro-button uipro-button-primary bg-[#2563eb] text-white hover:bg-[#1d4ed8] shadow-md shadow-blue-500/20 py-1.5 px-3.5 text-[10px] font-bold rounded-xl border-0 cursor-pointer"
                         >
                           Audit Attendance
                         </button>

@@ -599,7 +599,17 @@ export const apiService = {
   },
 
   // Campus Network whitelist + security settings
-  adminDetectCurrentConnection: async (): Promise<{ client_ip: string; cidr: string; label: string; user_agent: string; protocol: string }> => {
+  adminDetectCurrentConnection: async (): Promise<{
+    client_ip: string;
+    ipv6_address?: string;
+    cidr: string;
+    label: string;
+    ssid?: string;
+    bssid?: string;
+    location?: string;
+    user_agent: string;
+    protocol: string;
+  }> => {
     const response = await api.get('/admin/detect-connection');
     return response.data;
   },
@@ -649,5 +659,33 @@ export const apiService = {
   },
   lecturerGetAnnouncements: async (): Promise<Announcement[]> => {
     return cachedGet('/lecturers/me/announcements');
+  },
+
+  // ─── User Profile & Account Settings APIs ──────────────────────────
+  getUserProfile: async () => {
+    return cachedGet('/auth/me');
+  },
+  changePassword: async (data: { current_password: string; new_password: string }) => {
+    const response = await api.post('/auth/change-password', data);
+    return response.data;
+  },
+  updateUserSettings: async (settings: Record<string, any>) => {
+    const response = await api.put('/auth/settings', settings);
+    return response.data;
+  },
+  updateUserAvatar: async (avatarUrl: string) => {
+    const response = await api.post('/auth/avatar', { avatar_url: avatarUrl });
+    return response.data;
+  },
+  updateAdminProfile: async (data: { name: string; email: string; code: string }) => {
+    const response = await api.put('/auth/profile', data);
+    return response.data;
+  },
+  getUserActiveSessions: async () => {
+    return cachedGet('/auth/active-sessions');
+  },
+  logoutSession: async (sessionId: string) => {
+    const response = await api.post(`/auth/logout-session?session_id=${sessionId}`);
+    return response.data;
   },
 };

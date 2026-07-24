@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { UserProfileModal } from './UserProfileModal';
+import { UserSettingsModal } from './UserSettingsModal';
 import {
   LayoutDashboard,
   BarChart3,
@@ -20,10 +22,8 @@ import {
   BookOpen,
   Home,
   Settings,
-  ShieldCheck,
   ChevronsUpDown,
-  Check,
-  Mail
+  Check
 } from 'lucide-react';
 import { swalSuccess } from '../utils/swal';
 
@@ -42,9 +42,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   
-  // Profile slide-up popover menu & logout transition state
+  // Profile slide-up popover menu & modal states
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
@@ -103,7 +104,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   const portalName = user?.role === 'admin' ? 'Admin Portal' : user?.role === 'student' ? 'Student Portal' : 'Staff Portal';
 
   return (
-    <div className="h-screen flex bg-slate-50 overflow-hidden relative">
+    <div
+      className="h-screen flex overflow-hidden relative transition-colors duration-200"
+      style={{ backgroundColor: 'var(--theme-bg)', color: 'var(--theme-text-primary)' }}
+    >
       {/* Animated Background Blobs */}
       <div className="aurora-bg">
         <div className="aurora-blob aurora-blob-1" />
@@ -121,7 +125,8 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
       {/* Sidebar Navigation */}
       <aside
-        className={`fixed lg:sticky top-0 inset-y-0 left-0 h-screen z-50 flex flex-col bg-white/95 border-r border-slate-200/50 backdrop-blur-md transition-all duration-300 shrink-0 ${
+        style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+        className={`fixed lg:sticky top-0 inset-y-0 left-0 h-screen z-50 flex flex-col border-r backdrop-blur-md transition-all duration-300 shrink-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         } ${collapsed ? 'w-20' : 'w-72'}`}
       >
@@ -192,10 +197,16 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         </nav>
 
         {/* Sidebar Footer / User Profile Card & Slide-up Menu */}
-        <div ref={popoverRef} className="p-4 border-t border-slate-100 bg-white/40 transition-all shrink-0 relative">
+        <div
+          ref={popoverRef}
+          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+          className="p-4 border-t transition-all shrink-0 relative"
+        >
           {/* Slide-up Popover Menu */}
           {isProfileMenuOpen && (
-            <div className={`absolute bottom-full mb-3 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-2xl z-50 p-2 text-xs font-sans animate-in slide-in-from-bottom-3 fade-in duration-200 ${
+            <div
+              style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+              className={`absolute bottom-full mb-3 backdrop-blur-md border rounded-2xl shadow-2xl z-50 p-2 text-xs font-sans animate-in slide-in-from-bottom-3 fade-in duration-200 ${
               collapsed ? 'left-3 w-60' : 'left-4 right-4'
             }`}>
               {/* Menu items */}
@@ -211,7 +222,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => { setIsProfileMenuOpen(false); setIsProfileModalOpen(true); }}
+                  onClick={() => { setIsProfileMenuOpen(false); setIsSettingsModalOpen(true); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors font-medium cursor-pointer"
                 >
                   <Settings className="h-4 w-4 text-slate-400" />
@@ -241,7 +252,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
             </div>
           )}
 
-          {/* Profile Card Button (Click to open slide-up menu) */}
+          {/* Profile Card Button */}
           {collapsed ? (
             <div className="flex flex-col items-center gap-3">
               <button
@@ -258,12 +269,11 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white" />
               </button>
 
-              {/* Collapsed Sign Out Button (Fixed Crisp Icon) */}
               <button
                 type="button"
                 onClick={handleLogout}
                 title="Sign Out"
-                className="w-10 h-10 rounded-xl bg-white hover:bg-danger-red-light border border-slate-200 hover:border-danger-red/30 text-slate-500 hover:text-danger-red flex items-center justify-center transition-all cursor-pointer shadow-xs"
+                className="w-10 h-10 rounded-xl bg-white hover:bg-danger-red-light border border-slate-200 text-slate-500 hover:text-danger-red flex items-center justify-center transition-all cursor-pointer shadow-xs"
               >
                 <LogOut className="h-4 w-4 shrink-0" />
               </button>
@@ -294,7 +304,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 <ChevronsUpDown className={`h-4 w-4 text-slate-400 shrink-0 transition-transform ${isProfileMenuOpen ? 'rotate-180 text-brand-blue' : ''}`} />
               </button>
 
-              {/* Expanded Sign Out Button */}
               <button
                 type="button"
                 onClick={handleLogout}
@@ -310,8 +319,11 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
       {/* Main Content Pane */}
       <div className="flex-grow flex flex-col min-w-0 h-screen overflow-y-auto z-10">
-        {/* Top Header with Clickable Breadcrumb Navigation */}
-        <header className="flex h-20 shrink-0 items-center justify-between px-6 border-b border-slate-100 bg-white/50 backdrop-blur-md sticky top-0 z-30">
+        {/* Top Header */}
+        <header
+          style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
+          className="flex h-20 shrink-0 items-center justify-between px-6 border-b backdrop-blur-md sticky top-0 z-30"
+        >
           <div className="flex items-center gap-4">
             <button
               type="button"
@@ -321,7 +333,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               <Menu className="h-4.5 w-4.5" />
             </button>
             
-            {/* Clickable Breadcrumb Navigation: Home Icon -> Current Page */}
             <div className="flex items-center gap-2 text-xs font-sans text-slate-500">
               <button
                 type="button"
@@ -352,69 +363,18 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         </main>
       </div>
 
-      {/* Account Settings & Profile Modal */}
-      {isProfileModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm" onClick={() => setIsProfileModalOpen(false)} />
-          
-          <div className="max-w-md w-full uipro-card bg-white relative z-10 space-y-5 shadow-2xl animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-brand-blue-light rounded-xl text-brand-blue">
-                  <User className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <h3 className="font-display font-bold text-sm text-slate-900">User Account Profile</h3>
-                  <p className="text-[10px] text-slate-400">Account settings and verification detail</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsProfileModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-              >
-                <X className="h-4.5 w-4.5" />
-              </button>
-            </div>
+      {/* Account Settings & Profile Modals */}
+      <UserProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        initialEmail={user?.email}
+        initialRole={user?.role}
+      />
 
-            {/* Profile Info Cards */}
-            <div className="space-y-3 font-sans text-xs">
-              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Account Role</span>
-                  <span className="uipro-badge uipro-badge-neutral font-bold capitalize">{user?.role}</span>
-                </div>
-                <div className="flex items-center gap-2 pt-1 text-slate-700">
-                  <Mail className="h-4 w-4 text-slate-400 shrink-0" />
-                  <span className="font-medium truncate">{user?.email}</span>
-                </div>
-              </div>
-
-              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Security & Status</span>
-                  <span className="uipro-badge uipro-badge-success flex items-center gap-1">
-                    <ShieldCheck className="h-3 w-3" /> Active
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Your account has active single sign-on access to the Smart Attendance System.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setIsProfileModalOpen(false)}
-                className="uipro-button uipro-button-secondary py-2 px-4 text-xs cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <UserSettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+      />
 
       {/* Full-Screen Logout Shimmer Overlay */}
       {isLoggingOut && (

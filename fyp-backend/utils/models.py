@@ -9,14 +9,27 @@ Base = declarative_base()
 # User accounts table
 class User(Base):
     __tablename__ = "users"
-    id            = Column(Integer, primary_key=True, index=True)
-    email         = Column(String, unique=True, nullable=False, index=True)
-    password_hash = Column(String, nullable=False)
-    role          = Column(String, nullable=False)
-    created_at    = Column(DateTime, server_default=func.now())
+    id                    = Column(Integer, primary_key=True, index=True)
+    email                 = Column(String, unique=True, nullable=False, index=True)
+    password_hash         = Column(String, nullable=False)
+    role                  = Column(String, nullable=False)
+    profile_name          = Column(String, nullable=True)
+    profile_code          = Column(String, nullable=True)
+    avatar_url            = Column(String, nullable=True)
+    status                = Column(String, default="Active", nullable=False)
+    last_login_at         = Column(DateTime, nullable=True)
+    two_factor_enabled    = Column(Boolean, default=False, nullable=False)
+    theme_preference      = Column(String, default="light", nullable=False)
+    font_size_preference  = Column(String, default="medium", nullable=False)
+    language_preference   = Column(String, default="en", nullable=False)
+    notifications_enabled = Column(Boolean, default=True, nullable=False)
+    email_notifications   = Column(Boolean, default=True, nullable=False)
+    push_notifications    = Column(Boolean, default=True, nullable=False)
+    in_app_notifications  = Column(Boolean, default=True, nullable=False)
+    created_at            = Column(DateTime, server_default=func.now())
     
-    student       = relationship("Student", back_populates="user", uselist=False)
-    lecturer      = relationship("Lecturer", back_populates="user", uselist=False)
+    student               = relationship("Student", back_populates="user", uselist=False)
+    lecturer              = relationship("Lecturer", back_populates="user", uselist=False)
 
 # Programmes table
 class Programme(Base):

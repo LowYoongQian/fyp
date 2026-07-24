@@ -6,14 +6,18 @@ import {
   ShieldAlert, Wifi, Plus, Trash2, Loader2, Network,
   ToggleLeft, ToggleRight, Save, Globe, X, Router,
   CheckSquare, Square, ShieldCheck, Search, RefreshCw,
-  MapPin, Radio, Lock, Check, Sparkles, Laptop
+  MapPin, Radio, Lock, Check, Sparkles, Laptop, Eye, EyeOff
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
 
 interface DetectedConnection {
   client_ip: string;
+  ipv6_address?: string;
   cidr: string;
   label: string;
+  ssid?: string;
+  bssid?: string;
+  location?: string;
   user_agent: string;
   protocol: string;
 }
@@ -27,6 +31,10 @@ export const CampusNetworkManager: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Independent Eye Toggle states for each container
+  const [showCaptureSensitive, setShowCaptureSensitive] = useState(false);
+  const [showTableSensitive, setShowTableSensitive] = useState(false);
 
   // Live Real Detection States (No hardcoded arrays)
   const [isDetecting, setIsDetecting] = useState(false);
@@ -82,37 +90,69 @@ export const CampusNetworkManager: React.FC = () => {
     setLocation(''); setFormError(null);
   };
 
-  // Real Auto-Capture of currently detected Admin IP / CIDR Subnet
+  const maskIp = (val?: string | null, hide?: boolean): string => {
+    if (!val) return '—';
+    if (!hide) return val;
+    if (val.includes(':')) {
+      const parts = val.split(':');
+      if (parts.length > 2) {
+        return `${parts[0]}:${parts[1]}:••••:••••`;
+      }
+      return '••••:••••:••••';
+    }
+    if (val.includes('/')) {
+      const [ipPart, maskPart] = val.split('/');
+      const octets = ipPart.split('.');
+      if (octets.length === 4) {
+        return `${octets[0]}.${octets[1]}.•••.${octets[3]}/${maskPart}`;
+      }
+      return `•••.•••.•••/${maskPart}`;
+    }
+    if (val.includes('.')) {
+      const octets = val.split('.');
+      if (octets.length === 4) {
+        return `${octets[0]}.${octets[1]}.•••.•••`;
+      }
+    }
+    return '••••••••';
+  };
+
+  // Real Auto-Capture of currently detected Admin IP / CIDR Subnet & Wi-Fi Details
   const handleAutoCaptureCurrentConnection = async () => {
     if (!detectedConn) return;
     setCapturing(true);
     try {
+      const wifiSsid = detectedConn.ssid || 'Campus-Wi-Fi';
+      const wifiBssid = detectedConn.bssid || '';
+      const wifiLoc = detectedConn.location || 'Main Campus Node';
+      const fullLabel = `${wifiSsid} [${wifiLoc}]`;
+
       // Check if network is already in whitelist table
-      const existing = networks.find(n => n.cidr === detectedConn.cidr || n.label.includes(detectedConn.client_ip));
+      const existing = networks.find(n => n.ssid === wifiSsid || n.cidr === detectedConn.cidr || n.label.includes(wifiSsid));
       if (existing) {
         if (!existing.is_active) {
           await apiService.adminUpdateCampusNetwork(existing.id, { is_active: true });
           setNetworks(prev => prev.map(n => n.id === existing.id ? { ...n, is_active: true } : n));
         }
-        await swalSuccess('Network Whitelisted', `Subnet range "${detectedConn.cidr}" is active & permitted.`);
+        await swalSuccess('Network Whitelisted', `Wi-Fi Network "${wifiSsid}" (${detectedConn.cidr}) is active & permitted.`);
       } else {
         clearApiCache();
         const created = await apiService.adminCreateCampusNetwork({
-          label: `${detectedConn.label}`,
+          label: fullLabel,
           cidr: detectedConn.cidr,
-          ssid: null,
-          bssid_prefix: null,
+          ssid: wifiSsid,
+          bssid_prefix: wifiBssid ? wifiBssid.slice(0, 8) : null,
           is_active: true
         });
         setNetworks(prev => [...prev, created]);
         clearApiCache();
         await fetchAll();
-        await swalSuccess('Connection Whitelisted', `Captured & added "${detectedConn.cidr}" to allowed campus networks.`);
+        await swalSuccess('Connection Whitelisted', `Captured & whitelisted "${wifiSsid}" (${detectedConn.cidr}) for student attendance.`);
       }
     } catch (err: any) {
       await swalError('Whitelisting Failed', err.response?.data?.detail || 'Could not whitelist connection.');
     } finally {
-      setCapturing(null as any);
+      setCapturing(false);
     }
   };
 
@@ -238,7 +278,8 @@ export const CampusNetworkManager: React.FC = () => {
 
   const isCurrentConnWhitelisted = useMemo(() => {
     if (!detectedConn) return false;
-    return networks.some(n => n.is_active && (n.cidr === detectedConn.cidr || n.label.includes(detectedConn.client_ip)));
+    const targetSsid = detectedConn.ssid || 'Campus-Wi-Fi';
+    return networks.some(n => n.is_active && (n.ssid === targetSsid || n.cidr === detectedConn.cidr || n.label.includes(targetSsid)));
   }, [networks, detectedConn]);
 
   return (
@@ -249,10 +290,10 @@ export const CampusNetworkManager: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-xl font-display font-bold text-slate-900 flex items-center gap-2.5">
               <ShieldAlert className="h-5.5 w-5.5 text-brand-blue" />
-              Network Security & Connections
+              Network Security
             </h2>
             <p className="text-xs text-slate-500 font-sans">
-              Manage Wi-Fi network verification policies, capture active admin connections, and configure connection permissions.
+              Manage Wi-Fi verification and connections.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -288,8 +329,8 @@ export const CampusNetworkManager: React.FC = () => {
               <div className="flex items-center gap-2">
                 <h3 className="font-display font-bold text-sm">
                   {isNetworkVerificationOn
-                    ? 'Restricted Campus Wi-Fi Mode Active'
-                    : 'System Connection is Public (Every student can take attendance anywhere)'}
+                    ? 'Restricted Mode Active'
+                    : 'Public Mode Active'}
                 </h3>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                   isNetworkVerificationOn ? 'bg-emerald-200/80 text-emerald-800' : 'bg-blue-200/80 text-blue-800'
@@ -299,8 +340,8 @@ export const CampusNetworkManager: React.FC = () => {
               </div>
               <p className="text-xs opacity-90 leading-relaxed font-sans">
                 {isNetworkVerificationOn
-                  ? `Only students connected to checked/permitted campus Wi-Fi networks (${activePermittedCount} active) are permitted to submit attendance.`
-                  : 'Network verification setting is turned OFF. Every student can take their attendance anywhere from any location or public network without restrictions.'}
+                  ? `Only students connected to permitted Wi-Fi networks (${activePermittedCount} active) can submit attendance.`
+                  : 'Verification is OFF. Students can submit attendance anywhere without Wi-Fi checks.'}
               </p>
             </div>
           </div>
@@ -321,7 +362,7 @@ export const CampusNetworkManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Real Live Client Connection Auto-Capture Container (No Hardcoded Data) */}
+      {/* Container 1: Live Connection Auto-Capture (Independent Eye Toggle) */}
       <div className="uipro-card bg-white space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
@@ -330,38 +371,50 @@ export const CampusNetworkManager: React.FC = () => {
             </div>
             <div>
               <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
-                Live Admin Connection Auto-Capture
+                Auto-Capture Connection
               </h3>
               <p className="text-[10px] text-slate-400 font-sans">
-                Auto-detect your device's active connection IP and CIDR subnet to whitelist campus attendance access.
+                Detect your current connection.
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={detectLiveConnection}
-            disabled={isDetecting}
-            className="uipro-button uipro-button-primary py-2 px-3.5 text-xs inline-flex items-center gap-2 shrink-0 cursor-pointer"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isDetecting ? 'animate-spin' : ''}`} />
-            <span>{isDetecting ? 'Detecting Connection...' : 'Re-Detect My Connection'}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Container 1 Eye Icon-Only Button */}
+            <button
+              type="button"
+              onClick={() => setShowCaptureSensitive(prev => !prev)}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer"
+              title={showCaptureSensitive ? 'Hide sensitive IP values' : 'Show sensitive IP values'}
+            >
+              {showCaptureSensitive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4 text-brand-blue" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={detectLiveConnection}
+              disabled={isDetecting}
+              className="uipro-button uipro-button-primary py-2 px-3.5 text-xs inline-flex items-center gap-2 shrink-0 cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isDetecting ? 'animate-spin' : ''}`} />
+              <span>{isDetecting ? 'Detecting...' : 'Re-Detect'}</span>
+            </button>
+          </div>
         </div>
 
         {isDetecting ? (
           <div className="p-8 text-center text-slate-400 text-xs space-y-2">
             <Loader2 className="h-6 w-6 text-brand-blue animate-spin mx-auto" />
-            <p>Detecting live client IP & network headers from backend...</p>
+            <p>Detecting current connection...</p>
           </div>
         ) : detectedConn ? (
           <div className="p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[9.5px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> Real Client Connection Detected
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> Connection Detected
               </span>
               <span className="text-[10px] font-mono bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200 shadow-xs">
-                Active Client IP
+                Active IP
               </span>
             </div>
 
@@ -371,15 +424,26 @@ export const CampusNetworkManager: React.FC = () => {
                   <Wifi className="h-6 w-6" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-sm text-slate-800 flex items-center gap-2">
-                    <span>{detectedConn.label}</span>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-sm text-slate-800">
+                      {detectedConn.ssid ? `${detectedConn.ssid} (${detectedConn.label})` : detectedConn.label}
+                    </h4>
                     <Lock className="h-3.5 w-3.5 text-slate-400" />
-                  </h4>
-                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                    Client IP: <strong className="text-slate-800">{detectedConn.client_ip}</strong> | Subnet CIDR: <strong className="text-brand-blue">{detectedConn.cidr}</strong>
-                  </p>
-                  <p className="text-[10px] text-slate-450 mt-0.5 truncate max-w-lg">
-                    Protocol: <span className="text-slate-700">{detectedConn.protocol}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono mt-0.5 space-y-0.5">
+                    <p>
+                      IPv4: <strong className="text-slate-800">{maskIp(detectedConn.client_ip, !showCaptureSensitive)}</strong>
+                      {' | '}Subnet CIDR: <strong className="text-brand-blue">{maskIp(detectedConn.cidr, !showCaptureSensitive)}</strong>
+                      {detectedConn.bssid && <> | BSSID MAC: <strong className="text-slate-700">{maskIp(detectedConn.bssid, !showCaptureSensitive)}</strong></>}
+                    </p>
+                    {detectedConn.ipv6_address && (
+                      <p className="text-[10.5px] text-slate-500">
+                        IPv6 Address: <strong className="text-purple-700 font-semibold">{maskIp(detectedConn.ipv6_address, !showCaptureSensitive)}</strong>
+                      </p>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Location: <span className="text-slate-700">{detectedConn.location || 'Main Campus Node'}</span> | Protocol: <span className="text-slate-700">{detectedConn.protocol}</span>
                   </p>
                 </div>
               </div>
@@ -399,12 +463,12 @@ export const CampusNetworkManager: React.FC = () => {
                 ) : isCurrentConnWhitelisted ? (
                   <>
                     <Check className="h-3.5 w-3.5" />
-                    <span>Connection Whitelisted</span>
+                    <span>Whitelisted</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-                    <span>Whitelist My Connection Subnet ({detectedConn.cidr})</span>
+                    <span>Whitelist Connection</span>
                   </>
                 )}
               </button>
@@ -413,15 +477,20 @@ export const CampusNetworkManager: React.FC = () => {
         ) : null}
       </div>
 
-      {/* Security Policy Settings */}
+      {/* Container 2: Security Policy Settings */}
       <div className="uipro-card bg-white space-y-4">
         <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-          <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
-            <Network className="h-4.5 w-4.5 text-brand-blue" /> Verification Policy Configuration
-          </h3>
+          <div className="space-y-0.5">
+            <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
+              <Network className="h-4.5 w-4.5 text-brand-blue" /> Verification Rules
+            </h3>
+            <p className="text-[10px] text-slate-400 font-sans">
+              Configure attendance network checks.
+            </p>
+          </div>
           <button onClick={handleSaveSettings} disabled={savingSettings} className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer">
             {savingSettings ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : <Save className="h-3.5 w-3.5 mr-2" />}
-            Save Policy Settings
+            Save Rules
           </button>
         </div>
         <div className="grid md:grid-cols-2 gap-3">
@@ -448,28 +517,40 @@ export const CampusNetworkManager: React.FC = () => {
         )}
       </div>
 
-      {/* Connection Matrix & Permitted Wi-Fi List */}
+      {/* Container 3: Connection Matrix & Permitted Wi-Fi List (Independent Eye Toggle) */}
       <div className="uipro-card space-y-4">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b border-slate-100">
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
               <Wifi className="h-4.5 w-4.5 text-brand-blue" />
-              Campus Connection List & Permission Matrix
+              Campus Connections
             </h3>
-            <p className="text-[11px] text-slate-400">
-              Checked connections permit student attendance when Wi-Fi verification is ON.
+            <p className="text-[10px] text-slate-400 font-sans">
+              Permitted Wi-Fi networks for attendance.
             </p>
           </div>
 
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search SSID, BSSID, name..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full uipro-input !pl-9 !py-2 text-xs"
-            />
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            {/* Container 3 Eye Icon-Only Button */}
+            <button
+              type="button"
+              onClick={() => setShowTableSensitive(prev => !prev)}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer shrink-0"
+              title={showTableSensitive ? 'Hide sensitive IP values' : 'Show sensitive IP values'}
+            >
+              {showTableSensitive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4 text-brand-blue" />}
+            </button>
+
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search SSID, BSSID, name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full uipro-input !pl-9 !py-2 text-xs"
+              />
+            </div>
           </div>
         </div>
 
@@ -546,7 +627,9 @@ export const CampusNetworkManager: React.FC = () => {
                       {/* BSSID / MAC Address */}
                       <td className="py-3.5 px-4 font-mono text-slate-600 font-medium">
                         {net.bssid_prefix ? (
-                          <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">{net.bssid_prefix}</span>
+                          <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
+                            {maskIp(net.bssid_prefix, !showTableSensitive)}
+                          </span>
                         ) : (
                           <span className="text-slate-300">—</span>
                         )}
@@ -555,7 +638,9 @@ export const CampusNetworkManager: React.FC = () => {
                       {/* Protocol / Subnet */}
                       <td className="py-3.5 px-4 font-mono">
                         {net.cidr ? (
-                          <span className="text-brand-blue font-bold">{net.cidr}</span>
+                          <span className="text-brand-blue font-bold">
+                            {maskIp(net.cidr, !showTableSensitive)}
+                          </span>
                         ) : (
                           <span className="text-slate-500 font-sans">WPA3-Enterprise</span>
                         )}

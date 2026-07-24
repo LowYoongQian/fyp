@@ -27,11 +27,26 @@ import {
   ShimmerAdminPanel
 } from './components/Shimmer';
 import './App.css';
+import { applyThemePreference } from './theme/themePreference';
 
 const DashboardContent: React.FC = () => {
   const { isAuthenticated, loading, user } = useAuth();
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [tabLoading, setTabLoading] = useState(false);
+
+  useEffect(() => {
+    const applyThemeFromStorage = () => {
+      applyThemePreference();
+    };
+    applyThemeFromStorage();
+    window.addEventListener('storage', applyThemeFromStorage);
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+    systemTheme.addEventListener('change', applyThemeFromStorage);
+    return () => {
+      window.removeEventListener('storage', applyThemeFromStorage);
+      systemTheme.removeEventListener('change', applyThemeFromStorage);
+    };
+  }, []);
 
   useEffect(() => {
     if (user) {

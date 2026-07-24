@@ -1,5 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  // Theme preference is controlled by the app on <html class="dark">.
+  // Without this, every `dark:` class in MainLayout follows the OS instead,
+  // leaving the header/sidebar dark while cards switch to light.
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",

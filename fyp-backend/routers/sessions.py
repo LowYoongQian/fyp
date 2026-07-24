@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from utils.timeutil import utcnow
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -727,4 +727,50 @@ def update_lecturer_attendance(
         
     db.commit()
     return {"status": "success", "message": "Attendance record updated successfully"}
+
+
+# ASSUMPTION: Server and student client devices share the same local network subnet without NAT in between,
+# unless reverse proxy headers (X-Forwarded-For) are explicitly trusted via the Security Settings policy.
+
+@router.post("/verify-network")
+def verify_attendance_network(
+    request: Request,
+    body: Optional[dict] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Standalone API endpoint to verify real incoming request IP network location
+    against active whitelisted campus subnets stored in database.
+    """
+    cfg = _get_settings(db)
+    source_ip = get_client_ip(request, trust_proxy_header=_truthy(cfg["trust_proxy_header"]))
+
+    if _truthy(cfg["demo_simulate_network"]) and cfg["demo_simulated_ip"]:
+        source_ip = cfg["demo_simulated_ip"].strip()
+
+    active_networks = db.query(CampusNetwork).filter(CampusNetwork.is_active == True).all()
+
+    reported_ssid = (body or {}).get("wifi_ssid")
+    reported_bssid = (body or {}).get("bssid")
+    reported_gateway = (body or {}).get("gateway_ip")
+    reported_local = (body or {}).get("local_ip")
+
+    network_verified, verify_detail = verify_network(
+        source_ip=source_ip,
+        reported_gateway_ip=reported_gateway,
+        reported_local_ip=reported_local,
+        reported_ssid=reported_ssid,
+        reported_bssid=reported_bssid,
+        networks=active_networks,
+    )
+
+    reason = "passed" if network_verified else ("not_whitelisted" if not active_networks else "subnet_mismatch")
+
+    return {
+        "verified": network_verified,
+        "source_ip": source_ip,
+        "reason": reason,
+        "detail": verify_detail,
+        "whitelisted_networks_count": len(active_networks)
+    }
 

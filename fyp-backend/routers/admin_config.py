@@ -4,6 +4,7 @@ from typing import List
 
 from utils.database import get_db
 import ipaddress
+import socket
 from utils.models import User, Announcement, CampusNetwork, SecuritySetting
 from utils.security import require_admin
 from utils.db_helpers import get_or_404
@@ -79,41 +80,78 @@ def delete_announcement(announcement_id: int, db: Session = Depends(get_db), cur
     return {"message": "Announcement deleted successfully"}
 
 
-# =====================================================================
-# CAMPUS NETWORK WHITELIST CRUD (Network-based location verification)
-# =====================================================================
+# ASSUMPTION: Server and student client devices share the same local network subnet without NAT in between,
+# unless reverse proxy headers (X-Forwarded-For) are explicitly trusted via the Security Settings policy.
 
 @router.get("/detect-connection")
-def detect_connection(request: Request, current_user: User = Depends(require_admin)):
-    client_host = request.client.host if request.client else "127.0.0.1"
-    x_forwarded = request.headers.get("x-forwarded-for")
-    if x_forwarded:
-        client_ip = x_forwarded.split(",")[0].strip()
+def detect_connection(request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    # Check security setting for trusting reverse proxy headers
+    trust_proxy = False
+    setting = db.query(SecuritySetting).filter(SecuritySetting.key == "trust_proxy_header").first()
+    if setting and setting.value and setting.value.lower() == "true":
+        trust_proxy = True
+
+    client_host = request.client.host if (request and request.client) else "127.0.0.1"
+    if trust_proxy:
+        x_forwarded = request.headers.get("x-forwarded-for")
+        if x_forwarded:
+            client_ip = x_forwarded.split(",")[0].strip()
+        else:
+            client_ip = client_host
     else:
         client_ip = client_host
 
+    # Resolve local LAN/Wi-Fi socket interface IP if client is on loopback
+    ipv6_address = None
+    if client_ip in ("127.0.0.1", "::1", "localhost"):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            lan_ip = s.getsockname()[0]
+            s.close()
+            if lan_ip and lan_ip not in ("127.0.0.1", "::1"):
+                client_ip = lan_ip
+        except Exception:
+            pass
+
+    # Try resolving host machine IPv6 address
+    try:
+        s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+        s6.connect(('2001:4860:4860::8888', 80))
+        ipv6_address = s6.getsockname()[0]
+        s6.close()
+    except Exception:
+        try:
+            addr_info = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET6)
+            for item in addr_info:
+                ip = item[4][0]
+                if not ip.startswith("::1"):
+                    ipv6_address = ip
+                    break
+        except Exception:
+            ipv6_address = None
+
     try:
         ip_obj = ipaddress.ip_address(client_ip)
-        if ip_obj.is_loopback:
-            cidr = "127.0.0.1/32"
-            subnet_name = "Localhost Admin Connection Node"
-        elif ip_obj.version == 4:
+        if ip_obj.version == 4:
             network = ipaddress.ip_network(f"{client_ip}/24", strict=False)
             cidr = str(network)
-            subnet_name = f"Active Admin Network Node ({client_ip})"
+            subnet_name = f"Detected Active Subnet ({cidr})"
         else:
             cidr = f"{client_ip}/128"
-            subnet_name = "Active Admin Network Node (IPv6)"
+            subnet_name = f"Detected IPv6 Connection ({client_ip})"
+            ipv6_address = client_ip
     except Exception:
         cidr = f"{client_ip}/32"
-        subnet_name = "Active Admin Network Node"
+        subnet_name = f"Detected Connection ({client_ip})"
 
     return {
         "client_ip": client_ip,
+        "ipv6_address": ipv6_address,
         "cidr": cidr,
         "label": subnet_name,
-        "user_agent": request.headers.get("user-agent", "Browser Client"),
-        "protocol": "HTTP/2 Web Connection"
+        "user_agent": request.headers.get("user-agent", "Browser Client") if request else "Unknown Client",
+        "protocol": "HTTP Connection"
     }
 
 

@@ -45,6 +45,21 @@ try:
         # Announcement publisher column
         conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS publisher VARCHAR DEFAULT 'ADMIN';"))
 
+        # User profile and preference columns
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_name VARCHAR;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_code VARCHAR;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'Active';"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference VARCHAR DEFAULT 'light';"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS font_size_preference VARCHAR DEFAULT 'medium';"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS language_preference VARCHAR DEFAULT 'en';"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_enabled BOOLEAN DEFAULT TRUE;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_notifications BOOLEAN DEFAULT TRUE;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS push_notifications BOOLEAN DEFAULT TRUE;"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS in_app_notifications BOOLEAN DEFAULT TRUE;"))
+
         # One attendance record per (student, session): dedupe any historical
         # duplicates first (keep present/leave over absent, then the newest id),
         # then add the unique constraint. Ranking: status_rank 0 = attended,

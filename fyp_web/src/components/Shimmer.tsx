@@ -785,3 +785,73 @@ export const ShimmerTableSkeleton: React.FC<{
   );
 };
 
+// Profile Modal Shimmer Skeleton
+export const ShimmerProfileModal: React.FC = () => {
+  return (
+    <div className="space-y-4 font-sans text-xs animate-in fade-in duration-200">
+      {/* Avatar Header Shimmer */}
+      <div className="flex items-center gap-4 p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+        <ShimmerCircle size="w-14 h-14" />
+        <div className="space-y-2 flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <ShimmerText width="w-32" height="h-4" />
+            <ShimmerText width="w-16" height="h-4" className="rounded-full" />
+          </div>
+          <ShimmerText width="w-48" height="h-3" />
+          <ShimmerText width="w-24" height="h-2.5" />
+        </div>
+      </div>
+
+      {/* Info Rows Shimmer */}
+      <div className="space-y-2.5">
+        {Array.from({ length: 4 }).map((_, idx) => (
+          <div key={idx} className="p-3 bg-white border border-slate-200/80 rounded-xl flex items-center justify-between">
+            <div className="flex items-center gap-2.5 flex-grow">
+              <ShimmerCircle size="w-4 h-4 shrink-0" />
+              <ShimmerText width="w-36" height="h-3.5" />
+            </div>
+            <ShimmerText width="w-20" height="h-5" className="rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Settings Modal Shimmer Skeleton
+export const ShimmerSettingsModal: React.FC = () => {
+  return (
+    <div className="space-y-4 font-sans text-xs animate-in fade-in duration-200">
+      {/* Theme Section Shimmer */}
+      <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-3">
+        <ShimmerText width="w-32" height="h-4" />
+        <div className="grid grid-cols-3 gap-2 pt-1">
+          <ShimmerText width="w-full" height="h-8" className="rounded-xl" />
+          <ShimmerText width="w-full" height="h-8" className="rounded-xl" />
+          <ShimmerText width="w-full" height="h-8" className="rounded-xl" />
+        </div>
+        <ShimmerText width="w-full" height="h-8" className="rounded-xl mt-2" />
+      </div>
+
+      {/* Notifications Section Shimmer */}
+      <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-3">
+        <div className="flex justify-between items-center">
+          <ShimmerText width="w-40" height="h-4" />
+          <ShimmerText width="w-9" height="h-5" className="rounded-full" />
+        </div>
+        <div className="space-y-2 pt-1">
+          <ShimmerText width="w-full" height="h-8" className="rounded-lg" />
+          <ShimmerText width="w-full" height="h-8" className="rounded-lg" />
+          <ShimmerText width="w-full" height="h-8" className="rounded-lg" />
+        </div>
+      </div>
+
+      {/* Security Section Shimmer */}
+      <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl flex justify-between items-center">
+        <ShimmerText width="w-44" height="h-4" />
+        <ShimmerText width="w-9" height="h-5" className="rounded-full" />
+      </div>
+    </div>
+  );
+};
+
