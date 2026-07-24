@@ -58,28 +58,28 @@ export const AdminDashboard: React.FC = () => {
     {
       title: 'Total Students',
       value: students.length,
-      subtitle: 'Registered Identities',
+      subtitle: 'Enrolled students',
       color: 'bg-blue-50 text-blue-600 border-blue-100/50',
       icon: Users
     },
     {
-      title: 'Academic Staff',
+      title: 'Staff',
       value: staff.length,
-      subtitle: 'Lecturers & Tutors',
+      subtitle: 'Lecturers & staff',
       color: 'bg-indigo-50 text-indigo-600 border-indigo-100/50',
       icon: Briefcase
     },
     {
       title: 'Programmes',
       value: programmes.length,
-      subtitle: 'Active Study Tracks',
+      subtitle: 'Active programmes',
       color: 'bg-purple-50 text-purple-600 border-purple-100/50',
       icon: Layers
     },
     {
       title: 'Courses',
       value: courses.length,
-      subtitle: 'Active Subject Modules',
+      subtitle: 'Active courses',
       color: 'bg-pink-50 text-pink-600 border-pink-100/50',
       icon: BookOpen
     }
@@ -94,10 +94,10 @@ export const AdminDashboard: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-xl font-display font-extrabold text-slate-800 flex items-center gap-2">
               <Sparkles className="h-5.5 w-5.5 text-brand-blue" />
-              Administrative Overview
+              Dashboard
             </h2>
             <p className="text-xs text-slate-400">
-              Real-time monitoring of campus enrollments, biometric registrations, and active check-in classes.
+              Overview of students, staff, courses, and attendance.
             </p>
           </div>
           <button
@@ -146,10 +146,10 @@ export const AdminDashboard: React.FC = () => {
             <div className="lg:col-span-2 uipro-card bg-white p-6 space-y-6">
               <div className="pb-4 border-b border-slate-100 flex justify-between items-center">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                  Face Biometrics Registration Status
+                  Face Registration
                 </h3>
                 <span className="text-[10px] font-bold text-brand-blue bg-brand-blue-light px-2.5 py-0.5 rounded-md uppercase">
-                  Biometrics Mesh
+                  Face Data
                 </span>
               </div>
 
@@ -180,10 +180,10 @@ export const AdminDashboard: React.FC = () => {
                       <span className="text-2xl font-display font-extrabold text-slate-800">
                         {livenessCompletionRate}%
                       </span>
-                      <span className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">Liveness Mesh Match</span>
+                      <span className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">Registered</span>
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold text-slate-500 mt-4">Biometric Registration Progress</span>
+                  <span className="text-[10px] font-bold text-slate-500 mt-4">Face Registration Progress</span>
                 </div>
 
                 {/* Details list */}
@@ -192,8 +192,8 @@ export const AdminDashboard: React.FC = () => {
                     <div className="flex items-center gap-2.5">
                       <ShieldCheck className="h-5 w-5 text-emerald-600" />
                       <div>
-                        <span className="font-bold text-slate-800 block">Verified Students</span>
-                        <span className="text-[9.5px] text-slate-400">Selfie Mesh Registered</span>
+                        <span className="font-bold text-slate-800 block">Registered Students</span>
+                        <span className="text-[9.5px] text-slate-400">Face registered</span>
                       </div>
                     </div>
                     <span className="text-base font-extrabold text-slate-700">{verifiedCount}</span>
@@ -203,8 +203,8 @@ export const AdminDashboard: React.FC = () => {
                     <div className="flex items-center gap-2.5">
                       <UserX className="h-5 w-5 text-amber-600" />
                       <div>
-                        <span className="font-bold text-slate-800 block">Missing Selfie</span>
-                        <span className="text-[9.5px] text-slate-400">Needs Face Sync</span>
+                        <span className="font-bold text-slate-800 block">Pending Registration</span>
+                        <span className="text-[9.5px] text-slate-400">Face not registered</span>
                       </div>
                     </div>
                     <span className="text-base font-extrabold text-slate-700">{missingSelfieCount}</span>
@@ -218,7 +218,7 @@ export const AdminDashboard: React.FC = () => {
               <div className="pb-4 border-b border-slate-100 flex items-center gap-2">
                 <Play className="h-4.5 w-4.5 text-brand-blue" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                  Live Attendance Check
+                  Active Sessions
                 </h3>
               </div>
 
@@ -242,8 +242,8 @@ export const AdminDashboard: React.FC = () => {
                   </h4>
                   <p className="text-[10px] text-slate-400 max-w-[200px] leading-relaxed">
                     {activeSessions.length > 0 
-                      ? 'Lecturer liveness subnets are actively running check-ins.' 
-                      : 'No active checking session windows are open currently.'}
+                      ? 'Lecturers are currently running attendance check-ins.' 
+                      : 'No active class sessions right now.'}
                   </p>
                 </div>
               </div>

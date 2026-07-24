@@ -703,3 +703,85 @@ export const ShimmerAdminPanel: React.FC = () => {
     </div>
   );
 };
+
+// Table Skeleton with Headers & Shimmer Rows + Shimmer Pagination Bar
+export const ShimmerTableSkeleton: React.FC<{
+  headers?: string[];
+  columns?: number;
+  rows?: number;
+  showPagination?: boolean;
+}> = ({
+  headers,
+  columns = 5,
+  rows = 6,
+  showPagination = true,
+}) => {
+  const colCount = headers ? headers.length : columns;
+
+  return (
+    <div className="w-full space-y-4">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse font-sans text-xs">
+          {headers && (
+            <thead>
+              <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
+                {headers.map((head, idx) => (
+                  <th key={idx} className={`py-3 px-4 ${idx === headers.length - 1 ? 'text-right' : ''}`}>
+                    {head}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody className="divide-y divide-slate-100/50">
+            {Array.from({ length: rows }).map((_, rIdx) => (
+              <tr key={rIdx} className="hover:bg-slate-50/30 transition-colors">
+                {Array.from({ length: colCount }).map((_, cIdx) => {
+                  const isLast = cIdx === colCount - 1;
+                  const isFirst = cIdx === 0;
+                  const isBadgeCol = cIdx === 3;
+
+                  return (
+                    <td key={cIdx} className={`py-3.5 px-4 ${isLast ? 'text-right' : ''}`}>
+                      {isLast ? (
+                        <div className="inline-flex gap-2 justify-end">
+                          <ShimmerText width="w-8" height="h-8" className="rounded-lg" />
+                          <ShimmerText width="w-8" height="h-8" className="rounded-lg" />
+                        </div>
+                      ) : isFirst ? (
+                        <div className="space-y-1">
+                          <ShimmerText width="w-36" height="h-3.5" />
+                          <ShimmerText width="w-20" height="h-2.5" />
+                        </div>
+                      ) : isBadgeCol ? (
+                        <ShimmerText width="w-20" height="h-5" className="rounded-full" />
+                      ) : (
+                        <ShimmerText width={cIdx % 2 === 0 ? 'w-28' : 'w-40'} height="h-3" />
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showPagination && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100 text-xs font-semibold mt-4">
+          <div className="flex items-center gap-2">
+            <ShimmerText width="w-56" height="h-3.5" />
+          </div>
+          <div className="flex items-center gap-3">
+            <ShimmerText width="w-14" height="h-7" className="rounded-lg" />
+            <ShimmerText width="w-16" height="h-7" className="rounded-lg" />
+            <ShimmerText width="w-20" height="h-3.5" />
+            <ShimmerText width="w-14" height="h-7" className="rounded-lg" />
+            <ShimmerText width="w-14" height="h-7" className="rounded-lg" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+

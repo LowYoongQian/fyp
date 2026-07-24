@@ -14,6 +14,7 @@ import {
   FolderOpen,
   Briefcase
 } from 'lucide-react';
+import { ShimmerTableSkeleton } from '../../components/Shimmer';
 
 type SubTab = 'programmes' | 'courses' | 'staff' | 'students';
 
@@ -313,10 +314,10 @@ export const AcademicManager: React.FC = () => {
         <div className="space-y-1">
           <h2 className="text-xl font-display font-extrabold text-slate-800 flex items-center gap-2">
             <GraduationCap className="h-5.5 w-5.5 text-brand-blue" />
-            Academic Manager
+            Academics
           </h2>
           <p className="text-xs text-slate-400">
-            Define Study Programmes, provision Academic Courses, and manage Staff roles and Student course allocations.
+            Manage programmes, courses, staff, and student enrollments.
           </p>
         </div>
         <button
@@ -913,16 +914,16 @@ export const AcademicManager: React.FC = () => {
             <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
               <FolderOpen className="h-5 w-5 text-brand-blue" />
               <h3 className="font-sans text-xs font-bold uppercase tracking-wider text-slate-800">
-                {activeSubTab === 'programmes' && 'Active Study Programmes'}
-                {activeSubTab === 'courses' && 'Active Course Scopes'}
-                {activeSubTab === 'staff' && 'Academic Staff Roles Assignments'}
-                {activeSubTab === 'students' && 'Students Study Tracks & Enrolments'}
+                {activeSubTab === 'programmes' && 'Programmes'}
+                {activeSubTab === 'courses' && 'Courses'}
+                {activeSubTab === 'staff' && 'Staff Assignments'}
+                {activeSubTab === 'students' && 'Student Enrollments'}
               </h3>
             </div>
 
             {loading ? (
-              <div className="py-12 flex justify-center items-center">
-                <RefreshCw className="h-6 w-6 text-slate-300 animate-spin" />
+              <div className="p-4">
+                <ShimmerTableSkeleton rows={4} showPagination={false} />
               </div>
             ) : (
               <div className="overflow-y-auto max-h-[500px] pr-1 space-y-3">

@@ -17,6 +17,7 @@ import {
   AlertCircle,
   ChevronDown
 } from 'lucide-react';
+import { ShimmerTableSkeleton } from '../../components/Shimmer';
 
 export const StaffManager: React.FC = () => {
   const [staffList, setStaffList] = useState<AdminStaff[]>([]);
@@ -159,10 +160,10 @@ export const StaffManager: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-xl font-display font-bold text-slate-900 flex items-center gap-2.5">
               <Briefcase className="h-5.5 w-5.5 text-brand-blue" />
-              Staff Directory
+              Staff
             </h2>
             <p className="text-xs text-slate-500 font-sans">
-              Create, read, update, and cascadingly delete staff profiles and credentials.
+              Manage staff profiles and accounts.
             </p>
           </div>
           <button
@@ -170,7 +171,7 @@ export const StaffManager: React.FC = () => {
             className="uipro-button uipro-button-primary shrink-0 self-start md:self-auto"
           >
             <Plus className="h-4 w-4 mr-2" />
-            Register Staff Account
+            Add Staff
           </button>
         </div>
       </div>
@@ -182,7 +183,7 @@ export const StaffManager: React.FC = () => {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search staff by name, staff ID, or email..."
+            placeholder="Search by name, staff ID, or email..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full uipro-input !pl-10"
@@ -191,10 +192,11 @@ export const StaffManager: React.FC = () => {
 
         {/* Directory Output */}
         {loading ? (
-          <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs">
-            <Loader2 className="h-8 w-8 text-brand-blue animate-spin" />
-            <span>Retrieving staff from database...</span>
-          </div>
+          <ShimmerTableSkeleton
+            headers={['Staff Name', 'Staff ID', 'Email', 'Role', 'Actions']}
+            rows={6}
+            showPagination={true}
+          />
         ) : error ? (
           <div className="py-12 text-center text-danger-red font-sans text-xs bg-danger-red-light border border-danger-red/10 rounded-xl">
             {error}

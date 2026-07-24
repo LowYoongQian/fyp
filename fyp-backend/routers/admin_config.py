@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -82,6 +82,40 @@ def delete_announcement(announcement_id: int, db: Session = Depends(get_db), cur
 # =====================================================================
 # CAMPUS NETWORK WHITELIST CRUD (Network-based location verification)
 # =====================================================================
+
+@router.get("/detect-connection")
+def detect_connection(request: Request, current_user: User = Depends(require_admin)):
+    client_host = request.client.host if request.client else "127.0.0.1"
+    x_forwarded = request.headers.get("x-forwarded-for")
+    if x_forwarded:
+        client_ip = x_forwarded.split(",")[0].strip()
+    else:
+        client_ip = client_host
+
+    try:
+        ip_obj = ipaddress.ip_address(client_ip)
+        if ip_obj.is_loopback:
+            cidr = "127.0.0.1/32"
+            subnet_name = "Localhost Admin Connection Node"
+        elif ip_obj.version == 4:
+            network = ipaddress.ip_network(f"{client_ip}/24", strict=False)
+            cidr = str(network)
+            subnet_name = f"Active Admin Network Node ({client_ip})"
+        else:
+            cidr = f"{client_ip}/128"
+            subnet_name = "Active Admin Network Node (IPv6)"
+    except Exception:
+        cidr = f"{client_ip}/32"
+        subnet_name = "Active Admin Network Node"
+
+    return {
+        "client_ip": client_ip,
+        "cidr": cidr,
+        "label": subnet_name,
+        "user_agent": request.headers.get("user-agent", "Browser Client"),
+        "protocol": "HTTP/2 Web Connection"
+    }
+
 
 @router.get("/campus-networks", response_model=List[CampusNetworkResponse])
 def get_campus_networks(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):

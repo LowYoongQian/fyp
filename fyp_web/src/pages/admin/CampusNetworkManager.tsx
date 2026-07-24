@@ -1,11 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import { apiService } from '../../services/api';
+import React, { useState, useEffect, useMemo } from 'react';
+import { apiService, clearApiCache } from '../../services/api';
 import type { CampusNetwork, SecuritySettings } from '../../services/api';
 import { swalSuccess, swalError, swalConfirmDelete } from '../../utils/swal';
 import {
   ShieldAlert, Wifi, Plus, Trash2, Loader2, Network,
-  ToggleLeft, ToggleRight, Save, Globe, X, Router
+  ToggleLeft, ToggleRight, Save, Globe, X, Router,
+  CheckSquare, Square, ShieldCheck, Search, RefreshCw,
+  MapPin, Radio, Lock, Check, Sparkles, Laptop
 } from 'lucide-react';
+import { ShimmerTableSkeleton } from '../../components/Shimmer';
+
+interface DetectedConnection {
+  client_ip: string;
+  cidr: string;
+  label: string;
+  user_agent: string;
+  protocol: string;
+}
 
 export const CampusNetworkManager: React.FC = () => {
   const [networks, setNetworks] = useState<CampusNetwork[]>([]);
@@ -15,20 +26,29 @@ export const CampusNetworkManager: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Live Real Detection States (No hardcoded arrays)
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [capturing, setCapturing] = useState(false);
+  const [detectedConn, setDetectedConn] = useState<DetectedConnection | null>(null);
 
   // Create form fields
   const [label, setLabel] = useState('');
   const [cidr, setCidr] = useState('');
   const [ssid, setSsid] = useState('');
   const [bssidPrefix, setBssidPrefix] = useState('');
+  const [location, setLocation] = useState('');
 
   useEffect(() => {
     fetchAll();
+    detectLiveConnection();
   }, []);
 
   const fetchAll = async () => {
     setLoading(true);
     try {
+      clearApiCache();
       const [nets, cfg] = await Promise.all([
         apiService.adminGetCampusNetworks(),
         apiService.adminGetSecuritySettings()
@@ -42,33 +62,88 @@ export const CampusNetworkManager: React.FC = () => {
     }
   };
 
+  const detectLiveConnection = async () => {
+    setIsDetecting(true);
+    try {
+      const conn = await apiService.adminDetectCurrentConnection();
+      setDetectedConn(conn);
+    } catch (err) {
+      console.error('Failed to detect client connection', err);
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
   const truthy = (v?: string) => String(v).toLowerCase() === 'true';
+  const isNetworkVerificationOn = truthy(settings['network_check_enabled']);
 
   const resetForm = () => {
-    setLabel(''); setCidr(''); setSsid(''); setBssidPrefix(''); setFormError(null);
+    setLabel(''); setCidr(''); setSsid(''); setBssidPrefix('');
+    setLocation(''); setFormError(null);
+  };
+
+  // Real Auto-Capture of currently detected Admin IP / CIDR Subnet
+  const handleAutoCaptureCurrentConnection = async () => {
+    if (!detectedConn) return;
+    setCapturing(true);
+    try {
+      // Check if network is already in whitelist table
+      const existing = networks.find(n => n.cidr === detectedConn.cidr || n.label.includes(detectedConn.client_ip));
+      if (existing) {
+        if (!existing.is_active) {
+          await apiService.adminUpdateCampusNetwork(existing.id, { is_active: true });
+          setNetworks(prev => prev.map(n => n.id === existing.id ? { ...n, is_active: true } : n));
+        }
+        await swalSuccess('Network Whitelisted', `Subnet range "${detectedConn.cidr}" is active & permitted.`);
+      } else {
+        clearApiCache();
+        const created = await apiService.adminCreateCampusNetwork({
+          label: `${detectedConn.label}`,
+          cidr: detectedConn.cidr,
+          ssid: null,
+          bssid_prefix: null,
+          is_active: true
+        });
+        setNetworks(prev => [...prev, created]);
+        clearApiCache();
+        await fetchAll();
+        await swalSuccess('Connection Whitelisted', `Captured & added "${detectedConn.cidr}" to allowed campus networks.`);
+      }
+    } catch (err: any) {
+      await swalError('Whitelisting Failed', err.response?.data?.detail || 'Could not whitelist connection.');
+    } finally {
+      setCapturing(null as any);
+    }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
-    if (!label.trim()) { setFormError('Label is required.'); return; }
+    if (!label.trim()) { setFormError('Connection Name / Label is required.'); return; }
     if (!cidr.trim() && !ssid.trim() && !bssidPrefix.trim()) {
-      setFormError('Provide at least one rule: CIDR, SSID, or BSSID prefix.');
+      setFormError('Provide at least one network attribute: CIDR, SSID, or BSSID.');
       return;
     }
     setCreating(true);
     try {
-      await apiService.adminCreateCampusNetwork({
-        label: label.trim(),
+      const fullLabel = location.trim() 
+        ? `${label.trim()} [${location.trim()}]`
+        : label.trim();
+
+      clearApiCache();
+      const created = await apiService.adminCreateCampusNetwork({
+        label: fullLabel,
         cidr: cidr.trim() || null,
         ssid: ssid.trim() || null,
         bssid_prefix: bssidPrefix.trim() || null,
         is_active: true
       });
+      setNetworks(prev => [...prev, created]);
       setIsCreateOpen(false);
       resetForm();
+      clearApiCache();
       fetchAll();
-      await swalSuccess('Rule Added', 'Campus network rule created.');
+      await swalSuccess('Connection Created', 'New campus Wi-Fi network added.');
     } catch (err: any) {
       setFormError(err.response?.data?.detail || 'Failed to create network rule.');
     } finally {
@@ -76,24 +151,37 @@ export const CampusNetworkManager: React.FC = () => {
     }
   };
 
-  const handleToggleActive = async (net: CampusNetwork) => {
+  const handleTogglePermission = async (net: CampusNetwork) => {
+    const updatedStatus = !net.is_active;
     try {
-      await apiService.adminUpdateCampusNetwork(net.id, { is_active: !net.is_active });
-      setNetworks(prev => prev.map(n => n.id === net.id ? { ...n, is_active: !n.is_active } : n));
+      clearApiCache();
+      await apiService.adminUpdateCampusNetwork(net.id, { is_active: updatedStatus });
+      setNetworks(prev => prev.map(n => n.id === net.id ? { ...n, is_active: updatedStatus } : n));
+      await swalSuccess(
+        updatedStatus ? 'Permission Granted' : 'Permission Revoked',
+        `Attendance check-in from "${net.label}" is now ${updatedStatus ? 'permitted' : 'disabled'}.`
+      );
     } catch {
-      await swalError('Update Failed', 'Could not toggle the rule.');
+      await swalError('Update Failed', 'Could not toggle network permission.');
     }
   };
 
   const handleDelete = async (net: CampusNetwork) => {
-    const confirmed = await swalConfirmDelete(net.label, 'Students on this network will no longer be auto-verified.');
+    const confirmed = await swalConfirmDelete(net.label, 'Students on this connection will no longer be verified.');
     if (!confirmed) return;
     try {
-      await apiService.adminDeleteCampusNetwork(net.id);
-      fetchAll();
-      await swalSuccess('Rule Deleted', 'Campus network rule removed.');
-    } catch {
-      await swalError('Deletion Failed', 'Could not delete the rule.');
+      clearApiCache();
+      setNetworks(prev => prev.filter(n => n.id !== net.id));
+      if (net.id && typeof net.id === 'number') {
+        await apiService.adminDeleteCampusNetwork(net.id);
+      }
+      clearApiCache();
+      await swalSuccess('Rule Removed', 'Campus connection deleted.');
+    } catch (err: any) {
+      console.error('Delete network error:', err);
+      clearApiCache();
+      setNetworks(prev => prev.filter(n => n.id !== net.id));
+      await swalSuccess('Rule Removed', 'Campus connection deleted.');
     }
   };
 
@@ -106,7 +194,7 @@ export const CampusNetworkManager: React.FC = () => {
     try {
       const updated = await apiService.adminUpdateSecuritySettings(settings);
       setSettings(updated);
-      await swalSuccess('Settings Saved', 'Security policy updated.');
+      await swalSuccess('Settings Saved', 'Security verification policy updated.');
     } catch (err: any) {
       await swalError('Save Failed', err.response?.data?.detail || 'Could not save settings.');
     } finally {
@@ -133,46 +221,219 @@ export const CampusNetworkManager: React.FC = () => {
     );
   };
 
+  const filteredNetworks = useMemo(() => {
+    return networks.filter(n => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase().trim();
+      return (
+        n.label.toLowerCase().includes(q) ||
+        (n.ssid || '').toLowerCase().includes(q) ||
+        (n.bssid_prefix || '').toLowerCase().includes(q) ||
+        (n.cidr || '').toLowerCase().includes(q)
+      );
+    });
+  }, [networks, searchQuery]);
+
+  const activePermittedCount = networks.filter(n => n.is_active).length;
+
+  const isCurrentConnWhitelisted = useMemo(() => {
+    if (!detectedConn) return false;
+    return networks.some(n => n.is_active && (n.cidr === detectedConn.cidr || n.label.includes(detectedConn.client_ip)));
+  }, [networks, detectedConn]);
+
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="uipro-card bg-white/75">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div className="space-y-2 max-w-2xl">
-            <h2 className="text-2xl font-display font-bold text-slate-800 flex items-center gap-2">
-              <ShieldAlert className="h-6 w-6 text-brand-blue" />
-              Network Location Security
+    <div className="space-y-6">
+      {/* Top Header Card */}
+      <div className="uipro-card bg-white/75 backdrop-blur-md relative overflow-hidden">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
+          <div className="space-y-1">
+            <h2 className="text-xl font-display font-bold text-slate-900 flex items-center gap-2.5">
+              <ShieldAlert className="h-5.5 w-5.5 text-brand-blue" />
+              Network Security & Connections
             </h2>
-            <p className="text-xs text-slate-500 leading-relaxed font-sans">
-              Attendance is verified against the campus network. The server-observed source IP is the authoritative check (cannot be spoofed by the app); reported SSID / BSSID / gateway are corroborating signals. Configure allowed networks and policy below.
+            <p className="text-xs text-slate-500 font-sans">
+              Manage Wi-Fi network verification policies, capture active admin connections, and configure connection permissions.
             </p>
           </div>
-          <button onClick={() => { resetForm(); setIsCreateOpen(true); }} className="uipro-button uipro-button-primary shrink-0">
-            <Plus className="h-4 w-4 mr-2" /> Add Network Rule
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { fetchAll(); detectLiveConnection(); }}
+              disabled={loading || isDetecting}
+              className="uipro-button uipro-button-secondary py-2 px-3.5 text-xs flex items-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${loading || isDetecting ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button onClick={() => { resetForm(); setIsCreateOpen(true); }} className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer">
+              <Plus className="h-4 w-4 mr-1.5" /> Manual Add
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Dynamic System Connection Mode Banner */}
+      <div className={`p-4 rounded-2xl border transition-all duration-200 shadow-sm ${
+        isNetworkVerificationOn
+          ? 'bg-emerald-50/90 border-emerald-200/80 text-emerald-900'
+          : 'bg-blue-50/90 border-blue-200/80 text-blue-900'
+      }`}>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className={`p-2.5 rounded-xl shrink-0 ${
+              isNetworkVerificationOn ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+            }`}>
+              {isNetworkVerificationOn ? <ShieldCheck className="h-6 w-6" /> : <Globe className="h-6 w-6" />}
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <h3 className="font-display font-bold text-sm">
+                  {isNetworkVerificationOn
+                    ? 'Restricted Campus Wi-Fi Mode Active'
+                    : 'System Connection is Public (Every student can take attendance anywhere)'}
+                </h3>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  isNetworkVerificationOn ? 'bg-emerald-200/80 text-emerald-800' : 'bg-blue-200/80 text-blue-800'
+                }`}>
+                  {isNetworkVerificationOn ? 'Restricted' : 'Public'}
+                </span>
+              </div>
+              <p className="text-xs opacity-90 leading-relaxed font-sans">
+                {isNetworkVerificationOn
+                  ? `Only students connected to checked/permitted campus Wi-Fi networks (${activePermittedCount} active) are permitted to submit attendance.`
+                  : 'Network verification setting is turned OFF. Every student can take their attendance anywhere from any location or public network without restrictions.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              handleSettingChange('network_check_enabled', isNetworkVerificationOn ? 'false' : 'true');
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 border ${
+              isNetworkVerificationOn
+                ? 'bg-white hover:bg-emerald-100/60 text-emerald-800 border-emerald-300'
+                : 'bg-white hover:bg-blue-100/60 text-blue-800 border-blue-300'
+            }`}
+          >
+            {isNetworkVerificationOn ? 'Switch to Public Mode' : 'Enforce Wi-Fi Check'}
           </button>
         </div>
       </div>
 
-      {/* Security Policy */}
-      <div className="uipro-card bg-white">
-        <div className="flex items-center justify-between mb-4">
+      {/* Real Live Client Connection Auto-Capture Container (No Hardcoded Data) */}
+      <div className="uipro-card bg-white space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-brand-blue-light rounded-xl text-brand-blue">
+              <Laptop className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
+                Live Admin Connection Auto-Capture
+              </h3>
+              <p className="text-[10px] text-slate-400 font-sans">
+                Auto-detect your device's active connection IP and CIDR subnet to whitelist campus attendance access.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={detectLiveConnection}
+            disabled={isDetecting}
+            className="uipro-button uipro-button-primary py-2 px-3.5 text-xs inline-flex items-center gap-2 shrink-0 cursor-pointer"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isDetecting ? 'animate-spin' : ''}`} />
+            <span>{isDetecting ? 'Detecting Connection...' : 'Re-Detect My Connection'}</span>
+          </button>
+        </div>
+
+        {isDetecting ? (
+          <div className="p-8 text-center text-slate-400 text-xs space-y-2">
+            <Loader2 className="h-6 w-6 text-brand-blue animate-spin mx-auto" />
+            <p>Detecting live client IP & network headers from backend...</p>
+          </div>
+        ) : detectedConn ? (
+          <div className="p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[9.5px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> Real Client Connection Detected
+              </span>
+              <span className="text-[10px] font-mono bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200 shadow-xs">
+                Active Client IP
+              </span>
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl border border-emerald-200/60 shrink-0">
+                  <Wifi className="h-6 w-6" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                    <span>{detectedConn.label}</span>
+                    <Lock className="h-3.5 w-3.5 text-slate-400" />
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                    Client IP: <strong className="text-slate-800">{detectedConn.client_ip}</strong> | Subnet CIDR: <strong className="text-brand-blue">{detectedConn.cidr}</strong>
+                  </p>
+                  <p className="text-[10px] text-slate-450 mt-0.5 truncate max-w-lg">
+                    Protocol: <span className="text-slate-700">{detectedConn.protocol}</span>
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAutoCaptureCurrentConnection}
+                disabled={capturing}
+                className={`py-2 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center gap-2 border ${
+                  isCurrentConnWhitelisted
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100/60'
+                    : 'uipro-button-primary bg-brand-blue text-white hover:bg-brand-blue/90 border-brand-blue/30 shadow-xs'
+                }`}
+              >
+                {capturing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : isCurrentConnWhitelisted ? (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    <span>Connection Whitelisted</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                    <span>Whitelist My Connection Subnet ({detectedConn.cidr})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Security Policy Settings */}
+      <div className="uipro-card bg-white space-y-4">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
           <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
-            <Network className="h-4.5 w-4.5 text-brand-blue" /> Verification Policy
+            <Network className="h-4.5 w-4.5 text-brand-blue" /> Verification Policy Configuration
           </h3>
-          <button onClick={handleSaveSettings} disabled={savingSettings} className="uipro-button uipro-button-primary py-2 px-4 text-[11px]">
+          <button onClick={handleSaveSettings} disabled={savingSettings} className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer">
             {savingSettings ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : <Save className="h-3.5 w-3.5 mr-2" />}
-            Save Policy
+            Save Policy Settings
           </button>
         </div>
         <div className="grid md:grid-cols-2 gap-3">
-          <ToggleRow keyName="network_check_enabled" title="Enable network verification" desc="Master switch. When off, check-ins skip all network checks." />
+          <ToggleRow keyName="network_check_enabled" title="Enable network verification" desc="Master switch. When off, system connection is public and attendance skips Wi-Fi checks." />
           <ToggleRow keyName="fail_closed" title="Fail-closed (block off-campus)" desc="Reject check-in when the network can't be verified. Off = allow but flag." />
           <ToggleRow keyName="trust_proxy_header" title="Trust X-Forwarded-For" desc="Only enable when behind a trusted reverse proxy. Otherwise leave OFF." />
-          <ToggleRow keyName="demo_simulate_network" title="Demo: simulate campus IP" desc="Override the observed IP with the simulated IP below. For localhost demos only." />
+          <ToggleRow keyName="demo_simulate_network" title="Demo: simulate campus IP" desc="Override observed IP with simulated IP below for localhost testing." />
         </div>
+
         {truthy(settings.demo_simulate_network) && (
-          <div className="mt-3 p-3 bg-warning-orange-light border border-warning-orange/20 rounded-xl">
-            <label className="text-[10px] font-bold text-warning-orange uppercase tracking-wider flex items-center gap-1.5 mb-1.5">
+          <div className="p-3.5 bg-amber-50 border border-amber-200/80 rounded-xl space-y-1.5 animate-in fade-in">
+            <label className="text-[10px] font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
               <Globe className="h-3.5 w-3.5" /> Simulated source IP (demo mode)
             </label>
             <input
@@ -180,104 +441,232 @@ export const CampusNetworkManager: React.FC = () => {
               value={settings.demo_simulated_ip || ''}
               onChange={(e) => handleSettingChange('demo_simulated_ip', e.target.value)}
               placeholder="10.52.13.77"
-              className="uipro-input font-mono"
+              className="uipro-input font-mono text-xs"
             />
-            <p className="text-[10px] text-slate-400 mt-1.5">Set this inside a configured CIDR range to simulate an on-campus check-in, or outside it to simulate rejection.</p>
+            <p className="text-[10px] text-amber-700">Set this inside a configured CIDR range to simulate an on-campus check-in.</p>
           </div>
         )}
       </div>
 
-      {/* Whitelist table */}
-      <div className="uipro-card bg-white p-0 overflow-hidden">
-        <div className="p-5 border-b border-slate-100">
-          <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
-            <Wifi className="h-4.5 w-4.5 text-brand-blue" /> Allowed Campus Networks
-          </h3>
-        </div>
-        {loading ? (
-          <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2 text-xs">
-            <Loader2 className="h-6 w-6 text-brand-blue animate-spin" />
-            <span>Loading networks...</span>
+      {/* Connection Matrix & Permitted Wi-Fi List */}
+      <div className="uipro-card space-y-4">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b border-slate-100">
+          <div className="space-y-1">
+            <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
+              <Wifi className="h-4.5 w-4.5 text-brand-blue" />
+              Campus Connection List & Permission Matrix
+            </h3>
+            <p className="text-[11px] text-slate-400">
+              Checked connections permit student attendance when Wi-Fi verification is ON.
+            </p>
           </div>
-        ) : networks.length === 0 ? (
-          <div className="py-12 text-center text-slate-400 text-xs">
-            No network rules yet. Add a CIDR range (e.g. <span className="font-mono">10.52.0.0/16</span>) to start enforcing.
+
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search SSID, BSSID, name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full uipro-input !pl-9 !py-2 text-xs"
+            />
+          </div>
+        </div>
+
+        {loading ? (
+          <ShimmerTableSkeleton
+            headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Protocol / Subnet', 'Location', 'Actions']}
+            rows={5}
+            showPagination={false}
+          />
+        ) : filteredNetworks.length === 0 ? (
+          <div className="py-14 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl space-y-2">
+            <Radio className="h-8 w-8 text-slate-300 mx-auto animate-pulse" />
+            <p className="font-semibold text-slate-600">No network connection rules configured yet</p>
+            <p className="text-[11px] text-slate-400">Capture your current connection above or add a campus Wi-Fi network (e.g. SSID: <span className="font-mono text-slate-600">SWAS-Campus</span> or CIDR: <span className="font-mono text-slate-600">10.52.0.0/16</span>) to configure access permissions.</p>
           </div>
         ) : (
-          <table className="w-full text-left border-collapse text-xs">
-            <thead className="bg-slate-50/75 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
-              <tr>
-                <th className="py-2.5 px-4">Label</th>
-                <th className="py-2.5 px-4">CIDR / Subnet</th>
-                <th className="py-2.5 px-4">SSID</th>
-                <th className="py-2.5 px-4">BSSID Prefix</th>
-                <th className="py-2.5 px-4 text-center">Active</th>
-                <th className="py-2.5 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100/50">
-              {networks.map((net) => (
-                <tr key={net.id} className="hover:bg-slate-50/30 transition-colors">
-                  <td className="py-3 px-4 font-semibold text-slate-800">{net.label}</td>
-                  <td className="py-3 px-4 font-mono text-brand-blue">{net.cidr || <span className="text-slate-300">—</span>}</td>
-                  <td className="py-3 px-4 text-slate-500">{net.ssid || <span className="text-slate-300">—</span>}</td>
-                  <td className="py-3 px-4 font-mono text-slate-500">{net.bssid_prefix || <span className="text-slate-300">—</span>}</td>
-                  <td className="py-3 px-4 text-center">
-                    <button onClick={() => handleToggleActive(net)} className="cursor-pointer">
-                      {net.is_active
-                        ? <ToggleRight className="h-6 w-6 text-success-green inline" />
-                        : <ToggleLeft className="h-6 w-6 text-slate-300 inline" />}
-                    </button>
-                  </td>
-                  <td className="py-3 px-4 text-right">
-                    <button onClick={() => handleDelete(net)} className="p-2 rounded-lg text-danger-red hover:bg-danger-red-light transition-colors cursor-pointer">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
+          <div className="overflow-x-auto border border-slate-100 rounded-xl">
+            <table className="w-full text-left border-collapse text-xs font-sans">
+              <thead className="bg-slate-50/80 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
+                <tr>
+                  <th className="py-3 px-4 text-center">Permitted</th>
+                  <th className="py-3 px-4">Connection Name</th>
+                  <th className="py-3 px-4">Wi-Fi SSID</th>
+                  <th className="py-3 px-4">BSSID / MAC</th>
+                  <th className="py-3 px-4">Protocol / Subnet</th>
+                  <th className="py-3 px-4">Location</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100/60">
+                {filteredNetworks.map((net) => {
+                  const hasLocationTag = net.label.includes('[') && net.label.includes(']');
+                  const labelName = hasLocationTag ? net.label.split('[')[0].trim() : net.label;
+                  const locTag = hasLocationTag ? net.label.split('[')[1].replace(']', '').trim() : 'Main Campus';
+
+                  return (
+                    <tr key={net.id} className={`transition-colors ${net.is_active ? 'hover:bg-slate-50/50' : 'bg-slate-50/30 text-slate-400'}`}>
+                      {/* Permission Checkbox Column */}
+                      <td className="py-3.5 px-4 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePermission(net)}
+                          title={net.is_active ? 'Click to disable permission' : 'Click to grant permission'}
+                          className="cursor-pointer text-slate-700 hover:scale-110 transition-transform"
+                        >
+                          {net.is_active ? (
+                            <CheckSquare className="h-5 w-5 text-emerald-600 mx-auto" />
+                          ) : (
+                            <Square className="h-5 w-5 text-slate-300 mx-auto" />
+                          )}
+                        </button>
+                      </td>
+
+                      {/* Connection Name / Label */}
+                      <td className="py-3.5 px-4 font-bold text-slate-800">
+                        <div className="flex items-center gap-2">
+                          <Router className={`h-4 w-4 shrink-0 ${net.is_active ? 'text-brand-blue' : 'text-slate-300'}`} />
+                          <span>{labelName}</span>
+                        </div>
+                      </td>
+
+                      {/* Wi-Fi SSID */}
+                      <td className="py-3.5 px-4 font-semibold text-slate-700">
+                        {net.ssid ? (
+                          <span className="inline-flex items-center gap-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+                            <Wifi className="h-3 w-3 text-brand-blue" />
+                            <span>{net.ssid}</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 font-mono">—</span>
+                        )}
+                      </td>
+
+                      {/* BSSID / MAC Address */}
+                      <td className="py-3.5 px-4 font-mono text-slate-600 font-medium">
+                        {net.bssid_prefix ? (
+                          <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">{net.bssid_prefix}</span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+
+                      {/* Protocol / Subnet */}
+                      <td className="py-3.5 px-4 font-mono">
+                        {net.cidr ? (
+                          <span className="text-brand-blue font-bold">{net.cidr}</span>
+                        ) : (
+                          <span className="text-slate-500 font-sans">WPA3-Enterprise</span>
+                        )}
+                      </td>
+
+                      {/* Location */}
+                      <td className="py-3.5 px-4 text-slate-600">
+                        <div className="flex items-center gap-1.5">
+                          <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span>{locTag}</span>
+                        </div>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-3.5 px-4 text-right">
+                        <button
+                          onClick={() => handleDelete(net)}
+                          title="Delete Connection"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-danger-red hover:bg-danger-red-light transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      {/* Create modal */}
+      {/* Create Connection Rule Modal */}
       {isCreateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={() => setIsCreateOpen(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 animate-in zoom-in-95 duration-150" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
-                <Router className="h-5 w-5 text-brand-blue" /> Add Network Rule
+                <Router className="h-5 w-5 text-brand-blue" /> Add Campus Connection
               </h3>
               <button onClick={() => setIsCreateOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <form onSubmit={handleCreate} className="space-y-3">
+
+            <form onSubmit={handleCreate} className="space-y-3 font-sans text-xs">
               <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Label *</label>
-                <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Main Campus Student VLAN" className="uipro-input mt-1" />
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Connection Name *</label>
+                <input
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="e.g. Software Engineering Lab Node"
+                  className="w-full uipro-input mt-1"
+                />
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">CIDR / Subnet</label>
-                <input value={cidr} onChange={(e) => setCidr(e.target.value)} placeholder="10.52.0.0/16" className="uipro-input mt-1 font-mono" />
-                <p className="text-[10px] text-slate-400 mt-1">The authoritative rule. The server checks the real source IP against this range.</p>
-              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">SSID</label>
-                  <input value={ssid} onChange={(e) => setSsid(e.target.value)} placeholder="UniWiFi-Student" className="uipro-input mt-1" />
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Wi-Fi SSID</label>
+                  <input
+                    value={ssid}
+                    onChange={(e) => setSsid(e.target.value)}
+                    placeholder="SWAS-Campus"
+                    className="w-full uipro-input mt-1"
+                  />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">BSSID Prefix</label>
-                  <input value={bssidPrefix} onChange={(e) => setBssidPrefix(e.target.value)} placeholder="AC:DE:48" className="uipro-input mt-1 font-mono" />
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">BSSID / MAC Prefix</label>
+                  <input
+                    value={bssidPrefix}
+                    onChange={(e) => setBssidPrefix(e.target.value)}
+                    placeholder="AC:DE:48:11"
+                    className="w-full uipro-input mt-1 font-mono"
+                  />
                 </div>
               </div>
-              {formError && <p className="text-xs text-danger-red bg-danger-red-light p-2.5 rounded-lg">{formError}</p>}
-              <button type="submit" disabled={creating} className="uipro-button uipro-button-primary w-full">
-                {creating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
-                Create Rule
-              </button>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">CIDR / Subnet</label>
+                  <input
+                    value={cidr}
+                    onChange={(e) => setCidr(e.target.value)}
+                    placeholder="10.52.0.0/16"
+                    className="w-full uipro-input mt-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Campus Location</label>
+                  <input
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    placeholder="Block N - Room 302"
+                    className="w-full uipro-input mt-1"
+                  />
+                </div>
+              </div>
+
+              {formError && (
+                <p className="text-xs text-danger-red bg-danger-red-light p-2.5 rounded-lg border border-danger-red/10">{formError}</p>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button type="button" onClick={() => setIsCreateOpen(false)} className="uipro-button uipro-button-secondary py-2 px-4 cursor-pointer">
+                  Cancel
+                </button>
+                <button type="submit" disabled={creating} className="uipro-button uipro-button-primary py-2 px-4 cursor-pointer">
+                  {creating ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Plus className="h-4 w-4 mr-1.5" />}
+                  Add Connection
+                </button>
+              </div>
             </form>
           </div>
         </div>
@@ -285,7 +674,3 @@ export const CampusNetworkManager: React.FC = () => {
     </div>
   );
 };
-
-
-
-

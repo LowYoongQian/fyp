@@ -19,6 +19,7 @@ import {
   Clock,
   UserCheck
 } from 'lucide-react';
+import { ShimmerCard } from '../../components/Shimmer';
 
 interface TargetPickerProps {
   scope: 'all' | 'programme' | 'course';
@@ -384,10 +385,10 @@ export const AnnouncementManager: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-xl font-display font-bold text-slate-900 flex items-center gap-2.5">
               <Megaphone className="h-5.5 w-5.5 text-brand-blue animate-bounce" />
-              Faculty Announcements Hub
+              Announcements
             </h2>
             <p className="text-xs text-slate-500 font-sans">
-              Create, schedule, target, and publish announcements with images and custom priority levels.
+              Create and publish notices for students and staff.
             </p>
           </div>
           <button
@@ -395,7 +396,7 @@ export const AnnouncementManager: React.FC = () => {
             className="uipro-button uipro-button-primary shrink-0 self-start md:self-auto hover:scale-102 active:scale-98 transition-all"
           >
             <Plus className="h-4 w-4 mr-2" />
-            Publish Notice
+            New Announcement
           </button>
         </div>
       </div>
@@ -403,9 +404,11 @@ export const AnnouncementManager: React.FC = () => {
       {/* Directory Listings */}
       <div className="space-y-4">
         {loading ? (
-          <div className="uipro-card py-20 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs">
-            <Loader2 className="h-8 w-8 text-brand-blue animate-spin" />
-            <span>Retrieving bulletins...</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <ShimmerCard />
+            <ShimmerCard />
+            <ShimmerCard />
+            <ShimmerCard />
           </div>
         ) : error ? (
           <div className="uipro-card py-12 text-center text-danger-red font-sans text-xs bg-danger-red-light border border-danger-red/10 rounded-xl">

@@ -113,9 +113,9 @@ export const StudentDashboard: React.FC = () => {
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex gap-4 text-xs text-red-800 shadow-sm animate-bounce">
           <AlertCircle className="h-5 w-5 text-red-650 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <span className="font-bold uppercase tracking-wider block">Active Check-In Window Open!</span>
+            <span className="font-bold uppercase tracking-wider block">Class Check-In Open!</span>
             <span>
-              You have {activeSessions.length} active class gate(s) open for check-in. Please launch the <strong>Flutter Mobile App</strong> on your phone to complete your face and WiFi check-in.
+              You have {activeSessions.length} active class check-in(s) open. Open the mobile app on your phone to check in.
             </span>
           </div>
         </div>
@@ -160,7 +160,7 @@ export const StudentDashboard: React.FC = () => {
 
         <div className="uipro-card bg-white/85 border border-slate-200/50 p-5 rounded-2xl shadow-sm flex items-center justify-between">
           <div className="space-y-1">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Overall Attendance Rate</span>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Attendance Rate</span>
             <span className="text-2xl font-display font-extrabold text-slate-800">{overallAttendance}%</span>
             <div className="flex items-center gap-1">
               <Activity className="h-3 w-3 text-emerald-500" />
@@ -174,12 +174,12 @@ export const StudentDashboard: React.FC = () => {
 
         <div className="uipro-card bg-white/85 border border-slate-200/50 p-5 rounded-2xl shadow-sm flex items-center justify-between">
           <div className="space-y-1">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Facial Verification Status</span>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Face Registration</span>
             <span className="text-sm font-extrabold text-slate-800 block pt-1">
-              {student?.is_face_registered ? 'Verified' : 'Not Registered'}
+              {student?.is_face_registered ? 'Registered' : 'Not Registered'}
             </span>
             <span className="text-[10px] text-slate-450 block font-medium">
-              {student?.is_face_registered ? 'Biometric check-in enabled' : 'Please register face via mobile app'}
+              {student?.is_face_registered ? 'Face check-in ready' : 'Register face in mobile app'}
             </span>
           </div>
           <div className={`p-3 rounded-xl ${student?.is_face_registered ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-650'}`}>
@@ -259,7 +259,7 @@ export const StudentDashboard: React.FC = () => {
               <ul className="list-disc pl-4 space-y-2 leading-relaxed font-medium">
                 <li>Launch the <strong className="text-slate-800">Flutter Mobile App</strong>.</li>
                 <li>Verify your <strong className="text-slate-800">Selfie facial signature</strong> (ensure good lighting).</li>
-                <li>Connect to the <strong className="text-slate-800">TARUMT Campus WiFi</strong> network.</li>
+                <li>Connect to the <strong className="text-slate-800">SWAS Campus WiFi</strong> network.</li>
                 <li>Complete the <strong className="text-slate-800">Liveness challenge prompt</strong> before the window closes.</li>
               </ul>
             </div>

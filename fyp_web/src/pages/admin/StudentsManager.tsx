@@ -18,6 +18,7 @@ import {
   Loader2,
   AlertCircle
 } from 'lucide-react';
+import { ShimmerTableSkeleton } from '../../components/Shimmer';
 
 export const StudentsManager: React.FC = () => {
   const [students, setStudents] = useState<AdminStudent[]>([]);
@@ -161,10 +162,10 @@ export const StudentsManager: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-xl font-display font-bold text-slate-900 flex items-center gap-2.5">
               <Users className="h-5.5 w-5.5 text-brand-blue" />
-              Student Registry Directory
+              Students
             </h2>
             <p className="text-xs text-slate-500 font-sans">
-              Create, read, update, and cascadingly delete student enrolment profiles and credentials.
+              Manage student profiles and accounts.
             </p>
           </div>
           <button
@@ -172,7 +173,7 @@ export const StudentsManager: React.FC = () => {
             className="uipro-button uipro-button-primary shrink-0 self-start md:self-auto"
           >
             <Plus className="h-4 w-4 mr-2" />
-            Register Student
+            Add Student
           </button>
         </div>
       </div>
@@ -184,7 +185,7 @@ export const StudentsManager: React.FC = () => {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by name, student code (TP-ID), or email..."
+            placeholder="Search by name, student code, or email..."
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
             className="w-full uipro-input !pl-10"
@@ -193,27 +194,28 @@ export const StudentsManager: React.FC = () => {
 
         {/* Directory Output */}
         {loading ? (
-          <div className="py-20 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs">
-            <Loader2 className="h-8 w-8 text-brand-blue animate-spin" />
-            <span>Retrieving students from registry...</span>
-          </div>
+          <ShimmerTableSkeleton
+            headers={['Student Name', 'Student Code', 'Email', 'Face Status', 'Actions']}
+            rows={6}
+            showPagination={true}
+          />
         ) : error ? (
           <div className="py-12 text-center text-danger-red font-sans text-xs bg-danger-red-light border border-danger-red/10 rounded-xl">
             {error}
           </div>
         ) : filteredStudents.length === 0 ? (
           <div className="py-16 text-center text-slate-400 font-sans text-xs border border-dashed border-slate-200 rounded-xl">
-            No matching students found in the registry.
+            No matching students found.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse font-sans text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
-                  <th className="py-3 px-4">Student Details</th>
+                  <th className="py-3 px-4">Student Name</th>
                   <th className="py-3 px-4">Student Code</th>
                   <th className="py-3 px-4">Email</th>
-                  <th className="py-3 px-4">Biometrics status</th>
+                  <th className="py-3 px-4">Face Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -226,11 +228,11 @@ export const StudentsManager: React.FC = () => {
                     <td className="py-3.5 px-4">
                       {student.is_face_registered ? (
                         <span className="uipro-badge uipro-badge-success">
-                          <CheckCircle className="h-3 w-3 mr-1" /> Verified
+                          <CheckCircle className="h-3 w-3 mr-1" /> Registered
                         </span>
                       ) : (
                         <span className="uipro-badge uipro-badge-warning">
-                          <XCircle className="h-3 w-3 mr-1" /> Missing selfie
+                          <XCircle className="h-3 w-3 mr-1" /> Not Registered
                         </span>
                       )}
                     </td>

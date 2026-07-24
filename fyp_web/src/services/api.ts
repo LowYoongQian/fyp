@@ -26,6 +26,10 @@ api.interceptors.request.use((config) => {
 const apiCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 30000; // 30 seconds cache TTL
 
+export const clearApiCache = () => {
+  apiCache.clear();
+};
+
 // Helper to handle cached GET requests
 export const cachedGet = async (url: string, params?: any): Promise<any> => {
   const cacheKey = JSON.stringify({ url, params });
@@ -595,6 +599,10 @@ export const apiService = {
   },
 
   // Campus Network whitelist + security settings
+  adminDetectCurrentConnection: async (): Promise<{ client_ip: string; cidr: string; label: string; user_agent: string; protocol: string }> => {
+    const response = await api.get('/admin/detect-connection');
+    return response.data;
+  },
   adminGetCampusNetworks: async (): Promise<CampusNetwork[]> => {
     return cachedGet('/admin/campus-networks');
   },
