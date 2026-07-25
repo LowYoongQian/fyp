@@ -136,4 +136,19 @@ class UserService {
       return false;
     }
   }
+
+  static Future<Map<String, dynamic>?> fetchSystemLanguages() async {
+    try {
+      final url = Uri.parse('${ApiConfig.baseUrl}/api/v1/system/languages');
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error fetching system languages in Flutter: $e');
+      return null;
+    }
+  }
 }

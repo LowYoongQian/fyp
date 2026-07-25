@@ -282,9 +282,12 @@ def get_public_announcements():
 @app.get("/api/v1/system/languages")
 def get_system_languages():
     import json
-    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "languages.json")
-    if os.path.exists(json_path):
-        with open(json_path, "r", encoding="utf-8") as f:
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "languages.json")
+    root_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "languages.json")
+    
+    target_path = local_path if os.path.exists(local_path) else root_path
+    if os.path.exists(target_path):
+        with open(target_path, "r", encoding="utf-8") as f:
             return json.load(f)
     return {"supportedLanguages": [], "translations": {}}
 

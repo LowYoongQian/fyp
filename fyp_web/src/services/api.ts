@@ -688,4 +688,7 @@ export const apiService = {
     const response = await api.post(`/auth/logout-session?session_id=${sessionId}`);
     return response.data;
   },
+  fetchSystemLanguages: async () => {
+    return cachedGet('/api/v1/system/languages');
+  },
 };
