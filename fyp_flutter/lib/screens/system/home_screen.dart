@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../widgets/glass_card.dart';
 import '../../main.dart';
-import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final List<Map<String, dynamic>> announcements;
@@ -119,24 +118,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 IconButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                    );
-                  },
-                  icon: Icon(Icons.person_rounded, color: slateTextColor, size: 20),
-                  style: IconButton.styleFrom(
-                    backgroundColor: isDarkMode ? const Color(0xFF1E1E1E).withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.5),
-                    padding: const EdgeInsets.all(8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: isDarkMode ? const Color(0xFF334155).withValues(alpha: 0.5) : const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                IconButton(
                   onPressed: widget.onSettingsPressed,
                   icon: Icon(Icons.settings, color: slateTextColor, size: 20),
                   style: IconButton.styleFrom(
@@ -166,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
-                     decoration: BoxDecoration(
+                    decoration: BoxDecoration(
                       gradient: const LinearGradient(
                         colors: [Color(0xFF2563EB), Color(0xFF3B82F6)],
                         begin: Alignment.topLeft,
@@ -404,7 +385,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         try {
                           final base64Clean = imageBase64.split(',').last;
                           final decodedBytes = base64Decode(base64Clean);
-                           bgImage = DecorationImage(
+                          bgImage = DecorationImage(
                             image: MemoryImage(decodedBytes),
                             fit: BoxFit.cover,
                             colorFilter: ColorFilter.mode(

@@ -16,6 +16,8 @@ import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { AcademicManager } from './pages/admin/AcademicManager';
 import { AttendanceManager } from './pages/admin/AttendanceManager';
 import { StudentDashboard } from './pages/student/StudentDashboard';
+import { StudentMC } from './pages/student/StudentMC';
+import { StudentContact } from './pages/student/StudentContact';
 import {
   ShimmerPage,
   ShimmerTimetable,
@@ -112,8 +114,10 @@ const DashboardContent: React.FC = () => {
     if (tabLoading) {
       switch (currentTab) {
         case 'dashboard':
+        case 'student_dashboard':
           return <ShimmerDashboard />;
         case 'timetable':
+        case 'student_timetable':
           return <ShimmerTimetable />;
         case 'attendance':
           return <ShimmerAttendance />;
@@ -123,10 +127,9 @@ const DashboardContent: React.FC = () => {
           return <ShimmerAtRisk />;
         case 'chatbot':
           return <ShimmerChatbot />;
-        case 'student_dashboard':
-          return <ShimmerDashboard />;
-        case 'student_timetable':
-          return <ShimmerTimetable />;
+        case 'student_mc':
+        case 'student_contact':
+          return <ShimmerPage />;
         case 'admin_dashboard':
         case 'admin_academic':
         case 'admin_attendance':
@@ -157,6 +160,10 @@ const DashboardContent: React.FC = () => {
         return <StudentDashboard />;
       case 'student_timetable':
         return <Timetable />;
+      case 'student_mc':
+        return <StudentMC />;
+      case 'student_contact':
+        return <StudentContact />;
       case 'admin_dashboard':
         return <AdminDashboard />;
       case 'admin_academic':

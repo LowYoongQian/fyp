@@ -53,6 +53,19 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
       return widget.child;
     }
 
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final shimmerColors = isDarkMode
+        ? [
+            const Color(0xFF1E293B),
+            const Color(0xFF334155),
+            const Color(0xFF1E293B),
+          ]
+        : [
+            Colors.grey.shade300,
+            Colors.grey.shade100,
+            Colors.grey.shade300,
+          ];
+
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
@@ -61,11 +74,7 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
           blendMode: BlendMode.srcATop,
           shaderCallback: (bounds) {
             return LinearGradient(
-              colors: [
-                Colors.grey.shade300,
-                Colors.grey.shade100,
-                Colors.grey.shade300,
-              ],
+              colors: shimmerColors,
               stops: const [0.1, 0.5, 0.9],
               begin: Alignment(-1.0 + (val * 2.0), -0.3),
               end: Alignment(0.0 + (val * 2.0), 0.3),
@@ -88,6 +97,10 @@ class ShimmerSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final baseColor = isDarkMode ? const Color(0xFF1E293B) : Colors.grey.shade300;
+    final accentColor = isDarkMode ? const Color(0xFF334155) : Colors.grey.shade400;
+
     return SingleChildScrollView(
       physics: const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16.0),
@@ -104,7 +117,7 @@ class ShimmerSkeleton extends StatelessWidget {
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
+                      color: baseColor,
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
@@ -112,18 +125,18 @@ class ShimmerSkeleton extends StatelessWidget {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(width: 100, height: 12, color: Colors.grey.shade300),
+                      Container(width: 100, height: 12, color: baseColor),
                       const SizedBox(height: 6),
-                      Container(width: 60, height: 8, color: Colors.grey.shade300),
+                      Container(width: 60, height: 8, color: baseColor),
                     ],
                   ),
                 ],
               ),
               Row(
                 children: [
-                  Container(width: 34, height: 34, decoration: BoxDecoration(color: Colors.grey.shade300, shape: BoxShape.circle)),
+                  Container(width: 34, height: 34, decoration: BoxDecoration(color: baseColor, shape: BoxShape.circle)),
                   const SizedBox(width: 8),
-                  Container(width: 34, height: 34, decoration: BoxDecoration(color: Colors.grey.shade300, shape: BoxShape.circle)),
+                  Container(width: 34, height: 34, decoration: BoxDecoration(color: baseColor, shape: BoxShape.circle)),
                 ],
               ),
             ],
@@ -134,20 +147,20 @@ class ShimmerSkeleton extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: baseColor,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Row(
               children: [
-                CircleAvatar(radius: 24, backgroundColor: Colors.grey.shade400),
+                CircleAvatar(radius: 24, backgroundColor: accentColor),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(width: 120, height: 14, color: Colors.grey.shade400),
+                      Container(width: 120, height: 14, color: accentColor),
                       const SizedBox(height: 8),
-                      Container(width: 180, height: 10, color: Colors.grey.shade400),
+                      Container(width: 180, height: 10, color: accentColor),
                     ],
                   ),
                 ),
@@ -160,21 +173,21 @@ class ShimmerSkeleton extends StatelessWidget {
           Container(
             height: 40,
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: baseColor,
               borderRadius: BorderRadius.circular(12),
             ),
           ),
           const SizedBox(height: 24),
 
           // Session Header mockup
-          Container(width: 160, height: 14, color: Colors.grey.shade300),
+          Container(width: 160, height: 14, color: baseColor),
           const SizedBox(height: 12),
 
           // Session Card mockup 1
           Container(
             height: 120,
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: baseColor,
               borderRadius: BorderRadius.circular(16),
             ),
           ),
@@ -184,20 +197,20 @@ class ShimmerSkeleton extends StatelessWidget {
           Container(
             height: 120,
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: baseColor,
               borderRadius: BorderRadius.circular(16),
             ),
           ),
           const SizedBox(height: 24),
 
           // Announcements mockup
-          Container(width: 150, height: 14, color: Colors.grey.shade300),
+          Container(width: 150, height: 14, color: baseColor),
           const SizedBox(height: 12),
 
           Container(
             height: 100,
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: baseColor,
               borderRadius: BorderRadius.circular(16),
             ),
           ),

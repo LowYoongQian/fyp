@@ -1,12 +1,13 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import '../../widgets/glass_card.dart';
+import '../../widgets/shimmer_loading.dart';
 import '../../main.dart';
+import '../system/profile_screen.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 3: Lecturer/Staff Dashboard widget
@@ -42,417 +43,356 @@ class StaffDashboard extends StatefulWidget {
 }
 
 class _StaffDashboardState extends State<StaffDashboard> {
-  List<Map<String, dynamic>> myCourses = [];
-  List<Map<String, dynamic>> myTimetable = [];
-  List<Map<String, dynamic>> myActiveSessions = [];
-  bool isLoading = false;
+  bool isLoading = true;
   String? loadError;
-  int? selectedCourseId;
-  String selectedGroup = 'All';
-  Timer? _countdownTimer;
+
+  List<dynamic> myTimetable = [];
+  List<dynamic> myActiveSessions = [];
+
+  Timer? _poller;
 
   @override
   void initState() {
     super.initState();
     loadLecturerData();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (mounted) {
-        setState(() {});
-      }
-    });
+    _poller = Timer.periodic(const Duration(seconds: 10), (_) => fetchActiveSessions());
   }
 
   @override
   void dispose() {
-    _countdownTimer?.cancel();
+    _poller?.cancel();
     super.dispose();
   }
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (widget.authToken.isNotEmpty) 'Authorization': 'Bearer ${widget.authToken}',
-      };
-
-  String _friendlyError(Object e) {
-    final msg = e.toString().replaceAll("Exception: ", "");
-    if (e is TimeoutException) {
-      return "Server timed out. Check your connection and that the backend is running.";
-    }
-    if (msg.contains("SocketException") || msg.contains("Connection")) {
-      return "Cannot reach the server. Make sure the backend is running.";
-    }
-    return msg;
-  }
-
-  String _detailOf(http.Response r, String fallback) {
-    try {
-      return (jsonDecode(r.body)['detail'] ?? fallback) as String;
-    } catch (_) {
-      return fallback;
-    }
-  }
-
-  String _fmtTime(String? iso) {
-    if (iso == null) return "";
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return "";
-    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
-    return "${h.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')} ${dt.hour >= 12 ? 'PM' : 'AM'}";
-  }
-
-  // Load lecturer courses, timetable, and active sessions from the backend API.
   Future<void> loadLecturerData() async {
-    if (isLoading) return;
+    if (!mounted) return;
     setState(() {
       isLoading = true;
       loadError = null;
     });
 
     try {
-      // 1. Courses taught by this lecturer
-      final coursesResp = await http
-          .get(Uri.parse('${widget.apiBaseUrl}/sessions/my-courses'), headers: _headers)
-          .timeout(const Duration(seconds: 12));
-      if (coursesResp.statusCode != 200) {
-        throw Exception(_detailOf(coursesResp, 'Could not load courses (${coursesResp.statusCode}).'));
-      }
-      final List<dynamic> rawCourses = jsonDecode(coursesResp.body) as List<dynamic>;
-      final courses = rawCourses
-          .map((c) => {'id': c['id'] as int, 'name': c['course_name'] ?? 'Unknown', 'code': c['course_code'] ?? '?'})
-          .toList();
+      final ttUri = Uri.parse("${widget.apiBaseUrl}/staff/${widget.staffId}/timetable");
+      final ttRes = await http.get(ttUri, headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+        "Content-Type": "application/json",
+      }).timeout(const Duration(seconds: 8));
 
-      // 2. Timetable slots for this lecturer
-      final timetableResp = await http
-          .get(Uri.parse('${widget.apiBaseUrl}/lecturers/me/timetable'), headers: _headers)
-          .timeout(const Duration(seconds: 12));
-      if (timetableResp.statusCode != 200) {
-        throw Exception(_detailOf(timetableResp, 'Could not load timetable (${timetableResp.statusCode}).'));
+      if (ttRes.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(ttRes.body);
+        myTimetable = data;
       }
-      final List<dynamic> rawTimetable = jsonDecode(timetableResp.body) as List<dynamic>;
-      final timetable = rawTimetable.map((t) => {
-        'id': t['id'] as int,
-        'courseId': t['course_id'] as int,
-        'courseCode': t['course_code'] ?? '',
-        'courseName': t['course_name'] ?? '',
-        'day': t['schedule_day'] ?? '',
-        'startTime': t['schedule_start'] ?? '',
-        'endTime': t['schedule_end'] ?? '',
-        'room': t['schedule_room'] ?? '',
-        'role': t['role'] ?? 'Lecture',
-      }).toList();
 
-      // 3. Active sessions for this lecturer's courses
-      final sessResp = await http
-          .get(Uri.parse('${widget.apiBaseUrl}/sessions/active'), headers: _headers)
-          .timeout(const Duration(seconds: 12));
-      if (sessResp.statusCode != 200) {
-        throw Exception(_detailOf(sessResp, 'Could not load sessions (${sessResp.statusCode}).'));
-      }
-      final List<dynamic> rawSessions = jsonDecode(sessResp.body) as List<dynamic>;
-      final courseById = {for (final c in courses) c['id']: c};
-      final sessions = rawSessions.map((s) {
-        final c = courseById[s['course_id']];
-        return {
-          'sessionId': s['id'],
-          'courseId': s['course_id'],
-          'courseCode': c?['code'] ?? '?',
-          'courseName': c?['name'] ?? 'Course ${s['course_id']}',
-          'classGroup': s['class_group'] ?? 'All',
-          'time': "Opened at ${_fmtTime(s['opened_at'])}",
-        };
-      }).toList();
-
-      setState(() {
-        myCourses = courses;
-        myTimetable = timetable;
-        myActiveSessions = sessions;
-        if (courses.isNotEmpty && selectedCourseId == null) {
-          selectedCourseId = courses.first['id'] as int;
-        }
-      });
+      await fetchActiveSessions();
     } catch (e) {
-      debugPrint("Failed to load lecturer data: $e");
-      setState(() => loadError = _friendlyError(e));
+      debugPrint("Error loading lecturer data: $e");
+      if (mounted) {
+        setState(() {
+          loadError = "Network error loading data. Showing cached view.";
+        });
+      }
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
     }
   }
 
-  DateTime _getSlotDateTime(String day, String timeStr, DateTime now) {
-    final weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-    final targetWeekday = weekdays.indexOf(day.toLowerCase()) + 1;
-    if (targetWeekday == 0) return now;
+  Future<void> fetchActiveSessions() async {
+    try {
+      final uri = Uri.parse("${widget.apiBaseUrl}/attendance/active-sessions");
+      final res = await http.get(uri, headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+      }).timeout(const Duration(seconds: 5));
 
-    final daysDiff = targetWeekday - now.weekday;
-    var targetDate = now.add(Duration(days: daysDiff));
+      if (res.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(res.body);
+        final staffSessions = data.where((s) => s['createdById'] == widget.staffId).toList();
+        if (mounted) {
+          setState(() {
+            myActiveSessions = staffSessions;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching active sessions: $e");
+    }
+  }
 
-    final parts = timeStr.split(':');
-    final h = int.tryParse(parts[0]) ?? 0;
-    final m = int.tryParse(parts[1]) ?? 0;
-    return DateTime(targetDate.year, targetDate.month, targetDate.day, h, m);
+  Future<void> handleOpenSession(Map<String, dynamic> slot) async {
+    final now = ApiConfig.now;
+    final startDt = slot['startDateTime'] as DateTime;
+
+    final diff = startDt.difference(now);
+    if (diff.inMinutes > 60) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Cannot open gate yet. Session opens 1 hour before class (${startDt.hour.toString().padLeft(2, '0')}:${startDt.minute.toString().padLeft(2, '0')})."),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final uri = Uri.parse("${widget.apiBaseUrl}/attendance/open-session");
+      final body = jsonEncode({
+        "courseId": slot['courseId'],
+        "classGroup": slot['role'] == 'Lecture' ? 'All' : slot['classGroup'],
+        "durationMinutes": 120,
+      });
+
+      final res = await http.post(uri,
+        headers: {
+          "Authorization": "Bearer ${widget.authToken}",
+          "Content-Type": "application/json",
+        },
+        body: body,
+      );
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(data['message'] ?? "Attendance gate successfully opened!"),
+              backgroundColor: const Color(0xFF059669),
+            ),
+          );
+        }
+        await fetchActiveSessions();
+      } else {
+        final err = jsonDecode(res.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(err['detail'] ?? "Failed to open attendance gate"),
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Network error: $e"),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> handleCloseSession(int sessionId) async {
+    try {
+      final uri = Uri.parse("${widget.apiBaseUrl}/attendance/close-session/$sessionId");
+      final res = await http.post(uri, headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+      });
+
+      if (res.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Attendance gate closed."),
+              backgroundColor: Color(0xFF059669),
+            ),
+          );
+        }
+        await fetchActiveSessions();
+      }
+    } catch (e) {
+      debugPrint("Error closing session: $e");
+    }
   }
 
   Map<String, dynamic>? _getUpcomingSlot() {
     if (myTimetable.isEmpty) return null;
-
     final now = ApiConfig.now;
-    final List<Map<String, dynamic>> slotsWithConcreteDates = [];
+    final todayName = _dayOfWeekName(now.weekday);
 
-    for (final t in myTimetable) {
-      var startDt = _getSlotDateTime(t['day'] as String, t['startTime'] as String, now);
-      var endDt = _getSlotDateTime(t['day'] as String, t['endTime'] as String, now);
+    final todaySlots = myTimetable.where((slot) {
+      return (slot['day'] as String).toLowerCase() == todayName.toLowerCase();
+    }).toList();
 
-      if (now.isAfter(endDt)) {
-        startDt = startDt.add(const Duration(days: 7));
-        endDt = endDt.add(const Duration(days: 7));
+    for (var slot in todaySlots) {
+      final startDt = _getSlotDateTime(slot['day'] as String, slot['startTime'] as String, now);
+      final endDt = _getSlotDateTime(slot['day'] as String, slot['endTime'] as String, now);
+
+      if (now.isBefore(endDt)) {
+        return {
+          ...slot,
+          'startDateTime': startDt,
+          'endDateTime': endDt,
+        };
       }
-
-      slotsWithConcreteDates.add({
-        ...t,
-        'startDateTime': startDt,
-        'endDateTime': endDt,
-      });
     }
 
-    // Sort by startDateTime ascending
-    slotsWithConcreteDates.sort((a, b) {
-      return (a['startDateTime'] as DateTime).compareTo(b['startDateTime'] as DateTime);
-    });
+    final futureSlots = <Map<String, dynamic>>[];
+    for (int dayOffset = 1; dayOffset <= 7; dayOffset++) {
+      final targetDate = now.add(Duration(days: dayOffset));
+      final targetDayName = _dayOfWeekName(targetDate.weekday);
 
-    return slotsWithConcreteDates.isEmpty ? null : slotsWithConcreteDates.first;
-  }
+      final matchingSlots = myTimetable.where((slot) {
+        return (slot['day'] as String).toLowerCase() == targetDayName.toLowerCase();
+      }).toList();
 
-  // Open a new attendance check-in window via the backend.
-  Future<void> handleOpenSession(Map<String, dynamic> upcomingSlot) async {
-    final courseId = upcomingSlot['courseId'] as int;
-    final role = upcomingSlot['role'] as String;
-    final classGroupToSend = (role == 'Lecture') ? 'All' : 'G1';
-
-    setState(() => isLoading = true);
-
-    try {
-      final resp = await http
-          .post(
-            Uri.parse('${widget.apiBaseUrl}/sessions/open'),
-            headers: _headers,
-            body: jsonEncode({'course_id': courseId, 'class_group': classGroupToSend}),
-          )
-          .timeout(const Duration(seconds: 12));
-
-      if (resp.statusCode != 201 && resp.statusCode != 200) {
-        throw Exception(_detailOf(resp, 'Could not open session (${resp.statusCode}).'));
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Check-In window opened for ${upcomingSlot['courseCode']}!"),
-          backgroundColor: const Color(0xFF10B981),
-        ),
-      );
-
-      await loadLecturerData();
-    } catch (e) {
-      showErrorDialog(_friendlyError(e));
-    } finally {
-      if (mounted) setState(() => isLoading = false);
-    }
-  }
-
-  // Close an attendance check-in window via the backend.
-  Future<void> handleCloseSession(int sessionId, String courseCode) async {
-    setState(() => isLoading = true);
-    try {
-      final resp = await http
-          .post(Uri.parse('${widget.apiBaseUrl}/sessions/$sessionId/close'), headers: _headers)
-          .timeout(const Duration(seconds: 12));
-      if (resp.statusCode != 200) {
-        throw Exception(_detailOf(resp, 'Could not close session (${resp.statusCode}).'));
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Check-In window closed for $courseCode."),
-          backgroundColor: const Color(0xFFEF4444),
-        ),
-      );
-
-      await loadLecturerData();
-    } catch (e) {
-      showErrorDialog(_friendlyError(e));
-    } finally {
-      if (mounted) setState(() => isLoading = false);
-    }
-  }
-
-  // View checked-in students for a session via the backend.
-  Future<void> handleViewAttendees(int sessionId, String courseCode) async {
-    setState(() => isLoading = true);
-    List<Map<String, dynamic>> attendees = [];
-
-    try {
-      final resp = await http
-          .get(Uri.parse('${widget.apiBaseUrl}/sessions/$sessionId/attendance'), headers: _headers)
-          .timeout(const Duration(seconds: 12));
-      if (resp.statusCode != 200) {
-        throw Exception(_detailOf(resp, 'Could not load attendees (${resp.statusCode}).'));
-      }
-
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      final List<dynamic> list = data['attendance_list'] as List<dynamic>? ?? [];
-      for (final a in list) {
-        if (a['status'] != 'present') continue; // show only those checked in
-        attendees.add({
-          'name': a['student_name'] ?? 'Unknown',
-          'code': a['student_code'] ?? '',
-          'wifi': a['network_verified'] ?? false,
-          'face': true,
-          'time': _fmtTime(a['marked_at'] as String?),
+      for (var slot in matchingSlots) {
+        final startDt = _getSlotDateTimeForDate(targetDate, slot['startTime'] as String);
+        final endDt = _getSlotDateTimeForDate(targetDate, slot['endTime'] as String);
+        futureSlots.add({
+          ...slot,
+          'startDateTime': startDt,
+          'endDateTime': endDt,
         });
       }
-    } catch (e) {
-      if (mounted) setState(() => isLoading = false);
-      showErrorDialog(_friendlyError(e));
-      return;
+      if (futureSlots.isNotEmpty) break;
     }
 
-    if (mounted) setState(() => isLoading = false);
-    if (!mounted) return;
+    if (futureSlots.isNotEmpty) {
+      futureSlots.sort((a, b) => (a['startDateTime'] as DateTime).compareTo(b['startDateTime'] as DateTime));
+      return futureSlots.first;
+    }
 
-    showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        builder: (ctx) {
-          return ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-              child: Container(
-                color: Colors.white.withValues(alpha: 0.9),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          "$courseCode Attendees (${attendees.length})",
-                          style: GoogleFonts.spaceGrotesk(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF0F172A),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          icon: const Icon(Icons.close, size: 20),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (attendees.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 30.0),
-                        child: Center(
-                          child: Text(
-                            "No student check-ins registered yet.",
-                            style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B)),
-                          ),
-                        ),
-                      )
-                    else
-                      Flexible(
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: attendees.length,
-                          separatorBuilder: (c, idx) => const Divider(color: Color(0xFFE2E8F0)),
-                          itemBuilder: (c, idx) {
-                            final student = attendees[idx];
-                            return Row(
-                              children: [
-                                CircleAvatar(
-                                  radius: 16,
-                                  backgroundColor: const Color(0xFF800000).withValues(alpha: 0.1),
-                                  child: const Icon(Icons.person, size: 14, color: Color(0xFF800000)),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        student['name'],
-                                        style: GoogleFonts.inter(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          color: const Color(0xFF1E293B),
-                                        ),
-                                      ),
-                                      Text(
-                                        student['code'],
-                                        style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          student['wifi'] ? Icons.wifi : Icons.wifi_off,
-                                          size: 12,
-                                          color: student['wifi'] ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Icon(
-                                          student['face'] ? Icons.face : Icons.error_outline,
-                                          size: 12,
-                                          color: student['face'] ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      student['time'],
-                                      style: GoogleFonts.inter(fontSize: 9, color: const Color(0xFF94A3B8)),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      );
+    return null;
   }
 
-  void showErrorDialog(String error) {
-    showDialog(
+  DateTime _getSlotDateTime(String dayName, String timeStr, DateTime referenceNow) {
+    return _getSlotDateTimeForDate(referenceNow, timeStr);
+  }
+
+  DateTime _getSlotDateTimeForDate(DateTime baseDate, String timeStr) {
+    final parts = timeStr.split(':');
+    final hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+    return DateTime(baseDate.year, baseDate.month, baseDate.day, hour, minute);
+  }
+
+  String _dayOfWeekName(int weekday) {
+    switch (weekday) {
+      case DateTime.monday: return "Monday";
+      case DateTime.tuesday: return "Tuesday";
+      case DateTime.wednesday: return "Wednesday";
+      case DateTime.thursday: return "Thursday";
+      case DateTime.friday: return "Friday";
+      case DateTime.saturday: return "Saturday";
+      case DateTime.sunday: return "Sunday";
+      default: return "Monday";
+    }
+  }
+
+  void _showAttendeesModal(BuildContext context, int sessionId, String courseCode) async {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
+
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text("Operation Failed", style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold)),
-        content: Text(error, style: const TextStyle(fontSize: 12)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK")),
-        ],
-      ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.65,
+          decoration: BoxDecoration(
+            color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    "$courseCode Attendees",
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: primaryTextColor,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: Icon(Icons.close, size: 20, color: isDarkMode ? Colors.white70 : const Color(0xFF64748B)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: FutureBuilder<http.Response>(
+                  future: http.get(
+                    Uri.parse("${widget.apiBaseUrl}/attendance/session-attendees/$sessionId"),
+                    headers: {"Authorization": "Bearer ${widget.authToken}"},
+                  ),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError || snapshot.data?.statusCode != 200) {
+                      return Center(
+                        child: Text("Error fetching attendees list.", style: TextStyle(color: isDarkMode ? Colors.white70 : Colors.black54)),
+                      );
+                    }
+                    final List<dynamic> attendees = jsonDecode(snapshot.data!.body);
+                    if (attendees.isEmpty) {
+                      return Center(
+                        child: Text("No students checked in yet.", style: TextStyle(color: isDarkMode ? Colors.white70 : Colors.black54)),
+                      );
+                    }
+                    return ListView.separated(
+                      itemCount: attendees.length,
+                      separatorBuilder: (c, i) => Divider(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                      itemBuilder: (c, idx) {
+                        final att = attendees[idx];
+                        return ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: const Color(0xFF2563EB).withValues(alpha: 0.15),
+                            child: const Icon(Icons.person, color: Color(0xFF2563EB), size: 18),
+                          ),
+                          title: Text(
+                            att['studentName'] ?? 'Student',
+                            style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, fontSize: 13, color: primaryTextColor),
+                          ),
+                          subtitle: Text(
+                            "ID: ${att['studentCode']} · ${att['verifiedAt'] ?? 'Verified'}",
+                            style: GoogleFonts.inter(fontSize: 10, color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                          ),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              "PRESENT",
+                              style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final Color primaryColor = const Color(0xFF800000); // Staff Maroon
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
+    final secondaryTextColor = isDarkMode ? const Color(0xFFCBD5E1) : const Color(0xFF64748B);
+
+    // High Contrast Theme Colors for Staff Dashboard
+    final Color primaryColor = isDarkMode ? const Color(0xFFF87171) : const Color(0xFF800000); // Bright Rose/Coral in Dark Mode, Maroon in Light Mode
+    final Color headerButtonBg = isDarkMode ? const Color(0xFF1E293B) : primaryColor.withValues(alpha: 0.1);
+    final Color headerButtonIconColor = isDarkMode ? const Color(0xFFF87171) : primaryColor;
 
     return SafeArea(
       child: Stack(
@@ -472,7 +412,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           width: 36,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
-                              colors: [primaryColor, const Color(0xFFAA0000)],
+                              colors: isDarkMode
+                                  ? [const Color(0xFFEF4444), const Color(0xFFDC2626)]
+                                  : [const Color(0xFF800000), const Color(0xFFAA0000)],
                             ),
                             borderRadius: BorderRadius.circular(10),
                           ),
@@ -489,17 +431,17 @@ class _StaffDashboardState extends State<StaffDashboard> {
                               style: GoogleFonts.spaceGrotesk(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
-                                color: const Color(0xFF0F172A),
+                                color: primaryTextColor,
                               ),
                             ),
                             Text(
                               "MANAGEMENT & REGISTRY",
                               style: GoogleFonts.inter(
-                                  fontSize: 8,
-                                  fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF64748B),
-                                  letterSpacing: 1.0,
-                                ),
+                                fontSize: 8,
+                                fontWeight: FontWeight.w600,
+                                color: secondaryTextColor,
+                                letterSpacing: 1.0,
+                              ),
                             ),
                           ],
                         ),
@@ -509,15 +451,34 @@ class _StaffDashboardState extends State<StaffDashboard> {
                       children: [
                         IconButton(
                           onPressed: () {
-                            widget.onSyncRequested();
-                            loadLecturerData();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                            );
                           },
-                          icon: Icon(Icons.sync, color: primaryColor, size: 18),
+                          icon: Icon(Icons.person_rounded, color: headerButtonIconColor, size: 18),
                           style: IconButton.styleFrom(
-                            backgroundColor: primaryColor.withOpacity(0.1),
+                            backgroundColor: headerButtonBg,
                             padding: const EdgeInsets.all(8),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
+                              side: BorderSide(color: isDarkMode ? const Color(0xFF334155) : Colors.transparent),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: () {
+                            widget.onSyncRequested();
+                            loadLecturerData();
+                          },
+                          icon: Icon(Icons.sync, color: headerButtonIconColor, size: 18),
+                          style: IconButton.styleFrom(
+                            backgroundColor: headerButtonBg,
+                            padding: const EdgeInsets.all(8),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: BorderSide(color: isDarkMode ? const Color(0xFF334155) : Colors.transparent),
                             ),
                           ),
                         ),
@@ -526,7 +487,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           onPressed: widget.onLogout,
                           icon: const Icon(Icons.logout, color: Color(0xFFEF4444), size: 18),
                           style: IconButton.styleFrom(
-                            backgroundColor: const Color(0xFFFEF2F2),
+                            backgroundColor: isDarkMode ? const Color(0xFF451A1A) : const Color(0xFFFEF2F2),
                             padding: const EdgeInsets.all(8),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
@@ -545,8 +506,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF1F2),
-                    border: Border.all(color: const Color(0xFFF43F5E).withOpacity(0.3)),
+                    color: isDarkMode ? const Color(0xFF451A1A) : const Color(0xFFFFF1F2),
+                    border: Border.all(color: const Color(0xFFF43F5E).withValues(alpha: 0.3)),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -559,317 +520,152 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           style: GoogleFonts.inter(
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
-                            color: const Color(0xFFBE123C),
+                            color: isDarkMode ? const Color(0xFFFECDD3) : const Color(0xFFBE123C),
                           ),
                         ),
                       ),
                       TextButton(
                         onPressed: loadLecturerData,
-                        child: const Text("Retry", style: TextStyle(fontSize: 10)),
+                        child: const Text("Retry", style: TextStyle(fontSize: 10, color: Color(0xFFF43F5E))),
                       ),
                     ],
                   ),
                 ),
 
-
-              // Content Area
+              // Content Area with Shimmer Loading Placeholder
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Profile Card
-                      GlassCard(
-                        child: Row(
+                child: isLoading
+                    ? const ShimmerLoading(
+                        isLoading: true,
+                        child: ShimmerSkeleton(),
+                      )
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            CircleAvatar(
-                              radius: 24,
-                              backgroundColor: primaryColor.withOpacity(0.1),
-                              child: Text(
-                                widget.staffName.substring(0, widget.staffName.length >= 2 ? 2 : widget.staffName.length).toUpperCase(),
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryColor,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                            // Profile Card
+                            GlassCard(
+                              child: Row(
                                 children: [
-                                  Text(
-                                    widget.staffName,
-                                    style: GoogleFonts.spaceGrotesk(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: const Color(0xFF0F172A),
+                                  CircleAvatar(
+                                    radius: 24,
+                                    backgroundColor: isDarkMode
+                                        ? const Color(0xFF334155)
+                                        : primaryColor.withValues(alpha: 0.1),
+                                    child: Text(
+                                      widget.staffName.substring(0, widget.staffName.length >= 2 ? 2 : widget.staffName.length).toUpperCase(),
+                                      style: GoogleFonts.spaceGrotesk(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: primaryColor,
+                                      ),
                                     ),
                                   ),
-                                  Text(
-                                    "Staff ID: ${widget.staffCode} · ${widget.staffEmail}",
-                                    style: GoogleFonts.inter(
-                                      fontSize: 10,
-                                      color: const Color(0xFF64748B),
-                                      fontWeight: FontWeight.w500,
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          widget.staffName,
+                                          style: GoogleFonts.spaceGrotesk(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: primaryTextColor,
+                                          ),
+                                        ),
+                                        Text(
+                                          "Staff ID: ${widget.staffCode} · ${widget.staffEmail}",
+                                          style: GoogleFonts.inter(
+                                            fontSize: 10,
+                                            color: secondaryTextColor,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 20),
+                            const SizedBox(height: 20),
 
-                      // Upcoming Class Check-In Card
-                      Text(
-                        "Upcoming Class Check-In",
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Builder(
-                        builder: (context) {
-                          final upcomingSlot = _getUpcomingSlot();
-                          if (upcomingSlot == null) {
-                            return const GlassCard(
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(vertical: 20),
-                                child: Center(
-                                  child: Text(
-                                    "No upcoming classes found in your timetable.",
-                                    style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-                                  ),
-                                ),
+                            // Upcoming Class Check-In Card Header
+                            Text(
+                              "Upcoming Class Check-In",
+                              style: GoogleFonts.spaceGrotesk(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: primaryTextColor,
                               ),
-                            );
-                          }
-
-                                                  final startDt = upcomingSlot['startDateTime'] as DateTime;
-                          final endDt = upcomingSlot['endDateTime'] as DateTime;
-                          final now = ApiConfig.now;
-
-                          final isCurrentlyActive = now.isAfter(startDt) && now.isBefore(endDt);
-                          final isOpenWindow = now.isAfter(startDt.subtract(const Duration(hours: 1))) && now.isBefore(endDt);
-                          
-                          // Check if already open (only within the valid pre-open/active window)
-                          final isAlreadyOpen = isOpenWindow && myActiveSessions.any((s) =>
-                              s['courseId'] == upcomingSlot['courseId'] &&
-                              (upcomingSlot['role'] == 'Lecture' ? s['classGroup'] == 'All' : s['classGroup'].toString().startsWith('G')));
-
-                          String hintText = "";
-                          String buttonText = "Open Attendance Gate";
-                          bool buttonEnabled = false;
-
-                          if (isAlreadyOpen) {
-                            hintText = "Attendance gate is currently live.";
-                            buttonText = "Attendance Gate is Live";
-                            buttonEnabled = false;
-                          } else if (isCurrentlyActive) {
-                            hintText = "Class is currently in progress.";
-                            buttonText = "Open Attendance Gate";
-                            buttonEnabled = true;
-                          } else if (isOpenWindow) {
-                            final diff = startDt.difference(now);
-                            hintText = "Class starts in ${diff.inMinutes}m. Check-in gate can be opened now.";
-                            buttonText = "Open Attendance Gate";
-                            buttonEnabled = true;
-                          } else {
-                            final diff = startDt.difference(now);
-                            String countdownStr = "";
-                            if (diff.inDays > 0) {
-                              countdownStr = "${diff.inDays}d ${diff.inHours % 24}h";
-                            } else if (diff.inHours > 0) {
-                              countdownStr = "${diff.inHours}h ${diff.inMinutes % 60}m";
-                            } else {
-                              countdownStr = "${diff.inMinutes}m";
-                            }
-                            hintText = "Attendance session is unavailable";
-                            buttonText = "Opens in $countdownStr";
-                            buttonEnabled = false;
-                          }
-
-                          return GlassCard(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: primaryColor.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        (upcomingSlot['role'] as String).toUpperCase(),
-                                        style: GoogleFonts.inter(
-                                          fontSize: 8,
-                                          fontWeight: FontWeight.bold,
-                                          color: primaryColor,
-                                        ),
-                                      ),
-                                    ),
-                                    Text(
-                                      "${upcomingSlot['day']} · ${upcomingSlot['startTime']} - ${upcomingSlot['endTime']}",
-                                      style: GoogleFonts.inter(
-                                        fontSize: 9.5,
-                                        color: const Color(0xFF64748B),
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  "${upcomingSlot['courseCode']} - ${upcomingSlot['courseName']}",
-                                  style: GoogleFonts.spaceGrotesk(
-                                    fontSize: 14.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: const Color(0xFF1E293B),
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    const Icon(Icons.room_outlined, size: 12, color: Color(0xFF94A3B8)),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      upcomingSlot['room'] as String,
-                                      style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: isAlreadyOpen
-                                        ? const Color(0xFFECFDF5)
-                                        : (buttonEnabled ? const Color(0xFFFFFBEB) : const Color(0xFFF1F5F9)),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: isAlreadyOpen
-                                          ? const Color(0xFF10B981).withOpacity(0.2)
-                                          : (buttonEnabled ? const Color(0xFFF59E0B).withOpacity(0.2) : const Color(0xFFE2E8F0)),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        isAlreadyOpen
-                                            ? Icons.check_circle_outline
-                                            : (buttonEnabled ? Icons.info_outline : Icons.lock_clock_outlined),
-                                        size: 13,
-                                        color: isAlreadyOpen
-                                            ? const Color(0xFF10B981)
-                                            : (buttonEnabled ? const Color(0xFFD97706) : const Color(0xFF64748B)),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
+                            ),
+                            const SizedBox(height: 8),
+                            Builder(
+                              builder: (context) {
+                                final upcomingSlot = _getUpcomingSlot();
+                                if (upcomingSlot == null) {
+                                  return GlassCard(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 20),
+                                      child: Center(
                                         child: Text(
-                                          hintText,
+                                          "No upcoming classes found in your timetable.",
                                           style: GoogleFonts.inter(
-                                            fontSize: 9.5,
-                                            fontWeight: FontWeight.w600,
-                                            color: isAlreadyOpen
-                                                ? const Color(0xFF047857)
-                                                : (buttonEnabled ? const Color(0xFFB45309) : const Color(0xFF475569)),
+                                            fontSize: 11,
+                                            color: secondaryTextColor,
+                                            fontWeight: FontWeight.w500,
                                           ),
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                ElevatedButton.icon(
-                                  onPressed: (isLoading || !buttonEnabled) ? null : () => handleOpenSession(upcomingSlot),
-                                  icon: const Icon(Icons.add_circle_outline, size: 14),
-                                  label: Text(buttonText),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: primaryColor,
-                                    foregroundColor: Colors.white,
-                                    elevation: 1,
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10),
                                     ),
-                                    textStyle: GoogleFonts.inter(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 24),
+                                  );
+                                }
 
-                      // Session List
-                      Text(
-                        "Active Attendance Gates",
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 8),                      Builder(
-                        builder: (context) {
-                          final now = ApiConfig.now;
-                          final activeSessionsToShow = myActiveSessions.where((session) {
-                            final slot = myTimetable.firstWhere(
-                              (t) => t['courseId'] == session['courseId'] && 
-                                     (t['role'] == 'Lecture' ? session['classGroup'] == 'All' : session['classGroup'] == t['classGroup']),
-                              orElse: () => <String, dynamic>{},
-                            );
-                            if (slot.isEmpty) return false;
+                                final startDt = upcomingSlot['startDateTime'] as DateTime;
+                                final endDt = upcomingSlot['endDateTime'] as DateTime;
+                                final now = ApiConfig.now;
 
-                            final startDt = _getSlotDateTime(slot['day'] as String, slot['startTime'] as String, now);
-                            final endDt = _getSlotDateTime(slot['day'] as String, slot['endTime'] as String, now);
+                                final isCurrentlyActive = now.isAfter(startDt) && now.isBefore(endDt);
+                                final isOpenWindow = now.isAfter(startDt.subtract(const Duration(hours: 1))) && now.isBefore(endDt);
 
-                            if (now.isAfter(endDt)) {
-                              return false;
-                            }
+                                final isAlreadyOpen = isOpenWindow && myActiveSessions.any((s) =>
+                                    s['courseId'] == upcomingSlot['courseId'] &&
+                                    (upcomingSlot['role'] == 'Lecture' ? s['classGroup'] == 'All' : s['classGroup'].toString().startsWith('G')));
 
-                            final isOpenWindow = now.isAfter(startDt.subtract(const Duration(hours: 1))) && now.isBefore(endDt);
-                            return isOpenWindow;
-                          }).toList();
+                                String hintText = "";
+                                String buttonText = "Open Attendance Gate";
+                                bool buttonEnabled = false;
 
-                          if (activeSessionsToShow.isEmpty) {
-                            return GlassCard(
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 24.0),
-                                child: Center(
-                                  child: Column(
-                                    children: [
-                                      const Icon(Icons.sensors, color: Color(0xFF94A3B8), size: 24),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        "No open check-in gates currently active.",
-                                        style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B)),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          }
+                                if (isAlreadyOpen) {
+                                  hintText = "Attendance gate is currently live.";
+                                  buttonText = "Attendance Gate is Live";
+                                  buttonEnabled = false;
+                                } else if (isCurrentlyActive) {
+                                  hintText = "Class is currently in progress.";
+                                  buttonText = "Open Attendance Gate";
+                                  buttonEnabled = true;
+                                } else if (isOpenWindow) {
+                                  final diff = startDt.difference(now);
+                                  hintText = "Class starts in ${diff.inMinutes}m. Check-in gate can be opened now.";
+                                  buttonText = "Open Attendance Gate";
+                                  buttonEnabled = true;
+                                } else {
+                                  final diff = startDt.difference(now);
+                                  String countdownStr = "";
+                                  if (diff.inDays > 0) {
+                                    countdownStr = "${diff.inDays}d ${diff.inHours % 24}h";
+                                  } else if (diff.inHours > 0) {
+                                    countdownStr = "${diff.inHours}h ${diff.inMinutes % 60}m";
+                                  } else {
+                                    countdownStr = "${diff.inMinutes}m";
+                                  }
+                                  hintText = "Attendance session is unavailable";
+                                  buttonText = "Opens in $countdownStr";
+                                  buttonEnabled = false;
+                                }
 
-                          return Column(
-                            children: activeSessionsToShow.map((session) {
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                child: GlassCard(
+                                return GlassCard(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.stretch,
                                     children: [
@@ -879,11 +675,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                             decoration: BoxDecoration(
-                                              color: primaryColor.withOpacity(0.1),
+                                              color: isDarkMode
+                                                  ? const Color(0xFF334155)
+                                                  : primaryColor.withValues(alpha: 0.1),
                                               borderRadius: BorderRadius.circular(6),
                                             ),
                                             child: Text(
-                                              "ACTIVE GATE",
+                                              (upcomingSlot['role'] as String).toUpperCase(),
                                               style: GoogleFonts.inter(
                                                 fontSize: 8,
                                                 fontWeight: FontWeight.bold,
@@ -892,95 +690,288 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                             ),
                                           ),
                                           Text(
-                                            "Tut Group: ${session['classGroup']}",
+                                            "${upcomingSlot['day']} · ${upcomingSlot['startTime']} - ${upcomingSlot['endTime']}",
                                             style: GoogleFonts.inter(
-                                              fontSize: 9,
-                                              color: primaryColor,
+                                              fontSize: 9.5,
+                                              color: secondaryTextColor,
                                               fontWeight: FontWeight.bold,
                                             ),
                                           ),
                                         ],
                                       ),
                                       const SizedBox(height: 12),
+
+                                      // COURSE TITLE (CRITICAL FIX: High contrast white in dark mode, dark slate in light mode)
                                       Text(
-                                        "${session['courseCode']} - ${session['courseName']}",
+                                        "${upcomingSlot['courseCode']} - ${upcomingSlot['courseName']}",
                                         style: GoogleFonts.spaceGrotesk(
-                                          fontSize: 14.5,
+                                          fontSize: 15,
                                           fontWeight: FontWeight.bold,
-                                          color: const Color(0xFF1E293B),
+                                          color: primaryTextColor,
                                         ),
                                       ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        session['time'],
-                                        style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF94A3B8)),
-                                      ),
-                                      const SizedBox(height: 16),
+                                      const SizedBox(height: 4),
+
+                                      // Room location info
                                       Row(
                                         children: [
-                                          Expanded(
-                                            child: OutlinedButton.icon(
-                                              onPressed: () => handleViewAttendees(session['sessionId'], session['courseCode']),
-                                              icon: const Icon(Icons.people_outline, size: 14),
-                                              label: const Text("View Attendees", style: TextStyle(fontSize: 11)),
-                                              style: OutlinedButton.styleFrom(
-                                                foregroundColor: const Color(0xFF334155),
-                                                side: const BorderSide(color: Color(0xFFE2E8F0)),
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius: BorderRadius.circular(10),
-                                                ),
-                                              ),
+                                          Icon(Icons.room_outlined, size: 13, color: secondaryTextColor),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            upcomingSlot['room'] as String,
+                                            style: GoogleFonts.inter(
+                                              fontSize: 10.5,
+                                              fontWeight: FontWeight.w600,
+                                              color: secondaryTextColor,
                                             ),
                                           ),
                                         ],
                                       ),
+                                      const SizedBox(height: 16),
+
+                                      // Session Notice Box
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                        decoration: BoxDecoration(
+                                          color: isAlreadyOpen
+                                              ? (isDarkMode ? const Color(0xFF064E3B) : const Color(0xFFECFDF5))
+                                              : (buttonEnabled
+                                                  ? (isDarkMode ? const Color(0xFF78350F) : const Color(0xFFFFFBEB))
+                                                  : (isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: isAlreadyOpen
+                                                ? const Color(0xFF10B981).withValues(alpha: 0.3)
+                                                : (buttonEnabled
+                                                    ? const Color(0xFFF59E0B).withValues(alpha: 0.3)
+                                                    : (isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0))),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              isAlreadyOpen
+                                                  ? Icons.check_circle_outline
+                                                  : (buttonEnabled ? Icons.info_outline : Icons.lock_clock_outlined),
+                                              size: 14,
+                                              color: isAlreadyOpen
+                                                  ? const Color(0xFF10B981)
+                                                  : (buttonEnabled
+                                                      ? (isDarkMode ? const Color(0xFFFBBF24) : const Color(0xFFD97706))
+                                                      : (isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B))),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                hintText,
+                                                style: GoogleFonts.inter(
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: isAlreadyOpen
+                                                      ? (isDarkMode ? const Color(0xFFA7F3D0) : const Color(0xFF047857))
+                                                      : (buttonEnabled
+                                                          ? (isDarkMode ? const Color(0xFFFDE68A) : const Color(0xFFB45309))
+                                                          : (isDarkMode ? const Color(0xFFE2E8F0) : const Color(0xFF475569))),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 14),
+
+                                      // Open Gate Action Button
+                                      ElevatedButton.icon(
+                                        onPressed: (isLoading || !buttonEnabled) ? null : () => handleOpenSession(upcomingSlot),
+                                        icon: Icon(
+                                          isAlreadyOpen ? Icons.check_circle : Icons.add_circle_outline,
+                                          size: 15,
+                                        ),
+                                        label: Text(buttonText),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: primaryColor,
+                                          foregroundColor: Colors.white,
+                                          disabledBackgroundColor: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                                          disabledForegroundColor: isDarkMode ? const Color(0xFFCBD5E1) : const Color(0xFF64748B),
+                                          elevation: 1,
+                                          padding: const EdgeInsets.symmetric(vertical: 12),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          textStyle: GoogleFonts.spaceGrotesk(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   ),
-                                ),
-                              );
-                            }).toList(),
-                          );
-                        },
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 24),
+
+                            // Session List
+                            Text(
+                              "Active Attendance Gates",
+                              style: GoogleFonts.spaceGrotesk(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: primaryTextColor,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Builder(
+                              builder: (context) {
+                                final now = ApiConfig.now;
+                                final activeSessionsToShow = myActiveSessions.where((session) {
+                                  final slot = myTimetable.firstWhere(
+                                    (t) => t['courseId'] == session['courseId'] &&
+                                           (t['role'] == 'Lecture' ? session['classGroup'] == 'All' : session['classGroup'] == t['classGroup']),
+                                    orElse: () => <String, dynamic>{},
+                                  );
+                                  if (slot.isEmpty) return false;
+
+                                  final startDt = _getSlotDateTime(slot['day'] as String, slot['startTime'] as String, now);
+                                  final endDt = _getSlotDateTime(slot['day'] as String, slot['endTime'] as String, now);
+
+                                  if (now.isAfter(endDt)) {
+                                    return false;
+                                  }
+
+                                  final isOpenWindow = now.isAfter(startDt.subtract(const Duration(hours: 1))) && now.isBefore(endDt);
+                                  return isOpenWindow;
+                                }).toList();
+
+                                if (activeSessionsToShow.isEmpty) {
+                                  return GlassCard(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 24.0),
+                                      child: Center(
+                                        child: Column(
+                                          children: [
+                                            Icon(Icons.sensors, color: secondaryTextColor, size: 24),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              "No open check-in gates currently active.",
+                                              style: GoogleFonts.inter(
+                                                fontSize: 11,
+                                                color: secondaryTextColor,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                return Column(
+                                  children: activeSessionsToShow.map((session) {
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      child: GlassCard(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                                          children: [
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                  decoration: BoxDecoration(
+                                                    color: isDarkMode
+                                                        ? const Color(0xFF334155)
+                                                        : primaryColor.withValues(alpha: 0.1),
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: Text(
+                                                    "ACTIVE GATE",
+                                                    style: GoogleFonts.inter(
+                                                      fontSize: 8,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: primaryColor,
+                                                    ),
+                                                  ),
+                                                ),
+                                                Text(
+                                                  "Tut Group: ${session['classGroup']}",
+                                                  style: GoogleFonts.inter(
+                                                    fontSize: 9,
+                                                    color: primaryColor,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Text(
+                                              "${session['courseCode']} - ${session['courseName']}",
+                                              style: GoogleFonts.spaceGrotesk(
+                                                fontSize: 14.5,
+                                                fontWeight: FontWeight.bold,
+                                                color: primaryTextColor,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              "Open since ${session['openTime'] ?? 'Active'} · ${session['verifiedCount'] ?? 0} Checked-In",
+                                              style: GoogleFonts.inter(
+                                                fontSize: 10,
+                                                color: secondaryTextColor,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 14),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: OutlinedButton.icon(
+                                                    onPressed: () => _showAttendeesModal(context, session['id'], session['courseCode']),
+                                                    icon: const Icon(Icons.people_outline, size: 14),
+                                                    label: const Text("View Attendees"),
+                                                    style: OutlinedButton.styleFrom(
+                                                      foregroundColor: primaryColor,
+                                                      side: BorderSide(color: primaryColor.withValues(alpha: 0.5)),
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.circular(8),
+                                                      ),
+                                                      textStyle: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold),
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: ElevatedButton.icon(
+                                                    onPressed: () => handleCloseSession(session['id']),
+                                                    icon: const Icon(Icons.stop_circle_outlined, size: 14),
+                                                    label: const Text("Close Gate"),
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: const Color(0xFFDC2626),
+                                                      foregroundColor: Colors.white,
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.circular(8),
+                                                      ),
+                                                      textStyle: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                ),
               ),
             ],
           ),
-
-          // Loading Overlay spinner
-          if (isLoading)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withOpacity(0.15),
-                child: Center(
-                  child: GlassCard(
-                    width: 220,
-                    height: 120,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          height: 24,
-                          width: 24,
-                          child: CircularProgressIndicator(strokeWidth: 3, color: primaryColor),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          "Updating gate metrics...",
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFF1E293B),
-                          ),
-                        )
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
     );

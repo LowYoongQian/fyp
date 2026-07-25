@@ -40,6 +40,30 @@ class MainApp extends StatefulWidget {
 class MainAppState extends State<MainApp> {
   ThemeMode _themeMode = ThemeMode.light;
 
+  static final ThemeData _lightThemeData = ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.light,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF2563EB),
+      primary: const Color(0xFF2563EB),
+      brightness: Brightness.light,
+    ),
+    textTheme: GoogleFonts.interTextTheme(ThemeData.light().textTheme),
+  );
+
+  static final ThemeData _darkThemeData = ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    scaffoldBackgroundColor: const Color(0xFF121212),
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF2563EB),
+      primary: const Color(0xFF2563EB),
+      surface: const Color(0xFF1E1E1E),
+      brightness: Brightness.dark,
+    ),
+    textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
+  );
+
   @override
   void initState() {
     super.initState();
@@ -87,29 +111,20 @@ class MainAppState extends State<MainApp> {
     return MaterialApp(
       title: 'Smart Attendance Portal',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.light,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2563EB),
-          primary: const Color(0xFF2563EB),
-          brightness: Brightness.light,
-        ),
-        textTheme: GoogleFonts.interTextTheme(ThemeData.light().textTheme),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF121212),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2563EB),
-          primary: const Color(0xFF2563EB),
-          surface: const Color(0xFF1E1E1E),
-          brightness: Brightness.dark,
-        ),
-        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
-      ),
+      theme: _lightThemeData,
+      darkTheme: _darkThemeData,
       themeMode: _themeMode,
+      builder: (context, child) {
+        final isDarkMode = _themeMode == ThemeMode.dark ||
+            (_themeMode == ThemeMode.system &&
+                MediaQuery.platformBrightnessOf(context) == Brightness.dark);
+        return AnimatedTheme(
+          data: isDarkMode ? _darkThemeData : _lightThemeData,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeInOut,
+          child: child ?? const AppRoot(),
+        );
+      },
       home: const AppRoot(),
     );
   }

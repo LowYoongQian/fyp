@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -212,8 +212,8 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "code": code,
         "avatar_url": user.avatar_url,
         "status": user.status or "Active",
-        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else datetime.utcnow().isoformat(),
-        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "last_login_at": (user.last_login_at.isoformat() + "Z") if user.last_login_at else (datetime.utcnow().isoformat() + "Z"),
+        "created_at": (user.created_at.isoformat() + "Z") if user.created_at else None,
         "two_factor_enabled": bool(user.two_factor_enabled),
         "theme_preference": user.theme_preference or "light",
         "font_size_preference": user.font_size_preference or "medium",
@@ -224,23 +224,8 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "in_app_notifications": bool(user.in_app_notifications if user.in_app_notifications is not None else True),
     }
 
-
-@router.post("/change-password")
-def change_password(body: ChangePasswordRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-    if len(body.new_password) < 6:
-        raise HTTPException(status_code=400, detail="New password must be at least 6 characters long")
-    
-    user.password_hash = hash_password(body.new_password)
-    db.commit()
-    return {"message": "Password changed successfully"}
-
-
 @router.put("/settings")
 def update_user_settings(body: UserSettingsUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if body.theme_preference is not None:
-        user.theme_preference = body.theme_preference
     if body.font_size_preference is not None:
         user.font_size_preference = body.font_size_preference
     if body.language_preference is not None:
@@ -298,13 +283,46 @@ def update_admin_profile(
 
 
 @router.get("/active-sessions")
-def get_active_sessions(user: User = Depends(get_current_user)):
-    # Return real session data (current device connection)
+def get_active_sessions(request: Request, user: User = Depends(get_current_user)):
+    user_agent = request.headers.get("user-agent", "").lower()
+    
+    is_desktop = any(os_kw in user_agent for os_kw in ["windows", "macintosh", "x11", "linux", "cros"]) and not any(mob_kw in user_agent for mob_kw in ["android", "iphone", "ipad"])
+    
+    if is_desktop:
+        if "windows" in user_agent:
+            os_label = "Windows PC"
+        elif "macintosh" in user_agent:
+            os_label = "Mac Computer"
+        elif "linux" in user_agent:
+            os_label = "Linux Computer"
+        else:
+            os_label = "Desktop PC"
+            
+        if "edg" in user_agent:
+            browser = "Edge"
+        elif "chrome" in user_agent:
+            browser = "Chrome"
+        elif "firefox" in user_agent:
+            browser = "Firefox"
+        elif "safari" in user_agent:
+            browser = "Safari"
+        else:
+            browser = "Web"
+            
+        device_name = f"Current Active Computer ({os_label})"
+        platform = f"PC web ({browser})"
+        device_type = "desktop"
+    else:
+        device_name = "Current Active Mobile Device"
+        platform = "Mobile web / Flutter App"
+        device_type = "mobile"
+
     return [
         {
             "id": f"sess-{user.id}-1",
-            "device_name": "Current Active Mobile Device",
-            "platform": "Flutter App",
+            "device_name": device_name,
+            "platform": platform,
+            "device_type": device_type,
             "last_active": user.last_login_at.isoformat() if user.last_login_at else datetime.utcnow().isoformat(),
             "is_current": True
         }

@@ -119,17 +119,15 @@ const CustomSegmentedFontControl: React.FC<{
   );
 };
 
+import { getSupportedLanguages } from '../i18n/i18n';
+
 // ─── Custom Scalable Popdown / Dropdown Menu Widget for Language ────────────────
-const LANGUAGES = [
-  { id: 'en', label: 'English (US)', region: 'United States', flag: '🇺🇸' },
-  { id: 'ms', label: 'Bahasa Malaysia', region: 'Malaysia', flag: '🇲🇾' },
-  { id: 'zh', label: '中文 (Simplified)', region: 'China', flag: '🇨🇳' },
-  { id: 'ta', label: 'தமிழ் (Tamil)', region: 'India / Malaysia', flag: '🇮🇳' },
-  { id: 'ja', label: '日本語 (Japanese)', region: 'Japan', flag: '🇯🇵' },
-  { id: 'fr', label: 'Français (French)', region: 'France', flag: '🇫🇷' },
-  { id: 'es', label: 'Español (Spanish)', region: 'Spain', flag: '🇪🇸' },
-  { id: 'de', label: 'Deutsch (German)', region: 'Germany', flag: '🇩🇪' },
-];
+const LANGUAGES = getSupportedLanguages().map(l => ({
+  id: l.code,
+  label: l.name,
+  region: l.country,
+  flag: l.flag
+}));
 
 const CustomLanguageDropdown: React.FC<{
   selected: string;

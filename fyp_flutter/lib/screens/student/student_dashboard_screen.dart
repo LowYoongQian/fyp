@@ -10,6 +10,7 @@ import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import 'face_scanner_screen.dart';
 import 'full_timetable_screen.dart';
+import '../system/profile_screen.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 2: Student Main Dashboard Shell (Tab Layout)
@@ -400,7 +401,7 @@ class _MainScreenState extends State<MainScreen> {
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: const Color(0xFF0F172A),
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                   ),
                 ),
                 const Icon(Icons.chevron_right, color: Color(0xFF64748B), size: 20),
@@ -480,7 +481,7 @@ class _MainScreenState extends State<MainScreen> {
                             style: GoogleFonts.spaceGrotesk(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
-                              color: const Color(0xFF0F172A),
+                              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                             ),
                           ),
                         ],
@@ -497,6 +498,12 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
+    final secondaryTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+    final pillBgColor = isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
+    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+
     return SafeArea(
       child: Column(
         children: [
@@ -532,7 +539,7 @@ class _MainScreenState extends State<MainScreen> {
                               style: GoogleFonts.spaceGrotesk(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w800,
-                                color: const Color(0xFF0F172A),
+                                color: primaryTextColor,
                                 letterSpacing: -0.5,
                               ),
                             ),
@@ -542,7 +549,7 @@ class _MainScreenState extends State<MainScreen> {
                               style: GoogleFonts.inter(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w700,
-                                color: const Color(0xFF64748B),
+                                color: secondaryTextColor,
                                 letterSpacing: 0.5,
                               ),
                             ),
@@ -554,7 +561,7 @@ class _MainScreenState extends State<MainScreen> {
                           style: GoogleFonts.inter(
                             fontSize: 8,
                             fontWeight: FontWeight.w600,
-                            color: const Color(0xFF64748B),
+                            color: secondaryTextColor,
                             letterSpacing: 0.5,
                           ),
                         ),
@@ -565,6 +572,23 @@ class _MainScreenState extends State<MainScreen> {
 
                 Row(
                   children: [
+                    IconButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                        );
+                      },
+                      icon: const Icon(Icons.person_rounded, color: Color(0xFF2563EB), size: 18),
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFFEFF6FF),
+                        padding: const EdgeInsets.all(8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     IconButton(
                       onPressed: () async {
                         await widget.onSyncRequested();
@@ -625,7 +649,7 @@ class _MainScreenState extends State<MainScreen> {
                           style: GoogleFonts.spaceGrotesk(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: const Color(0xFF0F172A),
+                            color: primaryTextColor,
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -633,7 +657,7 @@ class _MainScreenState extends State<MainScreen> {
                           "ID: ${widget.studentCode} · ${widget.studentEmail}",
                           style: GoogleFonts.inter(
                             fontSize: 10,
-                            color: const Color(0xFF64748B),
+                            color: secondaryTextColor,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -650,9 +674,9 @@ class _MainScreenState extends State<MainScreen> {
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: const Color(0xFFF1F5F9).withValues(alpha: 0.8),
+              color: pillBgColor,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
+              border: Border.all(color: borderColor),
             ),
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -670,11 +694,11 @@ class _MainScreenState extends State<MainScreen> {
                       bottom: 0,
                       child: Container(
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: isDarkMode ? const Color(0xFF2563EB) : Colors.white,
                           borderRadius: BorderRadius.circular(8),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.04),
+                              color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.04),
                               blurRadius: 4,
                               offset: const Offset(0, 2),
                             )
@@ -742,14 +766,22 @@ class _MainScreenState extends State<MainScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 14, color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF64748B)),
+              Icon(
+                icon,
+                size: 14,
+                color: isSelected
+                    ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF2563EB))
+                    : (Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+              ),
               const SizedBox(width: 6),
               Text(
                 label,
                 style: GoogleFonts.inter(
                   fontSize: 10,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                  color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF64748B),
+                  color: isSelected
+                      ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A))
+                      : (Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
                 ),
               ),
             ],
@@ -779,7 +811,7 @@ class _MainScreenState extends State<MainScreen> {
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xFF0F172A),
+                color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
               ),
             ),
             const SizedBox(height: 8),
@@ -1176,7 +1208,7 @@ class _MainScreenState extends State<MainScreen> {
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xFF0F172A),
+                color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
               ),
             ),
             const SizedBox(height: 8),
@@ -1345,7 +1377,7 @@ class _MainScreenState extends State<MainScreen> {
             style: GoogleFonts.spaceGrotesk(
               fontSize: 15,
               fontWeight: FontWeight.bold,
-              color: const Color(0xFF0F172A),
+              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
             ),
           ),
           const SizedBox(height: 2),
@@ -1354,7 +1386,7 @@ class _MainScreenState extends State<MainScreen> {
             style: GoogleFonts.inter(
               fontSize: 11,
               fontWeight: FontWeight.w500,
-              color: const Color(0xFF64748B),
+              color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
             ),
           ),
           const SizedBox(height: 12),
@@ -1365,9 +1397,9 @@ class _MainScreenState extends State<MainScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
+                    color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFBFDBFE).withValues(alpha: 0.5)),
+                    border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF334155) : const Color(0xFFBFDBFE).withValues(alpha: 0.5)),
                   ),
                   child: Column(
                     children: [
@@ -1385,7 +1417,7 @@ class _MainScreenState extends State<MainScreen> {
                         style: GoogleFonts.spaceGrotesk(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: const Color(0xFF1E293B),
+                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                         ),
                       ),
                     ],
@@ -1397,9 +1429,9 @@ class _MainScreenState extends State<MainScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
+                    color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFBFDBFE).withValues(alpha: 0.5)),
+                    border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF334155) : const Color(0xFFBFDBFE).withValues(alpha: 0.5)),
                   ),
                   child: Column(
                     children: [
@@ -1417,7 +1449,7 @@ class _MainScreenState extends State<MainScreen> {
                         style: GoogleFonts.spaceGrotesk(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: const Color(0xFF1E293B),
+                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                         ),
                       ),
                     ],
@@ -1434,7 +1466,7 @@ class _MainScreenState extends State<MainScreen> {
             style: GoogleFonts.spaceGrotesk(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: const Color(0xFF0F172A),
+              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
             ),
           ),
           const SizedBox(height: 8),
@@ -1635,7 +1667,7 @@ class _MainScreenState extends State<MainScreen> {
                 style: GoogleFonts.spaceGrotesk(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
-                  color: const Color(0xFF0F172A),
+                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                 ),
               ),
               Row(
@@ -1721,7 +1753,7 @@ class _MainScreenState extends State<MainScreen> {
                                     style: GoogleFonts.spaceGrotesk(
                                       fontSize: 11,
                                       fontWeight: FontWeight.bold,
-                                      color: const Color(0xFF0F172A),
+                                      color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                                     ),
                                   ),
                                   const SizedBox(height: 6),

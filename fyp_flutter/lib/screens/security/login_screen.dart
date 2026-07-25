@@ -57,10 +57,17 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final bool isStudent = widget.portalType == 'student';
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     final Color primaryColor = isStudent ? const Color(0xFF2563EB) : const Color(0xFF800000);
     final String portalTitle = isStudent ? "Student Login" : "Staff Login";
     final String idLabel = isStudent ? "Student ID / Email Address" : "Staff ID / Email Address";
     final String idHint = isStudent ? "eg. TP061111 or email" : "eg. L999 or email";
+
+    final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
+    final secondaryTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+    final cardBgColor = isDarkMode ? const Color(0xFF1E293B).withValues(alpha: 0.9) : Colors.white.withValues(alpha: 0.85);
+    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
 
     return Center(
       child: SingleChildScrollView(
@@ -73,25 +80,25 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 IconButton(
                   onPressed: widget.onBackPressed,
-                  icon: const Icon(Icons.arrow_back, color: Color(0xFF334155), size: 20),
+                  icon: Icon(Icons.arrow_back, color: primaryTextColor, size: 20),
                   style: IconButton.styleFrom(
-                    backgroundColor: Colors.white.withValues(alpha: 0.5),
+                    backgroundColor: cardBgColor,
                     padding: const EdgeInsets.all(8),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
+                      side: BorderSide(color: borderColor),
                     ),
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Icon(Icons.lock_outline, color: Color(0xFF475569), size: 18),
+                Icon(Icons.lock_outline, color: secondaryTextColor, size: 18),
                 const SizedBox(width: 8),
                 Text(
                   portalTitle,
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: const Color(0xFF0F172A),
+                    color: primaryTextColor,
                   ),
                 ),
               ],
@@ -103,12 +110,12 @@ class _LoginScreenState extends State<LoginScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
               width: double.infinity,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
+                color: cardBgColor,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
+                border: Border.all(color: borderColor),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.02),
+                    color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.04),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   )
@@ -120,9 +127,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     height: 52,
                     width: 52,
                     decoration: BoxDecoration(
-                      color: primaryColor.withValues(alpha: 0.1),
+                      color: primaryColor.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
-                      border: Border.all(color: primaryColor.withValues(alpha: 0.2), width: 1.5),
+                      border: Border.all(color: primaryColor.withValues(alpha: 0.3), width: 1.5),
                     ),
                     child: Center(
                       child: Icon(
@@ -138,7 +145,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: GoogleFonts.spaceGrotesk(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: const Color(0xFF0F172A),
+                      color: primaryTextColor,
                       letterSpacing: 0.5,
                     ),
                   ),
@@ -150,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     textAlign: TextAlign.center,
                     style: GoogleFonts.inter(
                       fontSize: 10,
-                      color: const Color(0xFF64748B),
+                      color: secondaryTextColor,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -171,14 +178,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: GoogleFonts.spaceGrotesk(
                         fontSize: 11.5,
                         fontWeight: FontWeight.bold,
-                        color: const Color(0xFF334155),
+                        color: primaryTextColor,
                       ),
                     ),
                     const SizedBox(height: 6),
                     TextFormField(
                       controller: _emailOrIdController,
-                      style: const TextStyle(fontSize: 12),
+                      style: GoogleFonts.inter(fontSize: 12, color: primaryTextColor),
                       decoration: _buildInputDecoration(
+                        context: context,
                         hintText: idHint,
                         prefixIcon: isStudent ? Icons.school_outlined : Icons.badge_outlined,
                       ),
@@ -196,58 +204,53 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: GoogleFonts.spaceGrotesk(
                         fontSize: 11.5,
                         fontWeight: FontWeight.bold,
-                        color: const Color(0xFF334155),
+                        color: primaryTextColor,
                       ),
                     ),
                     const SizedBox(height: 6),
                     TextFormField(
                       controller: _passwordController,
                       obscureText: true,
-                      style: const TextStyle(fontSize: 12),
+                      style: GoogleFonts.inter(fontSize: 12, color: primaryTextColor),
                       decoration: _buildInputDecoration(
+                        context: context,
                         hintText: "••••••••",
                         prefixIcon: Icons.key_outlined,
                       ),
-                      validator: (v) => (v == null || v.length < 4) ? "Password must be at least 4 characters" : null,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) {
+                          return "Password is required";
+                        }
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 24),
 
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: isStudent 
-                              ? [const Color(0xFF2563EB), const Color(0xFF3B82F6)] 
-                              : [const Color(0xFF800000), const Color(0xFFA02020)],
+                    ElevatedButton(
+                      onPressed: widget.isSyncing ? null : submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
-                            color: primaryColor.withValues(alpha: 0.3),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          )
-                        ],
+                        elevation: 3,
                       ),
-                      child: ElevatedButton(
-                        onPressed: widget.isSyncing ? null : submit,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          foregroundColor: Colors.white,
-                          shadowColor: Colors.transparent,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: Text(
-                          "LOGIN",
-                          style: GoogleFonts.spaceGrotesk(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.0,
-                          ),
-                        ),
-                      ),
+                      child: widget.isSyncing
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : Text(
+                              "LOGIN",
+                              style: GoogleFonts.spaceGrotesk(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
                     ),
                   ],
                 ),
@@ -261,7 +264,7 @@ class _LoginScreenState extends State<LoginScreen> {
               style: GoogleFonts.inter(
                 fontSize: 9,
                 fontWeight: FontWeight.w600,
-                color: const Color(0xFF94A3B8),
+                color: secondaryTextColor,
                 letterSpacing: 1.0,
               ),
             ),
@@ -271,12 +274,11 @@ class _LoginScreenState extends State<LoginScreen> {
               icon: Icon(Icons.flash_on, size: 12, color: primaryColor),
               label: Text(
                 isStudent ? "Student Profile (Low)" : "Staff Profile (Dr. Wong)",
-                style: const TextStyle(fontSize: 10),
+                style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: primaryTextColor),
               ),
               style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF334155),
-                backgroundColor: Colors.white.withValues(alpha: 0.5),
-                side: BorderSide(color: const Color(0xFFE2E8F0).withValues(alpha: 0.8)),
+                backgroundColor: cardBgColor,
+                side: BorderSide(color: borderColor),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -290,31 +292,40 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   InputDecoration _buildInputDecoration({
+    required BuildContext context,
     required String hintText,
     required IconData prefixIcon,
   }) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final inputBg = isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final iconColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+
     return InputDecoration(
       hintText: hintText,
-      hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+      hintStyle: GoogleFonts.inter(color: iconColor, fontSize: 12),
       prefixIcon: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12.0),
-        child: Icon(prefixIcon, color: const Color(0xFF64748B), size: 18),
+        child: Icon(prefixIcon, color: iconColor, size: 18),
       ),
       prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0),
       filled: true,
-      fillColor: const Color(0xFFF8FAFC).withValues(alpha: 0.9),
+      fillColor: inputBg,
       contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.0),
+        borderSide: BorderSide(color: borderColor, width: 1.0),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 1.0),
+        borderSide: BorderSide(color: borderColor, width: 1.0),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: widget.portalType == 'student' ? const Color(0xFF2563EB) : const Color(0xFF800000), width: 1.5),
+        borderSide: BorderSide(
+          color: widget.portalType == 'student' ? const Color(0xFF2563EB) : const Color(0xFF800000),
+          width: 1.5,
+        ),
       ),
       errorStyle: const TextStyle(fontSize: 9),
     );

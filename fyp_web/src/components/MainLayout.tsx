@@ -23,7 +23,9 @@ import {
   Home,
   Settings,
   ChevronsUpDown,
-  Check
+  Check,
+  FileText,
+  MessageSquare
 } from 'lucide-react';
 import { swalSuccess } from '../utils/swal';
 
@@ -88,7 +90,8 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       ? [
           { id: 'student_dashboard', label: 'Dashboard', icon: LayoutDashboard },
           { id: 'student_timetable', label: 'Timetable', icon: Calendar },
-          { id: 'chatbot', label: 'AI Assistant', icon: MessageSquareCode }
+          { id: 'student_mc', label: 'MC Submission', icon: FileText },
+          { id: 'student_contact', label: 'Contact Admin', icon: MessageSquare }
         ]
       : [
           { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },

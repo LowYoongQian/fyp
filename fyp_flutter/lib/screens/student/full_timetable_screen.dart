@@ -90,7 +90,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                     style: GoogleFonts.spaceGrotesk(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
-                      color: const Color(0xFF0F172A),
+                      color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                     ),
                   ),
                   Text(
@@ -363,7 +363,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                 style: GoogleFonts.spaceGrotesk(
                                                   fontSize: 12.5,
                                                   fontWeight: FontWeight.w800,
-                                                  color: const Color(0xFF0F172A),
+                                                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                                                 ),
                                               ),
                                               const SizedBox(height: 2),
@@ -372,7 +372,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                 style: GoogleFonts.spaceGrotesk(
                                                   fontSize: 12.5,
                                                   fontWeight: FontWeight.w800,
-                                                  color: const Color(0xFF0F172A),
+                                                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                                                 ),
                                               ),
                                             ],
@@ -384,7 +384,9 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                       Expanded(
                                         child: GlassCard(
                                           padding: const EdgeInsets.all(12),
-                                          color: Colors.white.withValues(alpha: 0.9),
+                                          color: Theme.of(context).brightness == Brightness.dark
+                                              ? const Color(0xFF1E293B).withValues(alpha: 0.9)
+                                              : Colors.white.withValues(alpha: 0.9),
                                           borderColor: themeColor.withValues(alpha: 0.15),
                                           child: Row(
                                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -434,7 +436,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                       style: GoogleFonts.spaceGrotesk(
                                                         fontSize: 11.5,
                                                         fontWeight: FontWeight.bold,
-                                                        color: const Color(0xFF0F172A),
+                                                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
                                                         height: 1.25,
                                                       ),
                                                     ),
