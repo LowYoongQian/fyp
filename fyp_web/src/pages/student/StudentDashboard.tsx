@@ -95,8 +95,8 @@ export const StudentDashboard: React.FC = () => {
   };
 
   // Get attendance percentage from enrolment detail
-  const getAttendanceRateForCourse = (courseId: number) => {
-    const enrolment = enrolments.find(e => e.course_id === courseId);
+  const getAttendanceRateForCourse = (courseId: number | string) => {
+    const enrolment = enrolments.find(e => String(e.course_id) === String(courseId));
     return enrolment && typeof enrolment.attendance_rate === 'number'
       ? enrolment.attendance_rate
       : 100;

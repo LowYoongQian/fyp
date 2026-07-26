@@ -247,8 +247,8 @@ def recompute_risk_scores(
 
 @router.get("/risk-scores")
 def get_risk_scores(
-    course_id: int | None = None,
-    student_id: int | None = None,
+    course_id: str | None = None,
+    student_id: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer),
 ):

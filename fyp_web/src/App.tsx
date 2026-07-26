@@ -29,7 +29,7 @@ import {
   ShimmerAdminPanel
 } from './components/Shimmer';
 import './App.css';
-import { applyThemePreference } from './theme/themePreference';
+import { applyThemePreference, getAccountThemePreference, resetThemeOnLogout } from './theme/themePreference';
 
 const DashboardContent: React.FC = () => {
   const { isAuthenticated, loading, user } = useAuth();
@@ -38,7 +38,11 @@ const DashboardContent: React.FC = () => {
 
   useEffect(() => {
     const applyThemeFromStorage = () => {
-      applyThemePreference();
+      if (user?.user_id) {
+        applyThemePreference(getAccountThemePreference(user.user_id));
+      } else {
+        resetThemeOnLogout();
+      }
     };
     applyThemeFromStorage();
     window.addEventListener('storage', applyThemeFromStorage);
@@ -48,7 +52,7 @@ const DashboardContent: React.FC = () => {
       window.removeEventListener('storage', applyThemeFromStorage);
       systemTheme.removeEventListener('change', applyThemeFromStorage);
     };
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (user) {

@@ -35,7 +35,7 @@ export const LecturerDashboard: React.FC = () => {
   const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false);
 
   // Live Monitoring Session
-  const [monitoredSessionId, setMonitoredSessionId] = useState<number | null>(null);
+  const [monitoredSessionId, setMonitoredSessionId] = useState<number | string | null>(null);
   const [attendanceData, setAttendanceData] = useState<SessionAttendanceDetail | null>(null);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
@@ -134,7 +134,7 @@ export const LecturerDashboard: React.FC = () => {
       const data = await apiService.getActiveSessions();
       const listToUse = coursesList || courses;
       const detailed = data.map((s: any) => {
-        const c = listToUse.find(course => course.id === s.course_id);
+        const c = listToUse.find(course => String(course.id) === String(s.course_id));
         return {
           ...s,
           course_name: c ? c.course_name : 'Unknown Course',
@@ -152,7 +152,7 @@ export const LecturerDashboard: React.FC = () => {
     setCreationError(null);
     try {
       if (!selectedCourseId) throw new Error('Please select a course');
-      const response = await apiService.openSession(Number(selectedCourseId), classGroup);
+      const response = await apiService.openSession(selectedCourseId, classGroup);
       await fetchActiveSessions();
       handleStartMonitor(response.id);
       await swalSuccess('Session Opened', 'Attendance window is now live for students.');
@@ -164,7 +164,7 @@ export const LecturerDashboard: React.FC = () => {
     }
   };
 
-  const startPolling = (sessionId: number) => {
+  const startPolling = (sessionId: number | string) => {
     stopPolling();
     const tick = async () => {
       try {
@@ -186,7 +186,7 @@ export const LecturerDashboard: React.FC = () => {
     }
   };
 
-  const handleStartMonitor = async (sessionId: number) => {
+  const handleStartMonitor = async (sessionId: number | string) => {
     setLoadingAttendance(true);
     setAttendanceError(null);
     setMonitoredSessionId(sessionId);
@@ -202,7 +202,7 @@ export const LecturerDashboard: React.FC = () => {
     }
   };
 
-  const handleManualMark = (studentId: number, currentStatus: string) => {
+  const handleManualMark = (studentId: number | string, currentStatus: string) => {
     if (!attendanceData) return;
     
     const updatedList = attendanceData.attendance_list.map((s): StudentAttendance => {

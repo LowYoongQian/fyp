@@ -42,7 +42,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # JWT generation
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
+    to_encode = {k: str(v) if not isinstance(v, (int, float, bool, str, type(None))) else v for k, v in data.items()}
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=EXPIRE_MINS))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -65,11 +65,11 @@ def get_current_user(
     db: Session = Depends(get_db)
 ) -> User:
     payload = decode_token(token)
-    user_id: int = payload.get("user_id")
-    if not user_id:
+    user_id = payload.get("user_id")
+    if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == str(user_id)).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 

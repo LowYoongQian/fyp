@@ -54,8 +54,8 @@ const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) =>
 };
 
 interface TimetableEvent {
-  id: number;
-  meetingId?: number;   // class_meetings row id — present for admin, enables editing
+  id: number | string;
+  meetingId?: number | string;   // class_meetings row id — present for admin, enables editing
   courseCode: string;
   courseName: string;
   group: string;
@@ -247,7 +247,7 @@ export const Timetable: React.FC = () => {
     
     const groups: {
       [key: string]: {
-        courseId: number;
+        courseId: number | string;
         courseCode: string;
         courseName: string;
         attendanceRate: number;

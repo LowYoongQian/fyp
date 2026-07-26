@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional
+from typing import Optional, Any, Union
 from enum import Enum
 
 
@@ -17,13 +17,9 @@ class AccountRole(str, Enum):
 
 # Authentication Schemas
 class LoginRequest(BaseModel):
-    # Accepts an email OR a student_code / staff_id. `email` kept for backward
-    # compatibility with older app builds; `identifier` is preferred.
     email: Optional[str] = None
     identifier: Optional[str] = None
     password: str
-    # Device fingerprint for multi-device session binding (optional; older
-    # clients that omit it are not locked to a device).
     device_id: Optional[str] = None
     portal: Optional[str] = None
 
@@ -40,9 +36,8 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: str
-    user_id: int
-    # Profile details so the app never needs a direct DB connection to log in.
-    profile_id: Optional[int] = None        # students.id or lecturers.id
+    user_id: Any
+    profile_id: Optional[Any] = None        # students.id or lecturers.id
     name: Optional[str] = None
     code: Optional[str] = None              # student_code or staff_id
     email: Optional[str] = None
@@ -61,18 +56,18 @@ class QueryResponse(BaseModel):
 # Generic Response
 class MessageResponse(BaseModel):
     message: str
-    user_id: Optional[int] = None
+    user_id: Optional[Any] = None
 
 # Session & Attendance Schemas
 from datetime import datetime
 
 class SessionCreate(BaseModel):
-    course_id: int
+    course_id: Any
     class_group: str = "All"
 
 class SessionResponse(BaseModel):
-    id: int
-    course_id: int
+    id: Any
+    course_id: Any
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     is_open: bool
@@ -85,20 +80,16 @@ class AttendanceSubmit(BaseModel):
     wifi_ssid: str
     image_base64: str
     liveness_passed: bool = True
-    # Client-reported network facts (corroborating signals; spoofable individually)
-    bssid: Optional[str] = None         # connected access point MAC
-    gateway_ip: Optional[str] = None    # router/gateway IP the device routes through
-    local_ip: Optional[str] = None      # device's own LAN IP
-    # Behavioral biometrics — how long (ms) the liveness challenge took to pass.
-    # A suspiciously short value (<800 ms) may indicate replay or automation.
+    bssid: Optional[str] = None
+    gateway_ip: Optional[str] = None
+    local_ip: Optional[str] = None
     liveness_challenge_ms: Optional[int] = None
-    # Device fingerprint of the phone checking in (recorded for audit only).
     device_id: Optional[str] = None
 
 class AttendanceResponse(BaseModel):
-    id: int
-    student_id: int
-    session_id: int
+    id: Any
+    student_id: Any
+    session_id: Any
     status: str
     confidence_score: Optional[float] = None
     wifi_verified: bool
@@ -113,7 +104,7 @@ class AttendanceResponse(BaseModel):
         from_attributes = True
 
 class StudentAttendanceStatus(BaseModel):
-    student_id: int
+    student_id: Any
     student_name: str
     student_code: str
     status: str
@@ -124,7 +115,7 @@ class StudentAttendanceStatus(BaseModel):
     verify_detail: Optional[str] = None
 
 class SessionAttendanceResponse(BaseModel):
-    session_id: int
+    session_id: Any
     course_name: str
     course_code: str
     class_group: str
@@ -149,7 +140,7 @@ class AnnouncementCreate(BaseModel):
     target_course_code: Optional[str] = None
 
 class AnnouncementResponse(BaseModel):
-    id: int
+    id: Any
     title: str
     content: str
     faculty: str
@@ -204,7 +195,7 @@ class ProgrammeCreate(BaseModel):
     code: str
 
 class ProgrammeResponse(BaseModel):
-    id: int
+    id: Any
     name: str
     code: str
 
@@ -215,8 +206,8 @@ class CourseCreate(BaseModel):
     course_name: str
     course_code: str
     credit_hours: Optional[float] = 3.0
-    lecturer_id: Optional[int] = None
-    programme_id: Optional[int] = None
+    lecturer_id: Optional[Any] = None
+    programme_id: Optional[Any] = None
     
     schedule_day: Optional[str] = None
     schedule_start: Optional[str] = None
@@ -224,12 +215,12 @@ class CourseCreate(BaseModel):
     schedule_room: Optional[str] = None
 
 class CourseResponse(BaseModel):
-    id: int
+    id: Any
     course_name: str
     course_code: str
     credit_hours: Optional[float] = 3.0
-    lecturer_id: Optional[int] = None
-    programme_id: Optional[int] = None
+    lecturer_id: Optional[Any] = None
+    programme_id: Optional[Any] = None
     
     schedule_day: Optional[str] = None
     schedule_start: Optional[str] = None
@@ -241,21 +232,21 @@ class CourseResponse(BaseModel):
 
 class AssignmentCreate(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
-    course_id: int
-    lecturer_id: int
+    course_id: Any
+    lecturer_id: Any
     role: StaffRole
 
 class AssignmentResponse(BaseModel):
-    id: int
-    course_id: int
-    lecturer_id: int
+    id: Any
+    course_id: Any
+    lecturer_id: Any
     role: str
 
     class Config:
         from_attributes = True
 
 class StudentProgrammeAssign(BaseModel):
-    programme_id: Optional[int] = None
+    programme_id: Optional[Any] = None
 
 class AdminAttendanceUpdate(BaseModel):
     status: str
@@ -278,7 +269,7 @@ class CampusNetworkUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 class CampusNetworkResponse(BaseModel):
-    id: int
+    id: Any
     label: str
     cidr: Optional[str] = None
     ssid: Optional[str] = None
@@ -293,6 +284,4 @@ class SecuritySettingItem(BaseModel):
     value: Optional[str] = None
 
 class SecuritySettingsUpdate(BaseModel):
-    # accepts any subset of the known keys
     settings: dict[str, str]
-

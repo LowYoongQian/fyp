@@ -174,7 +174,7 @@ export const AcademicManager: React.FC = () => {
     }
   };
 
-  const handleDeleteProgramme = async (id: number) => {
+  const handleDeleteProgramme = async (id: number | string) => {
     const isConfirmed = await swalConfirm(
       'Delete Programme?',
       'Deleting this programme will set all student and course associations to NULL.',
@@ -199,7 +199,7 @@ export const AcademicManager: React.FC = () => {
         course_code: courseCode,
         credit_hours: parseFloat(courseCreditHours) || 3.0,
         lecturer_id: null,
-        programme_id: courseProgId ? Number(courseProgId) : null
+        programme_id: courseProgId || null
       });
       setCourseName('');
       setCourseCode('');
@@ -212,7 +212,7 @@ export const AcademicManager: React.FC = () => {
     }
   };
 
-  const handleDeleteCourse = async (id: number) => {
+  const handleDeleteCourse = async (id: number | string) => {
     const isConfirmed = await swalConfirm(
       'Delete Course?',
       'This will cascadingly remove all student enrolments in this course.',
@@ -233,8 +233,8 @@ export const AcademicManager: React.FC = () => {
     if (!assignLecturerId || !assignCourseId) return;
     try {
       await apiService.adminCreateAssignment({
-        course_id: Number(assignCourseId),
-        lecturer_id: Number(assignLecturerId),
+        course_id: assignCourseId,
+        lecturer_id: assignLecturerId,
         role: assignRole
       });
       setAssignLecturerId('');
@@ -246,8 +246,8 @@ export const AcademicManager: React.FC = () => {
     }
   };
 
-  const handleDeleteAssignment = async (id: number) => {
-    const isConfirmed = await swalConfirm('Remove this role assignment?', undefined, 'Yes, remove it');
+  const handleDeleteAssignment = async (id: number | string) => {
+    const isConfirmed = await swalConfirm('Remove this role assignment?', '', 'Yes, remove it');
     if (!isConfirmed) return;
     try {
       await apiService.adminDeleteAssignment(id);
@@ -263,8 +263,8 @@ export const AcademicManager: React.FC = () => {
     if (!selectedStudentIdForProg) return;
     try {
       await apiService.adminAssignStudentProgramme(
-        Number(selectedStudentIdForProg),
-        studProgId ? Number(studProgId) : null
+        selectedStudentIdForProg,
+        studProgId || null
       );
       setSelectedStudentIdForProg('');
       setStudProgId('');
@@ -280,8 +280,8 @@ export const AcademicManager: React.FC = () => {
     if (!enrolStudentId || !enrolCourseId) return;
     try {
       await apiService.adminCreateEnrolment({
-        student_id: Number(enrolStudentId),
-        course_id: Number(enrolCourseId),
+        student_id: enrolStudentId,
+        course_id: enrolCourseId,
         semester: enrolSemester,
         class_group: enrolGroup
       });
@@ -294,8 +294,8 @@ export const AcademicManager: React.FC = () => {
     }
   };
 
-  const handleDeleteEnrolment = async (id: number) => {
-    const isConfirmed = await swalConfirm('Drop this course enrolment?', undefined, 'Yes, drop it');
+  const handleDeleteEnrolment = async (id: number | string) => {
+    const isConfirmed = await swalConfirm('Drop this course enrolment?', '', 'Yes, drop it');
     if (!isConfirmed) return;
     try {
       await apiService.adminDeleteEnrolment(id);

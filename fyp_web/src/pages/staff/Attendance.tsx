@@ -4,7 +4,7 @@ import type { Course, ActiveSession } from '../../services/api';
 import { Search, Calendar, ChevronDown, Check, AlertTriangle, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface DailyAttendanceRecord {
-  studentId: number;
+  studentId: number | string;
   studentName: string;
   studentCode: string;
   studentEmail: string;
@@ -35,7 +35,7 @@ export const Attendance: React.FC = () => {
   
   // Attendance records state
   const [records, setRecords] = useState<DailyAttendanceRecord[]>([]);
-  const [copiedStudentId, setCopiedStudentId] = useState<number | null>(null);
+  const [copiedStudentId, setCopiedStudentId] = useState<number | string | null>(null);
 
   const getAvailableGroupsForCourse = (courseId: string): string[] => {
     if (!courseId) return ['G1'];
@@ -279,10 +279,10 @@ export const Attendance: React.FC = () => {
     loadAttendance();
   }, [selectedSessionId, students]);
 
-  const handleMarkPresent = async (studentId: number) => {
+  const handleMarkPresent = async (studentId: number | string) => {
     if (!selectedSessionId) return;
     try {
-      await apiService.updateLecturerAttendance(Number(selectedSessionId), studentId, 'present');
+      await apiService.updateLecturerAttendance(selectedSessionId, studentId, 'present');
       setRecords(prev => prev.map(r => {
         if (r.studentId === studentId) {
           return {
@@ -299,10 +299,10 @@ export const Attendance: React.FC = () => {
     }
   };
 
-  const handleMarkAbsent = async (studentId: number) => {
+  const handleMarkAbsent = async (studentId: number | string) => {
     if (!selectedSessionId) return;
     try {
-      await apiService.updateLecturerAttendance(Number(selectedSessionId), studentId, 'absent');
+      await apiService.updateLecturerAttendance(selectedSessionId, studentId, 'absent');
       const currentSession = sessions.find(s => s.id.toString() === selectedSessionId);
       const isOpen = currentSession ? currentSession.is_open : false;
       
@@ -328,13 +328,12 @@ export const Attendance: React.FC = () => {
     const nextStatus = allPresent ? 'absent' : 'present';
     
     try {
-      // Call update API for each student concurrently
-      await Promise.all(filteredRecords.map(r => 
-        apiService.updateLecturerAttendance(Number(selectedSessionId), r.studentId, nextStatus)
-      ));
-      
       const currentSession = sessions.find(s => s.id.toString() === selectedSessionId);
       const isOpen = currentSession ? currentSession.is_open : false;
+
+      await Promise.all(
+        filteredRecords.map(r => apiService.updateLecturerAttendance(selectedSessionId, r.studentId, nextStatus))
+      );
       
       setRecords(prev => prev.map(r => {
         const isFiltered = filteredRecords.some(fr => fr.studentId === r.studentId);
@@ -355,7 +354,7 @@ export const Attendance: React.FC = () => {
     }
   };
 
-  const handleCopyEmail = (email: string, studentId: number) => {
+  const handleCopyEmail = (email: string, studentId: number | string) => {
     if (!email) return;
     navigator.clipboard.writeText(email);
     setCopiedStudentId(studentId);

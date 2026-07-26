@@ -45,7 +45,7 @@ export const AttendanceManager: React.FC = () => {
   const [modalError, setModalError] = useState<string | null>(null);
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [modalStatusFilter, setModalStatusFilter] = useState<'all' | 'present' | 'absent'>('all');
-  const [submittingStudentId, setSubmittingStudentId] = useState<number | null>(null);
+  const [submittingStudentId, setSubmittingStudentId] = useState<number | string | null>(null);
 
   useEffect(() => {
     fetchSessions();

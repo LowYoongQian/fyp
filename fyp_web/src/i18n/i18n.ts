@@ -44,6 +44,12 @@ const FALLBACK_TRANSLATIONS: Record<string, any> = {
 // In-Memory dynamic language store
 let activeLanguagesList: LanguageItem[] = FALLBACK_LANGUAGES;
 let activeTranslationsDict: Record<string, any> = FALLBACK_TRANSLATIONS;
+let activeLanguage = 'en';
+const languageListeners = new Set<() => void>();
+let pageObserver: MutationObserver | null = null;
+let pendingPageTranslation = false;
+const originalText = new WeakMap<Text, string>();
+const originalAttributes = new WeakMap<Element, Map<string, string>>();
 
 // Try loading from local storage cache initially
 try {
@@ -71,6 +77,7 @@ export const fetchSystemLanguages = async (): Promise<void> => {
       activeLanguagesList = data.supportedLanguages;
       activeTranslationsDict = data.translations || FALLBACK_TRANSLATIONS;
       localStorage.setItem('cached_system_languages', JSON.stringify(data));
+      applyPageTranslations();
     }
   } catch (err) {
     console.warn("Could not fetch remote system languages from backend, using local cache/fallback:", err);
@@ -89,11 +96,113 @@ export const getLanguageByCode = (code: string): LanguageItem => {
   return list.find(l => l.code === code) || list[0];
 };
 
+export const getActiveLanguage = (): string => activeLanguage;
+
+export const subscribeToLanguage = (listener: () => void): (() => void) => {
+  languageListeners.add(listener);
+  return () => languageListeners.delete(listener);
+};
+
+const flattenTranslations = (dictionary: Record<string, any>, prefix = ''): Record<string, string> => {
+  const flattened: Record<string, string> = {};
+  for (const [key, value] of Object.entries(dictionary)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === 'string') {
+      flattened[path] = value;
+    } else if (value && typeof value === 'object') {
+      Object.assign(flattened, flattenTranslations(value, path));
+    }
+  }
+  return flattened;
+};
+
+const getTextReplacementMap = (): Map<string, string> => {
+  if (activeLanguage === 'en') return new Map();
+  const english = flattenTranslations(activeTranslationsDict.en || FALLBACK_TRANSLATIONS.en);
+  const selected = flattenTranslations(activeTranslationsDict[activeLanguage] || {});
+  const replacements = new Map<string, string>();
+  for (const [key, source] of Object.entries(english)) {
+    const translated = selected[key];
+    if (translated && translated !== source) replacements.set(source, translated);
+  }
+  return replacements;
+};
+
+const translateValue = (value: string, replacements: Map<string, string>): string => {
+  const source = value.trim();
+  const translated = replacements.get(source);
+  return translated ? value.replace(source, translated) : value;
+};
+
+/**
+ * Applies the catalogue to rendered labels as well as JSX labels that opt in
+ * through `t()`. Keeping the original English text lets a user switch language
+ * repeatedly without needing a page reload.
+ */
+export const applyPageTranslations = (): void => {
+  if (typeof document === 'undefined') return;
+  const replacements = getTextReplacementMap();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) textNodes.push(node as Text);
+
+  for (const textNode of textNodes) {
+    const parent = textNode.parentElement;
+    if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE'].includes(parent.tagName)) continue;
+    const source = originalText.get(textNode) ?? textNode.nodeValue ?? '';
+    originalText.set(textNode, source);
+    const translated = translateValue(source, replacements);
+    if (textNode.nodeValue !== translated) textNode.nodeValue = translated;
+  }
+
+  for (const element of document.querySelectorAll<HTMLElement>('[placeholder], [title], [aria-label]')) {
+    let attributes = originalAttributes.get(element);
+    if (!attributes) {
+      attributes = new Map();
+      originalAttributes.set(element, attributes);
+    }
+    for (const attribute of ['placeholder', 'title', 'aria-label']) {
+      const current = element.getAttribute(attribute);
+      if (current === null) continue;
+      const source = attributes.get(attribute) ?? current;
+      attributes.set(attribute, source);
+      const translated = translateValue(source, replacements);
+      if (current !== translated) element.setAttribute(attribute, translated);
+    }
+  }
+};
+
+const schedulePageTranslation = () => {
+  if (pendingPageTranslation) return;
+  pendingPageTranslation = true;
+  queueMicrotask(() => {
+    pendingPageTranslation = false;
+    applyPageTranslations();
+  });
+};
+
+export const setActiveLanguage = (languageCode?: string): void => {
+  const normalizedCode = languageCode === 'zh_CN' || languageCode === 'zh_TW' ? 'zh' : languageCode;
+  const language = getLanguageByCode(normalizedCode || 'en');
+  activeLanguage = language.code;
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = activeLanguage;
+    document.documentElement.dir = language.rtl ? 'rtl' : 'ltr';
+    applyPageTranslations();
+    if (!pageObserver && document.body) {
+      pageObserver = new MutationObserver(schedulePageTranslation);
+      pageObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+  }
+  languageListeners.forEach(listener => listener());
+};
+
 /**
  * Get translation string dynamically
  * Usage: t('student.portalTitle', 'ms') -> "Portal Pelajar"
  */
-export const t = (keyPath: string, langCode: string = 'en'): string => {
+export const t = (keyPath: string, langCode: string = activeLanguage): string => {
   const activeDict = activeTranslationsDict[langCode] || activeTranslationsDict['en'] || FALLBACK_TRANSLATIONS['en'];
 
   const keys = keyPath.split('.');

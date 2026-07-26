@@ -2,9 +2,9 @@ import Swal from 'sweetalert2';
 
 const base = Swal.mixin({
   customClass: {
-    popup: '!rounded-2xl !shadow-2xl !border !border-slate-100 !font-sans',
-    title: '!text-slate-900 !font-display !font-bold !text-base',
-    htmlContainer: '!text-slate-500 !text-sm',
+    popup: '!rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
+    title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-base',
+    htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-sm',
     confirmButton: '!rounded-xl !px-5 !py-2.5 !text-sm !font-semibold !shadow-none',
     cancelButton: '!rounded-xl !px-5 !py-2.5 !text-sm !font-semibold !shadow-none',
     icon: '!border-0',
@@ -22,10 +22,10 @@ const toastBase = Swal.mixin({
   timer: 3000,
   timerProgressBar: true,
   customClass: {
-    popup: '!rounded-xl !shadow-xl !border !border-slate-100 !font-sans !bg-white/95 !backdrop-blur-md !p-3',
-    title: '!text-slate-900 !font-bold !text-xs !text-left !m-0 !pl-1',
-    htmlContainer: '!text-slate-500 !text-[11px] !text-left !m-0 !mt-1 !pl-1',
-    icon: '!m-0 !mr-2',
+    popup: '!rounded-2xl !shadow-xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card !p-3.5',
+    title: '!text-slate-900 dark:!text-slate-100 !font-bold !text-xs !text-left !m-0 !pl-1',
+    htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-[11px] !text-left !m-0 !mt-1 !pl-1',
+    icon: '!m-0 !mr-2.5 !border-0',
   },
   didOpen: (toast) => {
     toast.addEventListener('mouseenter', Swal.stopTimer);
@@ -39,6 +39,10 @@ export const swalSuccess = (title: string, text?: string) =>
     title,
     text,
   });
+
+// Used before a theme or route transition so an open toast cannot inherit
+// styles from both the old and new screen.
+export const closeSwal = () => Swal.close();
 
 export const swalError = (title: string, text?: string) =>
   base.fire({
@@ -61,38 +65,36 @@ export const swalWarning = (title: string, text?: string) =>
   });
 
 export const swalInfo = (title: string, text?: string) =>
-  base.fire({
+  toastBase.fire({
     icon: 'info',
     title,
     text,
-    confirmButtonText: 'OK',
-    confirmButtonColor: '#2563eb',
-    timer: 3500,
-    timerProgressBar: true,
   });
 
-export const swalConfirmDelete = (itemName: string, extraText?: string) =>
-  base.fire({
-    icon: 'warning',
-    title: 'Confirm Deletion',
-    html: `<span>You are about to delete <strong>${itemName}</strong>.</span>${extraText ? `<br/><span class="text-xs text-slate-400 mt-1 block">${extraText}</span>` : ''}`,
-    showCancelButton: true,
-    confirmButtonText: 'Yes, delete it',
-    cancelButtonText: 'Cancel',
-    confirmButtonColor: '#ef4444',
-    cancelButtonColor: '#64748b',
-    reverseButtons: true,
-  }).then(r => r.isConfirmed);
-
-export const swalConfirm = (title: string, text?: string, confirmLabel = 'Confirm') =>
-  base.fire({
-    icon: 'question',
+export const swalConfirm = async (title: string, text: string, confirmText: string = 'Yes, proceed'): Promise<boolean> => {
+  const result = await base.fire({
     title,
     text,
+    icon: 'warning',
     showCancelButton: true,
-    confirmButtonText: confirmLabel,
-    cancelButtonText: 'Cancel',
     confirmButtonColor: '#2563eb',
     cancelButtonColor: '#64748b',
-    reverseButtons: true,
-  }).then(r => r.isConfirmed);
+    confirmButtonText: confirmText,
+    cancelButtonText: 'Cancel'
+  });
+  return result.isConfirmed;
+};
+
+export const swalConfirmDelete = async (itemName: string, detailText?: string): Promise<boolean> => {
+  const result = await base.fire({
+    title: `Delete ${itemName}?`,
+    text: detailText || 'This action cannot be undone.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#ef4444',
+    cancelButtonColor: '#64748b',
+    confirmButtonText: 'Yes, delete it',
+    cancelButtonText: 'Cancel'
+  });
+  return result.isConfirmed;
+};

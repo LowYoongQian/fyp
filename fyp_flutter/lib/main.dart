@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/server_discovery_service.dart';
+import 'services/user_service.dart';
 import 'config/app_config.dart';
 import 'widgets/aurora_background.dart';
 import 'screens/security/login_screen.dart';
@@ -20,6 +21,7 @@ import 'screens/student/face_scanner_screen.dart';
 import 'screens/system/home_screen.dart';
 import 'screens/system/settings_screen.dart';
 import 'widgets/shimmer_loading.dart';
+import 'i18n/app_localizations.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +41,18 @@ class MainApp extends StatefulWidget {
 
 class MainAppState extends State<MainApp> {
   ThemeMode _themeMode = ThemeMode.light;
+  String _languageCode = 'en';
+  Map<String, dynamic> _translations = const {
+    'en': {
+      'common': {
+        'dashboard': 'Dashboard', 'timetable': 'Timetable', 'attendance': 'Attendance',
+        'settings': 'Settings', 'logout': 'Sign Out', 'save': 'Save Preferences',
+        'cancel': 'Cancel', 'search': 'Search language or region...',
+        'language': 'Language & Locale', 'theme': 'Appearance Theme',
+        'notifications': 'Notifications', 'security': 'Security & Biometrics',
+      },
+    },
+  };
 
   static final ThemeData _lightThemeData = ThemeData(
     useMaterial3: true,
@@ -68,6 +82,7 @@ class MainAppState extends State<MainApp> {
   void initState() {
     super.initState();
     _loadThemeMode();
+    _loadLanguage();
   }
 
   Future<void> _loadThemeMode() async {
@@ -106,11 +121,44 @@ class MainAppState extends State<MainApp> {
     }
   }
 
+  Future<void> _loadLanguage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedLanguage = prefs.getString('language') ?? 'en';
+      final catalogue = await UserService.fetchSystemLanguages();
+      if (!mounted) return;
+      setState(() {
+        _languageCode = savedLanguage;
+        final remoteTranslations = catalogue?['translations'];
+        if (remoteTranslations is Map) {
+          _translations = Map<String, dynamic>.from(remoteTranslations);
+        }
+      });
+    } catch (e) {
+      debugPrint('Failed to load app language: $e');
+    }
+  }
+
+  Future<void> updateLanguage(String languageCode) async {
+    final catalogue = await UserService.fetchSystemLanguages();
+    if (!mounted) return;
+    setState(() {
+      _languageCode = languageCode == 'zh_CN' || languageCode == 'zh_TW' ? 'zh' : languageCode;
+      final remoteTranslations = catalogue?['translations'];
+      if (remoteTranslations is Map) {
+        _translations = Map<String, dynamic>.from(remoteTranslations);
+      }
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('language', _languageCode);
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Smart Attendance Portal',
       debugShowCheckedModeBanner: false,
+      locale: Locale(_languageCode),
       theme: _lightThemeData,
       darkTheme: _darkThemeData,
       themeMode: _themeMode,
@@ -118,11 +166,18 @@ class MainAppState extends State<MainApp> {
         final isDarkMode = _themeMode == ThemeMode.dark ||
             (_themeMode == ThemeMode.system &&
                 MediaQuery.platformBrightnessOf(context) == Brightness.dark);
-        return AnimatedTheme(
-          data: isDarkMode ? _darkThemeData : _lightThemeData,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeInOut,
-          child: child ?? const AppRoot(),
+        return AppLocalizations(
+          languageCode: _languageCode,
+          translations: _translations,
+          child: Directionality(
+            textDirection: _languageCode == 'ar' ? TextDirection.rtl : TextDirection.ltr,
+            child: AnimatedTheme(
+              data: isDarkMode ? _darkThemeData : _lightThemeData,
+              duration: const Duration(milliseconds: 350),
+              curve: Curves.easeInOut,
+              child: child ?? const AppRoot(),
+            ),
+          ),
         );
       },
       home: const AppRoot(),
@@ -379,7 +434,7 @@ class _AppRootState extends State<AppRoot> {
       }
 
       final token = authData['access_token'] as String;
-      final sId = (authData['profile_id'] ?? authData['user_id']) as int;
+      final sId = int.tryParse((authData['profile_id'] ?? authData['user_id']).toString()) ?? 0;
       final name = (authData['name'] ?? (portalType == 'student' ? 'Student' : 'Staff')) as String;
       final code = (authData['code'] ?? rawInput) as String;
       final resolvedEmail = (authData['email'] ?? rawInput) as String;

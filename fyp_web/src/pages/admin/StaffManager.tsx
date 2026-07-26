@@ -130,7 +130,7 @@ export const StaffManager: React.FC = () => {
     }
   };
 
-  const handleDelete = async (staffRecordId: number, staffName: string) => {
+  const handleDelete = async (staffRecordId: number | string, staffName: string) => {
     const isConfirmed = await swalConfirmDelete(
       staffName,
       'This will cascadingly delete all their courses, schedules, and active check-in sessions.'

@@ -15,20 +15,13 @@ Base.metadata.create_all(bind=engine)
 # Execute schema migration scripts inside a transaction block
 try:
     with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS programme_id INTEGER REFERENCES programmes(id) ON DELETE SET NULL;"))
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS programme_id INTEGER REFERENCES programmes(id) ON DELETE SET NULL;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS credit_hours DOUBLE PRECISION DEFAULT 3.0;"))
-        # Planned total contact hours for the whole semester (denominator of 80% rule)
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS planned_total_hours DOUBLE PRECISION;"))
-        # At-risk explanation (why a student is flagged) for the dashboard
         conn.execute(text("ALTER TABLE risk_scores ADD COLUMN IF NOT EXISTS risk_factors VARCHAR;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_day VARCHAR;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_start VARCHAR;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_end VARCHAR;"))
         conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_room VARCHAR;"))
-        # NOTE: courses' timetable times now live in the class_meetings table
-        # (seeded below via _seed_class_meetings), not in courses.schedule_*.
-        # Those columns are kept for backward-compat but are no longer written.
 
         # Network-based location verification: attendance audit columns
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS source_ip VARCHAR;"))
@@ -59,57 +52,14 @@ try:
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_notifications BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS push_notifications BOOLEAN DEFAULT TRUE;"))
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS in_app_notifications BOOLEAN DEFAULT TRUE;"))
-
-        # One attendance record per (student, session): dedupe any historical
-        # duplicates first (keep present/leave over absent, then the newest id),
-        # then add the unique constraint. Ranking: status_rank 0 = attended,
-        # 1 = absent (lower is kept); within a rank the highest id (newest) wins.
-        conn.execute(text("""
-            DELETE FROM attendance_records a
-            USING attendance_records b
-            WHERE a.student_id = b.student_id
-              AND a.session_id = b.session_id
-              AND (
-                    (CASE WHEN a.status IN ('present','leave') THEN 0 ELSE 1 END,  -a.id)
-                  > (CASE WHEN b.status IN ('present','leave') THEN 0 ELSE 1 END,  -b.id)
-                  );
-        """))
-        # ADD CONSTRAINT has no IF NOT EXISTS in Postgres — guard against re-runs.
-        # A re-run raises duplicate_table (the backing index already exists) or
-        # duplicate_object (the constraint already exists); swallow both.
-        conn.execute(text("""
-            DO $$ BEGIN
-                ALTER TABLE attendance_records
-                  ADD CONSTRAINT uq_attendance_student_session UNIQUE (student_id, session_id);
-            EXCEPTION WHEN duplicate_object OR duplicate_table THEN NULL;
-            END $$;
-        """))
-
-        # Single-device login lock removed: device_id is now recorded per
-        # check-in (audit only). Add the column and drop the old lock table.
         conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS device_id VARCHAR;"))
         conn.execute(text("DROP TABLE IF EXISTS device_sessions;"))
 
         # Announcement targeting: scope (all/programme/course) × role (all/students/staff).
-        # Adds the new columns and backfills them from the legacy target_audience value
-        # so existing announcements keep their reach. Idempotent.
         conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_scope VARCHAR DEFAULT 'all';"))
         conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_role VARCHAR DEFAULT 'all';"))
         conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_course_code VARCHAR;"))
         conn.execute(text("ALTER TABLE announcements ALTER COLUMN target_audience DROP NOT NULL;"))
-        # Backfill only rows not yet migrated (scope still at default 'all' but a legacy
-        # audience implies otherwise). Safe to re-run: it only rewrites when they disagree.
-        conn.execute(text("""
-            UPDATE announcements SET
-                target_scope = CASE
-                    WHEN target_audience = 'students_specific' THEN 'programme'
-                    ELSE 'all' END,
-                target_role = CASE
-                    WHEN target_audience IN ('students_all','students_specific') THEN 'students'
-                    WHEN target_audience IN ('staff_all','staff_specific')       THEN 'staff'
-                    ELSE 'all' END
-            WHERE target_audience IS NOT NULL;
-        """))
 
         # Seed default security settings (idempotent) if the table is empty
         existing = conn.execute(text("SELECT COUNT(*) FROM security_settings;")).scalar()
@@ -132,10 +82,6 @@ except Exception as e:
     print("Database migration execution warning:", e)
 
 
-# Seed the class_meetings timetable (single source of truth) once, from the
-# deterministic scheduler — reproducing the legacy schedule exactly so behaviour
-# is unchanged on day one. Fail-loud: if seeding errors, we must know (a silent
-# empty table would leave every session on the 2h fallback window).
 def _seed_class_meetings():
     from utils.scheduler import generate_clashfree_slots
     db = SessionLocal()
@@ -167,14 +113,12 @@ class ETagMiddleware(BaseHTTPMiddleware):
         if "application/json" not in content_type and "text/" not in content_type:
             return response
             
-        # Consume response body to calculate md5 hash
         response_body = b""
         async for chunk in response.body_iterator:
             response_body += chunk
             
         etag = f'W/"{hashlib.md5(response_body).hexdigest()}"'
         
-        # Check If-None-Match header
         if_none_match = request.headers.get("if-none-match")
         if if_none_match and if_none_match == etag:
             return Response(
@@ -182,7 +126,6 @@ class ETagMiddleware(BaseHTTPMiddleware):
                 headers={"ETag": etag, "Cache-Control": "private, max-age=30"}
             )
             
-        # Add ETag and Cache-Control headers
         headers = dict(response.headers)
         headers["ETag"] = etag
         headers["Cache-Control"] = "private, max-age=30"
@@ -220,7 +163,6 @@ else:
         "https://fyps.up.railway.app",
     ]
 
-# Regex matches localhost, 127.0.0.1, local private IPs, and all Railway subdomains (*.up.railway.app)
 origin_regex = r"https?://((localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?|.*\.up\.railway\.app)"
 
 app.add_middleware(ETagMiddleware)
@@ -253,15 +195,12 @@ def get_public_announcements():
     db = SessionLocal()
     try:
         from utils.models import Announcement
-        # Return all published announcements (is_draft=False) sorted by created_at desc
         announcements = db.query(Announcement).filter(Announcement.is_draft == False).order_by(Announcement.created_at.desc()).all()
         return [
             {
                 "id": a.id,
                 "title": a.title,
                 "content": a.content,
-                "faculty": a.faculty,
-                "department": a.department,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
                 "priority": a.priority,
                 "publisher": a.publisher,

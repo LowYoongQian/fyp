@@ -7,7 +7,9 @@ import {
 } from 'lucide-react';
 import { ShimmerSettingsModal } from './Shimmer';
 import { THEME_TOKENS } from '../theme/themeTokens';
-import { saveThemePreference } from '../theme/themePreference';
+import { saveThemePreference, getAccountThemePreference } from '../theme/themePreference';
+import { useAuth } from '../context/AuthContext';
+import { setActiveLanguage } from '../i18n/i18n';
 
 interface UserSettingsModalProps {
   isOpen: boolean;
@@ -238,6 +240,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   isOpen,
   onClose
 }) => {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -260,21 +263,34 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [copiedBackup, setCopiedBackup] = useState(false);
   const [verifying2FA, setVerifying2FA] = useState(false);
 
+  const isCurrentAccount = (userId?: number | string) => {
+    if (!userId) return false;
+    try {
+      const activeUser = JSON.parse(sessionStorage.getItem('auth_user') || 'null');
+      return String(activeUser?.user_id) === String(userId);
+    } catch {
+      return false;
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       loadSettings();
     }
-  }, [isOpen]);
+  }, [isOpen, user?.user_id]);
 
   const loadSettings = async () => {
     setLoading(true);
     try {
       clearApiCache();
       const profile = await apiService.getUserProfile();
-      const storedTheme = localStorage.getItem('theme_preference') || localStorage.getItem('theme');
-      const loadedTheme = storedTheme || profile.theme_preference || 'light';
-      const loadedFont = profile.font_size_preference || localStorage.getItem('font_size_preference') || 'medium';
-      const loadedLang = profile.language_preference || localStorage.getItem('language_preference') || 'en';
+      const userId = user?.user_id || profile?.user_id;
+      if (!isCurrentAccount(userId) || profile.user_id !== userId) return;
+
+      // Account profile theme takes priority over local cache
+      const loadedTheme = profile.theme_preference || getAccountThemePreference(userId) || 'light';
+      const loadedFont = profile.font_size_preference || localStorage.getItem(`font_size_preference_${userId}`) || 'medium';
+      const loadedLang = profile.language_preference || localStorage.getItem(`language_preference_${userId}`) || 'en';
 
       const snapshot = {
         themeMode: loadedTheme,
@@ -302,9 +318,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       setInAppNotifications(snapshot.inAppNotifications);
       setTwoFactorEnabled(snapshot.twoFactorEnabled);
     } catch {
-      const fallbackTheme = localStorage.getItem('theme_preference') || localStorage.getItem('theme') || 'light';
-      const fallbackFont = localStorage.getItem('font_size_preference') || 'medium';
-      const fallbackLang = localStorage.getItem('language_preference') || 'en';
+      if (!isCurrentAccount(user?.user_id)) return;
+
+      const fallbackTheme = getAccountThemePreference(user?.user_id) || 'light';
+      const fallbackFont = localStorage.getItem(`font_size_preference_${user?.user_id}`) || 'medium';
+      const fallbackLang = localStorage.getItem(`language_preference_${user?.user_id}`) || 'en';
 
       setThemeMode(fallbackTheme);
       setFontSize(fallbackFont);
@@ -348,7 +366,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   const applyLiveTheme = (mode: string) => {
-    saveThemePreference(mode as 'light' | 'dark' | 'system');
+    saveThemePreference(mode as 'light' | 'dark' | 'system', user?.user_id);
   };
 
   const handleThemeChange = (newMode: string) => {
@@ -374,7 +392,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   const applyLiveLanguage = (lang: string) => {
-    document.documentElement.lang = lang;
+    setActiveLanguage(lang);
   };
 
   const handleLanguageChange = (newLang: string) => {
@@ -385,9 +403,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleSaveAll = async () => {
     setSaving(true);
     try {
-      saveThemePreference(themeMode as 'light' | 'dark' | 'system');
-      localStorage.setItem('font_size_preference', fontSize);
-      localStorage.setItem('language_preference', language);
+      const userId = user?.user_id;
+      saveThemePreference(themeMode as 'light' | 'dark' | 'system', userId);
+      if (userId) {
+        localStorage.setItem(`font_size_preference_${userId}`, fontSize);
+        localStorage.setItem(`language_preference_${userId}`, language);
+      }
 
       applyLiveTheme(themeMode);
 
@@ -413,7 +434,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         twoFactorEnabled,
       });
 
-      await swalSuccess('Settings Saved', 'Your account preferences have been saved.');
+      await swalSuccess('Settings Saved', 'Your account preferences have been saved to your profile.');
       onClose();
     } catch (err: any) {
       await swalError('Save Failed', err.response?.data?.detail || 'Could not save settings.');

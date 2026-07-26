@@ -338,7 +338,7 @@ export const AnnouncementManager: React.FC = () => {
     }
   };
 
-  const handleDelete = async (announcementId: number, titleStr: string) => {
+  const handleDelete = async (announcementId: number | string, titleStr: string) => {
     const isConfirmed = await swalConfirmDelete(titleStr);
     if (!isConfirmed) return;
     try {

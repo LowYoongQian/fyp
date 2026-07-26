@@ -1,10 +1,23 @@
 export type ThemePreference = 'light' | 'dark' | 'system';
 
-const THEME_STORAGE_KEY = 'theme_preference';
+export const isThemePreference = (value: unknown): value is ThemePreference =>
+  value === 'dark' || value === 'light' || value === 'system';
+
+export const getAccountThemePreference = (userId?: number | string): ThemePreference => {
+  if (userId) {
+    const value = localStorage.getItem(`theme_preference_${userId}`);
+    if (isThemePreference(value)) {
+      return value;
+    }
+    // A user's preference must never inherit another user's old global value.
+    return 'light';
+  }
+
+  return 'light';
+};
 
 export const getThemePreference = (): ThemePreference => {
-  const value = localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem('theme');
-  return value === 'dark' || value === 'system' ? value : 'light';
+  return 'light';
 };
 
 export const applyThemePreference = (preference = getThemePreference()) => {
@@ -16,9 +29,22 @@ export const applyThemePreference = (preference = getThemePreference()) => {
   root.dataset.theme = isDark ? 'dark' : 'light';
 };
 
-export const saveThemePreference = (preference: ThemePreference) => {
-  localStorage.setItem(THEME_STORAGE_KEY, preference);
-  // Keep the legacy key so existing accounts retain their preference.
-  localStorage.setItem('theme', preference);
+export const saveThemePreference = (preference: ThemePreference, userId?: number | string) => {
+  if (userId) {
+    localStorage.setItem(`theme_preference_${userId}`, preference);
+  }
+
+  // Do not write shared keys here. They cause one account's setting to leak
+  // into the next account that signs in on this browser.
   applyThemePreference(preference);
+};
+
+export const resetThemeOnLogout = () => {
+  // Remove the legacy shared values left by older versions of the app.
+  localStorage.removeItem('theme_preference');
+  localStorage.removeItem('theme');
+
+  const root = document.documentElement;
+  root.classList.remove('dark');
+  root.dataset.theme = 'light';
 };

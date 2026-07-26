@@ -6,12 +6,12 @@ import '../../main.dart';
 import '../../services/user_service.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
+import '../../i18n/app_localizations.dart';
 
 const List<Map<String, String>> kSupportedLanguages = [
   {'code': 'en', 'name': 'English (US)', 'native': 'English', 'flag': '🇺🇸'},
   {'code': 'ms', 'name': 'Bahasa Malaysia', 'native': 'Melayu', 'flag': '🇲🇾'},
-  {'code': 'zh_CN', 'name': 'Chinese (Simplified)', 'native': '中文 (简体)', 'flag': '🇨🇳'},
-  {'code': 'zh_TW', 'name': 'Chinese (Traditional)', 'native': '中文 (繁體)', 'flag': '🇹🇼'},
+  {'code': 'zh', 'name': 'Chinese (Simplified)', 'native': '中文 (简体)', 'flag': '🇨🇳'},
   {'code': 'ta', 'name': 'Tamil', 'native': 'தமிழ்', 'flag': '🇮🇳'},
   {'code': 'ja', 'name': 'Japanese', 'native': '日本語', 'flag': '🇯🇵'},
   {'code': 'ko', 'name': 'Korean', 'native': '한국어', 'flag': '🇰🇷'},
@@ -94,6 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await prefs.setBool('email_notifications', _emailNotifications);
         await prefs.setBool('push_notifications', _pushNotifications);
         await prefs.setBool('in_app_notifications', _inAppNotifications);
+        await MainApp.of(context).updateLanguage(_languageStr);
       }
     } catch (e) {
       debugPrint("Failed to load settings preferences: $e");
@@ -135,6 +136,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _languageStr = langCode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language', langCode);
+    await MainApp.of(context).updateLanguage(langCode);
     UserService.updateUserSettings({'language_preference': langCode});
 
     final langItem = kSupportedLanguages.firstWhere(
@@ -362,6 +364,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
 
@@ -373,7 +376,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          'Settings & Preferences',
+          l10n.tr('common.settings'),
           style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, fontSize: 18),
         ),
         elevation: 0,
@@ -394,7 +397,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // -------------------------------------------------------------
                   _buildSectionHeader(
                     Icons.palette_outlined,
-                    'Appearance',
+                    l10n.tr('common.theme'),
                     const Color(0xFF2563EB),
                     isDarkMode ? const Color(0xFF1E3A8A).withValues(alpha: 0.3) : const Color(0xFFEFF6FF),
                   ),
@@ -435,7 +438,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // -------------------------------------------------------------
                   _buildSectionHeader(
                     Icons.notifications_outlined,
-                    'Notifications',
+                    l10n.tr('common.notifications'),
                     const Color(0xFF7C3AED),
                     isDarkMode ? const Color(0xFF5B21B6).withValues(alpha: 0.3) : const Color(0xFFF3E8FF),
                   ),
@@ -486,7 +489,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // -------------------------------------------------------------
                   _buildSectionHeader(
                     Icons.language_rounded,
-                    'Language & Locale',
+                    l10n.tr('common.language'),
                     const Color(0xFF059669),
                     isDarkMode ? const Color(0xFF064E3B).withValues(alpha: 0.3) : const Color(0xFFECFDF5),
                   ),

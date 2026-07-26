@@ -27,7 +27,8 @@ import {
   FileText,
   MessageSquare
 } from 'lucide-react';
-import { swalSuccess } from '../utils/swal';
+import { closeSwal, swalSuccess } from '../utils/swal';
+import { t } from '../i18n/i18n';
 
 interface MainLayoutProps {
   currentTab: string;
@@ -57,6 +58,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     swalSuccess('Successfully Logged Out', 'Your session has ended. Redirecting to login portal...');
     
     setTimeout(() => {
+      // The toast was opened while the account theme was still active. Close it
+      // before logout resets the root to light mode, preventing a mixed-theme UI.
+      closeSwal();
       logout();
     }, 950);
   };
@@ -78,33 +82,33 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
   const navItems = user?.role === 'admin'
     ? [
-        { id: 'admin_dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'admin_students', label: 'Students', icon: Users },
-        { id: 'admin_staff', label: 'Staff', icon: Briefcase },
-        { id: 'admin_academic', label: 'Academics', icon: BookOpen },
-        { id: 'admin_attendance', label: 'Attendance', icon: UserCheck },
-        { id: 'admin_network', label: 'Network Security', icon: ShieldAlert },
-        { id: 'admin_announcements', label: 'Announcements', icon: Megaphone }
+        { id: 'admin_dashboard', label: t('common.dashboard', 'en'), icon: LayoutDashboard },
+        { id: 'admin_students', label: t('admin.studentsManager', 'en'), icon: Users },
+        { id: 'admin_staff', label: t('admin.staffManager', 'en'), icon: Briefcase },
+        { id: 'admin_academic', label: t('admin.academicManager', 'en'), icon: BookOpen },
+        { id: 'admin_attendance', label: t('common.attendance', 'en'), icon: UserCheck },
+        { id: 'admin_network', label: t('admin.networkSecurity', 'en'), icon: ShieldAlert },
+        { id: 'admin_announcements', label: t('admin.announcements', 'en'), icon: Megaphone }
       ]
     : user?.role === 'student'
       ? [
-          { id: 'student_dashboard', label: 'Dashboard', icon: LayoutDashboard },
-          { id: 'student_timetable', label: 'Timetable', icon: Calendar },
-          { id: 'student_mc', label: 'MC Submission', icon: FileText },
-          { id: 'student_contact', label: 'Contact Admin', icon: MessageSquare }
+          { id: 'student_dashboard', label: t('common.dashboard', 'en'), icon: LayoutDashboard },
+          { id: 'student_timetable', label: t('common.timetable', 'en'), icon: Calendar },
+          { id: 'student_mc', label: t('student.mcSubmission', 'en'), icon: FileText },
+          { id: 'student_contact', label: t('student.contactAdmin', 'en'), icon: MessageSquare }
         ]
       : [
-          { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-          { id: 'timetable', label: 'Timetable', icon: Calendar },
-          { id: 'attendance', label: 'Attendance', icon: UserCheck },
+          { id: 'dashboard', label: t('common.dashboard', 'en'), icon: LayoutDashboard },
+          { id: 'timetable', label: t('common.timetable', 'en'), icon: Calendar },
+          { id: 'attendance', label: t('common.attendance', 'en'), icon: UserCheck },
           { id: 'analytics', label: 'Analytics', icon: BarChart3 },
           { id: 'risk', label: 'At-Risk Students', icon: AlertTriangle },
           { id: 'chatbot', label: 'AI Assistant', icon: MessageSquareCode }
         ];
 
   const currentItem = navItems.find(item => item.id === currentTab);
-  const currentTabLabel = currentItem ? currentItem.label : 'Dashboard';
-  const portalName = user?.role === 'admin' ? 'Admin Portal' : user?.role === 'student' ? 'Student Portal' : 'Staff Portal';
+  const currentTabLabel = currentItem ? currentItem.label : t('common.dashboard', 'en');
+  const portalName = user?.role === 'admin' ? t('admin.portalTitle', 'en') : user?.role === 'student' ? t('student.portalTitle', 'en') : t('staff.portalTitle', 'en');
 
   return (
     <div
@@ -229,7 +233,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors font-medium cursor-pointer"
                 >
                   <Settings className="h-4 w-4 text-slate-400" />
-                  <span>Account settings</span>
+                  <span>{t('common.settings', 'en')}</span>
                 </button>
               </div>
 
@@ -313,7 +317,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 className="w-full py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:text-slate-900 transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs"
               >
                 <LogOut className="h-4 w-4 text-slate-500" />
-                <span>Sign Out</span>
+                <span>{t('common.logout', 'en')}</span>
               </button>
             </div>
           )}

@@ -1,7 +1,9 @@
+import uuid
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float,
     ForeignKey, DateTime, LargeBinary, Text, func, Index, UniqueConstraint
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
@@ -9,7 +11,7 @@ Base = declarative_base()
 # User accounts table
 class User(Base):
     __tablename__ = "users"
-    id                    = Column(Integer, primary_key=True, index=True)
+    id                    = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     email                 = Column(String, unique=True, nullable=False, index=True)
     password_hash         = Column(String, nullable=False)
     role                  = Column(String, nullable=False)
@@ -34,7 +36,7 @@ class User(Base):
 # Programmes table
 class Programme(Base):
     __tablename__ = "programmes"
-    id            = Column(Integer, primary_key=True, index=True)
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     name          = Column(String, nullable=False)
     code          = Column(String, unique=True, nullable=False)
     
@@ -44,12 +46,12 @@ class Programme(Base):
 # Student profiles table
 class Student(Base):
     __tablename__ = "students"
-    id                  = Column(Integer, primary_key=True, index=True)
-    user_id             = Column(Integer, ForeignKey("users.id"), unique=True, index=True)
+    id                  = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id             = Column(UUID(as_uuid=False), ForeignKey("users.id"), unique=True, index=True)
     name                = Column(String, nullable=False)
     student_code        = Column(String, unique=True, nullable=False, index=True)
     is_face_registered  = Column(Boolean, default=False)
-    programme_id        = Column(Integer, ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
+    programme_id        = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
     
     user                = relationship("User", back_populates="student")
     programme           = relationship("Programme", back_populates="students")
@@ -61,8 +63,8 @@ class Student(Base):
 # Lecturer profiles table
 class Lecturer(Base):
     __tablename__ = "lecturers"
-    id       = Column(Integer, primary_key=True, index=True)
-    user_id  = Column(Integer, ForeignKey("users.id"), unique=True, index=True)
+    id       = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id  = Column(UUID(as_uuid=False), ForeignKey("users.id"), unique=True, index=True)
     name     = Column(String, nullable=False)
     staff_id = Column(String, unique=True, nullable=False, index=True)
     role     = Column(String, default="Lecturer")
@@ -73,17 +75,13 @@ class Lecturer(Base):
 # Courses table
 class Course(Base):
     __tablename__ = "courses"
-    id           = Column(Integer, primary_key=True, index=True)
+    id           = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     course_name  = Column(String, nullable=False)
     course_code  = Column(String, unique=True, nullable=False)
     credit_hours = Column(Float, default=3.0)
-    # Planned total contact hours for the WHOLE semester offering of this course
-    # (e.g. 5h/week * 14 weeks = 70). This is the denominator of the 80% rule and
-    # is set once at course setup. Nullable: if absent, the at-risk logic falls
-    # back to the ML model only (no "cannot recover" certainty layer).
     planned_total_hours = Column(Float, nullable=True)
-    lecturer_id  = Column(Integer, ForeignKey("lecturers.id"), index=True)
-    programme_id = Column(Integer, ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
+    lecturer_id  = Column(UUID(as_uuid=False), ForeignKey("lecturers.id"), index=True)
+    programme_id = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
     
     schedule_day   = Column(String, nullable=True)
     schedule_start = Column(String, nullable=True)
@@ -98,32 +96,27 @@ class Course(Base):
 # Course staff assignments table
 class CourseStaffAssignment(Base):
     __tablename__ = "course_staff_assignments"
-    id            = Column(Integer, primary_key=True, index=True)
-    course_id     = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
-    lecturer_id   = Column(Integer, ForeignKey("lecturers.id", ondelete="CASCADE"), nullable=False, index=True)
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    course_id     = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    lecturer_id   = Column(UUID(as_uuid=False), ForeignKey("lecturers.id", ondelete="CASCADE"), nullable=False, index=True)
     role          = Column(String, nullable=False)
     
     course        = relationship("Course")
     lecturer      = relationship("Lecturer")
 
-# Class meetings table — the SINGLE SOURCE OF TRUTH for the timetable.
-# One row per fixed weekly class: a course's Lecture, or one Tutor/Practical
-# staff assignment. meeting_key mirrors the old in-memory schedule dict key
-# ("Lecture-{course_id}" / "Tutor-{assignment_id}" / "Practical-{assignment_id}")
-# so calculate_schedule() can rebuild the same dict shape by reading this table.
-# Rows are seeded once by the deterministic scheduler, then editable by admin.
+# Class meetings table
 class ClassMeeting(Base):
     __tablename__ = "class_meetings"
-    id            = Column(Integer, primary_key=True, index=True)
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     meeting_key   = Column(String, unique=True, nullable=False, index=True)
-    course_id     = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
-    assignment_id = Column(Integer, ForeignKey("course_staff_assignments.id", ondelete="CASCADE"), nullable=True, index=True)
-    role          = Column(String, nullable=False)   # Lecture / Tutor / Practical
+    course_id     = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    assignment_id = Column(UUID(as_uuid=False), ForeignKey("course_staff_assignments.id", ondelete="CASCADE"), nullable=True, index=True)
+    role          = Column(String, nullable=False)
     day           = Column(String, nullable=False)
     start         = Column(String, nullable=False)
     end           = Column(String, nullable=False)
     room          = Column(String, nullable=False)
-    lecturer_id   = Column(Integer, ForeignKey("lecturers.id", ondelete="SET NULL"), nullable=True, index=True)
+    lecturer_id   = Column(UUID(as_uuid=False), ForeignKey("lecturers.id", ondelete="SET NULL"), nullable=True, index=True)
 
     course        = relationship("Course")
     lecturer      = relationship("Lecturer")
@@ -131,142 +124,136 @@ class ClassMeeting(Base):
 # Course enrolment table
 class Enrolment(Base):
     __tablename__ = "enrolments"
-    id          = Column(Integer, primary_key=True, index=True)
-    student_id  = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
-    course_id   = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)
-    semester    = Column(String, nullable=False)
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    student_id  = Column(UUID(as_uuid=False), ForeignKey("students.id"), index=True)
+    course_id   = Column(UUID(as_uuid=False), ForeignKey("courses.id"), index=True)
+    semester    = Column(String, default="2026-S1")
     class_group = Column(String, default="G1")
     
-    student    = relationship("Student", back_populates="enrolments")
-    course     = relationship("Course", back_populates="enrolments")
+    student     = relationship("Student", back_populates="enrolments")
+    course      = relationship("Course", back_populates="enrolments")
 
-# Student face embeddings table
-class FaceEmbedding(Base):
-    __tablename__ = "face_embeddings"
-    id         = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"), unique=True, index=True)
-    embedding  = Column(LargeBinary, nullable=False)
-    is_active  = Column(Boolean, default=True)
-    created_at = Column(DateTime, server_default=func.now())
-    
-    student    = relationship("Student", back_populates="face_embedding")
-
-# Class session table
+# Active or past class session
 class ClassSession(Base):
     __tablename__ = "class_sessions"
-    id          = Column(Integer, primary_key=True, index=True)
-    course_id   = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)
-    opened_at   = Column(DateTime)
-    closed_at   = Column(DateTime)
-    is_open     = Column(Boolean, default=False, index=True)
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    course_id   = Column(UUID(as_uuid=False), ForeignKey("courses.id"), index=True)
+    opened_at   = Column(DateTime, server_default=func.now())
+    closed_at   = Column(DateTime, nullable=True)
+    is_open     = Column(Boolean, default=True)
     class_group = Column(String, default="All")
     
-    course    = relationship("Course", back_populates="sessions")
-    attendance_records = relationship("AttendanceRecord", back_populates="session")
+    course      = relationship("Course", back_populates="sessions")
+    records     = relationship("AttendanceRecord", back_populates="session")
 
-# Attendance log table
+# Attendance check-in records
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
-    id               = Column(Integer, primary_key=True, index=True)
-    student_id       = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
-    session_id       = Column(Integer, ForeignKey("class_sessions.id"), nullable=False, index=True)
-    status           = Column(String, default="present", index=True)
-    confidence_score = Column(Float)
-    wifi_verified    = Column(Boolean, default=False)
-    liveness_passed  = Column(Boolean, default=False)
-    marked_at        = Column(DateTime, server_default=func.now())
+    id                     = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    session_id             = Column(UUID(as_uuid=False), ForeignKey("class_sessions.id"), index=True)
+    student_id             = Column(UUID(as_uuid=False), ForeignKey("students.id"), index=True)
+    status                 = Column(String, default="present")
+    method                 = Column(String, default="face+wifi")
+    wifi_ssid              = Column(String, nullable=True)
+    bssid                  = Column(String, nullable=True)
+    gateway_ip             = Column(String, nullable=True)
+    local_ip               = Column(String, nullable=True)
+    timestamp              = Column(DateTime, server_default=func.now())
+    is_flagged             = Column(Boolean, default=False)
+    flag_reason            = Column(String, nullable=True)
+    confidence             = Column(Float, nullable=True)
+    image_url              = Column(String, nullable=True)
+    mc_proof_url           = Column(String, nullable=True)
+    liveness_challenge_ms  = Column(Integer, nullable=True)
+    liveness_suspicious    = Column(Boolean, default=False)
+    
+    session                = relationship("ClassSession", back_populates="records")
+    student                = relationship("Student", back_populates="attendance_records")
 
-    # Network-based location verification audit fields
-    source_ip            = Column(String, nullable=True)   # server-observed IP (unspoofable)
-    reported_ssid        = Column(String, nullable=True)   # client-reported WiFi name
-    reported_bssid       = Column(String, nullable=True)   # client-reported AP MAC
-    reported_gateway_ip  = Column(String, nullable=True)   # client-reported gateway IP
-    network_verified     = Column(Boolean, default=False)  # passed campus network policy
-    verify_detail        = Column(String, nullable=True)   # human-readable audit summary
+# 128-d Face Embeddings
+class FaceEmbedding(Base):
+    __tablename__ = "face_embeddings"
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    student_id    = Column(UUID(as_uuid=False), ForeignKey("students.id"), unique=True, index=True)
+    embedding     = Column(LargeBinary, nullable=False)
+    sample_count  = Column(Integer, default=1)
+    updated_at    = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    student       = relationship("Student", back_populates="face_embedding")
 
-    # Behavioral biometrics — liveness gesture timing
-    liveness_challenge_ms = Column(Integer, nullable=True)  # ms to complete both challenges
-    liveness_suspicious   = Column(Boolean, default=False)  # flagged as abnormally fast
-
-    # Device fingerprint of the phone used for THIS check-in (audit only; not a
-    # login lock). Null for older records / clients that don't report it.
-    device_id             = Column(String, nullable=True)
-
-    student          = relationship("Student", back_populates="attendance_records")
-    session          = relationship("ClassSession", back_populates="attendance_records")
-
-    # One attendance record per student per session — a student cannot check in
-    # twice for the same class. Matches the DB constraint added in main.py.
-    __table_args__ = (
-        UniqueConstraint("student_id", "session_id", name="uq_attendance_student_session"),
-    )
-
-# ML Risk scores table
+# ML At-Risk Model Scores
 class RiskScore(Base):
     __tablename__ = "risk_scores"
-    id              = Column(Integer, primary_key=True, index=True)
-    student_id      = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
-    course_id       = Column(Integer, ForeignKey("courses.id"), nullable=False, index=True)
-    risk_score      = Column(Float, nullable=False)
-    risk_label      = Column(String)
-    attendance_rate = Column(Float)
-    # Human-readable reasons behind this verdict (e.g. "6 consecutive absences;
-    # attendance declining"). Populated at recompute so the dashboard can explain
-    # WHY a student is flagged. Nullable for backward compatibility.
-    risk_factors    = Column(String, nullable=True)
-    updated_at      = Column(DateTime, server_default=func.now())
+    id                  = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    student_id          = Column(UUID(as_uuid=False), ForeignKey("students.id"), index=True)
+    course_id           = Column(UUID(as_uuid=False), ForeignKey("courses.id"), index=True)
+    risk_score          = Column(Float, nullable=False)
+    risk_label          = Column(String, nullable=True)
+    attendance_rate     = Column(Float, nullable=True)
+    risk_factors        = Column(String, nullable=True)
+    updated_at          = Column(DateTime, server_default=func.now())
+
+    # Legacy fields are retained because the existing database includes them.
+    risk_level          = Column(String, nullable=False)
+    absent_percentage   = Column(Float, nullable=False)
+    consecutive_absences= Column(Integer, default=0)
+    calculated_at       = Column(DateTime, server_default=func.now())
     
-    student         = relationship("Student", back_populates="risk_scores")
+    student             = relationship("Student", back_populates="risk_scores")
+    course              = relationship("Course")
 
-# Alert notifications log table
-class Alert(Base):
-    __tablename__ = "alerts"
-    id           = Column(Integer, primary_key=True, index=True)
-    student_id   = Column(Integer, ForeignKey("students.id"), index=True)
-    course_id    = Column(Integer, ForeignKey("courses.id"), index=True)
-    alert_type   = Column(String, default="at_risk")
-    email_body   = Column(Text)
-    triggered_by = Column(String, default="system")
-    triggered_at = Column(DateTime, server_default=func.now())
-    sent_at      = Column(DateTime)
+# Campus wifi whitelist
+class CampusNetwork(Base):
+    __tablename__ = "campus_networks"
+    id               = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    location_name    = Column(String, nullable=False)
+    ssid             = Column(String, nullable=False)
+    bssid            = Column(String, nullable=True)
+    gateway_ip       = Column(String, nullable=True)
+    subnet_range     = Column(String, nullable=True)
+    is_active        = Column(Boolean, default=True)
+    created_at       = Column(DateTime, server_default=func.now())
 
-# Faculty / Department Announcements table
+# Announcements
 class Announcement(Base):
     __tablename__ = "announcements"
-    id                    = Column(Integer, primary_key=True, index=True)
+    id                    = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     title                 = Column(String, nullable=False)
     content               = Column(Text, nullable=False)
     faculty               = Column(String, nullable=False)
     department            = Column(String, nullable=False)
     created_at            = Column(DateTime, server_default=func.now())
     is_draft              = Column(Boolean, default=False, nullable=False)
-    priority              = Column(String, default="Medium", nullable=False) # 'High', 'Medium', 'Low'
+    priority              = Column(String, default="Medium", nullable=False)
     publisher             = Column(String, default="ADMIN", nullable=False)
     image_base64          = Column(Text, nullable=True)
     publish_start         = Column(DateTime, nullable=True)
     publish_end           = Column(DateTime, nullable=True)
-    # Targeting = scope (who broadly) × role (which population). See main.py migration.
-    target_scope          = Column(String, default="all", nullable=False)   # 'all' | 'programme' | 'course'
-    target_role           = Column(String, default="all", nullable=False)   # 'all' | 'students' | 'staff'
-    target_programme_code = Column(String, nullable=True)                   # set when scope='programme'
-    target_course_code    = Column(String, nullable=True)                   # set when scope='course'
-    # Legacy discriminator kept nullable for backward compat; superseded by scope+role.
+    target_scope          = Column(String, default="all", nullable=False)
+    target_role           = Column(String, default="all", nullable=False)
+    target_programme_code = Column(String, nullable=True)
+    target_course_code    = Column(String, nullable=True)
     target_audience       = Column(String, nullable=True)
 
-# Campus network whitelist table (allowed CIDR ranges / SSIDs / AP MAC prefixes)
-class CampusNetwork(Base):
-    __tablename__ = "campus_networks"
-    id            = Column(Integer, primary_key=True, index=True)
-    label         = Column(String, nullable=False)            # e.g. "Main Campus Student VLAN"
-    cidr          = Column(String, nullable=True)             # e.g. "10.52.0.0/16" (IP/subnet rule)
-    ssid          = Column(String, nullable=True)             # e.g. "UniWiFi-Student" (soft rule)
-    bssid_prefix  = Column(String, nullable=True)             # e.g. "AC:DE:48" (AP vendor OUI)
-    is_active     = Column(Boolean, default=True)
-    created_at    = Column(DateTime, server_default=func.now())
-
-# Key/value security settings table (policy toggles)
+# Security settings table
 class SecuritySetting(Base):
     __tablename__ = "security_settings"
-    id      = Column(Integer, primary_key=True, index=True)
-    key     = Column(String, unique=True, nullable=False)
-    value   = Column(String, nullable=True)
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    key        = Column(String, unique=True, nullable=False, index=True)
+    value      = Column(String, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+# Academic & attendance alerts table
+class Alert(Base):
+    __tablename__ = "alerts"
+    id           = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    student_id   = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
+    course_id    = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    alert_type   = Column(String, nullable=False, default="attendance")
+    severity     = Column(String, default="Medium")
+    message      = Column(Text, nullable=True)
+    is_resolved  = Column(Boolean, default=False)
+    triggered_at = Column(DateTime, server_default=func.now())
+
+    student      = relationship("Student")
+    course       = relationship("Course")

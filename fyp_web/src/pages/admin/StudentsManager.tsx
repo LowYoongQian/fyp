@@ -131,7 +131,7 @@ export const StudentsManager: React.FC = () => {
     }
   };
 
-  const handleDelete = async (studentId: number, studentName: string) => {
+  const handleDelete = async (studentId: number | string, studentName: string) => {
     const isConfirmed = await swalConfirmDelete(
       studentName,
       'This will cascadingly delete their enrolments, face embeddings, attendance records, and risk logs.'
