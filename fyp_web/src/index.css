@@ -453,3 +453,90 @@ html.dark .shimmer-placeholder-dark {
   background-size: 200% 100% !important;
   animation: shimmerWave 1.4s infinite linear !important;
 }
+
+/* 2D Landscape & Shining Sun Background Animations */
+@keyframes sunSpinRays {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes sunPulseGlow {
+  0%, 100% { transform: scale(1); opacity: 0.9; filter: drop-shadow(0 0 35px rgba(251, 191, 36, 0.9)); }
+  50% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 60px rgba(245, 158, 11, 1)); }
+}
+
+@keyframes mountainWaveLight {
+  0%, 100% { transform: translateY(0px) scaleY(1); }
+  50% { transform: translateY(-4px) scaleY(1.01); }
+}
+
+@keyframes cloudFloatLeft {
+  0% { transform: translateX(-5%); }
+  50% { transform: translateX(6%); }
+  100% { transform: translateX(-5%); }
+}
+
+@keyframes birdsFlyGlide {
+  0% { transform: translate(0, 0) scale(0.95); }
+  50% { transform: translate(45px, -15px) scale(1.05); }
+  100% { transform: translate(0, 0) scale(0.95); }
+}
+
+.animate-sun-spin {
+  animation: sunSpinRays 32s linear infinite;
+}
+
+.animate-sun-pulse {
+  animation: sunPulseGlow 4s ease-in-out infinite;
+}
+
+.animate-mountain-wave {
+  animation: mountainWaveLight 8s ease-in-out infinite;
+}
+
+.animate-cloud-float {
+  animation: cloudFloatLeft 35s ease-in-out infinite;
+}
+
+.animate-birds-fly {
+  animation: birdsFlyGlide 36s ease-in-out infinite;
+}
+
+/* 4-Point Star Rotating Sparkle & 3-Min Shooting Star Animations */
+@keyframes starRotateSparkle {
+  0% { transform: scale(0.7) rotate(0deg); opacity: 0.3; }
+  50% { transform: scale(1.25) rotate(180deg); opacity: 1; filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.95)); }
+  100% { transform: scale(0.7) rotate(360deg); opacity: 0.3; }
+}
+
+@keyframes shootingStarStreak {
+  0% {
+    transform: translate(0, 0) rotate(-35deg) scaleX(0);
+    opacity: 0;
+  }
+  0.4% {
+    transform: translate(0, 0) rotate(-35deg) scaleX(1);
+    opacity: 1;
+  }
+  2.0% {
+    transform: translate(-360px, 240px) rotate(-35deg) scaleX(1.6);
+    opacity: 1;
+    filter: drop-shadow(0 0 12px rgba(255, 255, 255, 1));
+  }
+  2.8% {
+    transform: translate(-460px, 300px) rotate(-35deg) scaleX(0.2);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-460px, 300px) rotate(-35deg) scaleX(0);
+    opacity: 0;
+  }
+}
+
+.animate-star-sparkle {
+  animation: starRotateSparkle 3s ease-in-out infinite;
+}
+
+.animate-shooting-star {
+  animation: shootingStarStreak 180s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+}
