@@ -25,7 +25,9 @@ import {
   ChevronsUpDown,
   Check,
   FileText,
-  MessageSquare
+  MessageSquare,
+  ChevronDown,
+  FileCheck
 } from 'lucide-react';
 import { closeSwal, swalSuccess } from '../utils/swal';
 import { t } from '../i18n/i18n';
@@ -44,6 +46,15 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [isReportsOpen, setIsReportsOpen] = useState(
+    currentTab.startsWith('admin_reports')
+  );
+
+  useEffect(() => {
+    if (currentTab.startsWith('admin_reports')) {
+      setIsReportsOpen(true);
+    }
+  }, [currentTab]);
   
   // Profile slide-up popover menu & modal states
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -88,7 +99,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         { id: 'admin_academic', label: t('admin.academicManager', 'en'), icon: BookOpen },
         { id: 'admin_attendance', label: t('common.attendance', 'en'), icon: UserCheck },
         { id: 'admin_network', label: t('admin.networkSecurity', 'en'), icon: ShieldAlert },
-        { id: 'admin_announcements', label: t('admin.announcements', 'en'), icon: Megaphone }
+        { id: 'admin_announcements', label: t('admin.announcements', 'en'), icon: Megaphone },
+        { id: 'admin_reports', label: 'Reports', icon: FileText },
+        { id: 'admin_audit', label: 'Audit Logs', icon: ShieldAlert }
       ]
     : user?.role === 'student'
       ? [
@@ -177,6 +190,83 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         <nav className="flex-1 space-y-1.5 px-4 py-6 overflow-y-auto">
           {navItems.map(item => {
             const Icon = item.icon;
+
+            if (item.id === 'admin_reports') {
+              const isReportsActive = currentTab.startsWith('admin_reports');
+              return (
+                <div key={item.id} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsReportsOpen(!isReportsOpen);
+                      if (!currentTab.startsWith('admin_reports')) {
+                        setCurrentTab('admin_reports_feedback');
+                      }
+                    }}
+                    title={collapsed ? item.label : undefined}
+                    className={`w-full flex items-center justify-between rounded-xl text-xs font-semibold tracking-wide transition-all duration-155 cursor-pointer border ${
+                      collapsed ? 'justify-center p-3' : 'px-4 py-3'
+                    } ${
+                      isReportsActive
+                        ? 'bg-brand-blue-light text-brand-blue border-brand-blue/10 shadow-sm font-bold'
+                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 truncate">
+                      <Icon className={`h-4.5 w-4.5 flex-shrink-0 ${isReportsActive ? 'text-brand-blue' : 'text-slate-400'}`} />
+                      {!collapsed && (
+                        <span className="animate-in fade-in duration-200 truncate">{item.label}</span>
+                      )}
+                    </div>
+                    {!collapsed && (
+                      <ChevronDown
+                        className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${
+                          isReportsOpen ? 'rotate-180 text-brand-blue' : ''
+                        }`}
+                      />
+                    )}
+                  </button>
+
+                  {/* Accordion Dropdown Sub-Items */}
+                  {isReportsOpen && !collapsed && (
+                    <div className="pl-9 pr-2 space-y-1 font-sans animate-in slide-in-from-top-2 duration-150">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentTab('admin_reports_feedback');
+                          setSidebarOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer text-left ${
+                          currentTab === 'admin_reports_feedback' || currentTab === 'admin_reports'
+                            ? 'bg-blue-50/90 dark:bg-blue-500/10 text-brand-blue dark:text-blue-400 font-bold'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <MessageSquare className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate">Feedback Reports</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentTab('admin_reports_mc');
+                          setSidebarOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer text-left ${
+                          currentTab === 'admin_reports_mc'
+                            ? 'bg-blue-50/90 dark:bg-blue-500/10 text-brand-blue dark:text-blue-400 font-bold'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <FileCheck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate">MC Reports</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             const active = currentTab === item.id;
             return (
               <button

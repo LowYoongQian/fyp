@@ -10,6 +10,8 @@ import { StudentsManager } from './pages/admin/StudentsManager';
 import { StaffManager } from './pages/admin/StaffManager';
 import { AnnouncementManager } from './pages/admin/AnnouncementManager';
 import { CampusNetworkManager } from './pages/admin/CampusNetworkManager';
+import { ReportsManager } from './pages/admin/ReportsManager';
+import { AuditManager } from './pages/admin/AuditManager';
 import { Timetable } from './pages/staff/Timetable';
 import { Attendance } from './pages/staff/Attendance';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
@@ -141,6 +143,10 @@ const DashboardContent: React.FC = () => {
         case 'admin_staff':
         case 'admin_announcements':
         case 'admin_network':
+        case 'admin_reports':
+        case 'admin_reports_feedback':
+        case 'admin_reports_mc':
+        case 'admin_audit':
           return <ShimmerAdminPanel />;
         default:
           return <ShimmerPage />;
@@ -182,6 +188,13 @@ const DashboardContent: React.FC = () => {
         return <AnnouncementManager />;
       case 'admin_network':
         return <CampusNetworkManager />;
+      case 'admin_reports':
+      case 'admin_reports_feedback':
+        return <ReportsManager activeSubTab="feedback" />;
+      case 'admin_reports_mc':
+        return <ReportsManager activeSubTab="mc" />;
+      case 'admin_audit':
+        return <AuditManager />;
       default:
         return user?.role === 'admin' ? <AdminDashboard /> : user?.role === 'student' ? <StudentDashboard /> : <LecturerDashboard />;
     }

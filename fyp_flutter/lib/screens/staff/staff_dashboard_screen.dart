@@ -17,6 +17,7 @@ class StaffDashboard extends StatefulWidget {
   final String staffName;
   final String staffCode;
   final String staffEmail;
+  final String staffRole;
   final String authToken;
   final String apiBaseUrl;
   final bool isDatabaseOffline;
@@ -30,6 +31,7 @@ class StaffDashboard extends StatefulWidget {
     required this.staffName,
     required this.staffCode,
     required this.staffEmail,
+    this.staffRole = 'Lecturer',
     required this.authToken,
     required this.apiBaseUrl,
     required this.isDatabaseOffline,
@@ -293,91 +295,267 @@ class _StaffDashboardState extends State<StaffDashboard> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.65,
-          decoration: BoxDecoration(
-            color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        String searchQuery = "";
+        bool isFetching = true;
+        String? fetchError;
+        List<dynamic> attendanceList = [];
+
+        return StatefulBuilder(
+          builder: (modalCtx, setModalState) {
+            void loadRoster() async {
+              try {
+                final res = await http.get(
+                  Uri.parse("${widget.apiBaseUrl}/sessions/$sessionId/attendance"),
+                  headers: {"Authorization": "Bearer ${widget.authToken}"},
+                );
+                if (res.statusCode == 200) {
+                  final data = jsonDecode(res.body);
+                  setModalState(() {
+                    attendanceList = data['attendance_list'] ?? [];
+                    isFetching = false;
+                  });
+                } else {
+                  final res2 = await http.get(
+                    Uri.parse("${widget.apiBaseUrl}/attendance/session-attendees/$sessionId"),
+                    headers: {"Authorization": "Bearer ${widget.authToken}"},
+                  );
+                  if (res2.statusCode == 200) {
+                    final data2 = jsonDecode(res2.body);
+                    setModalState(() {
+                      attendanceList = (data2 as List).map((a) => {
+                        'student_id': a['studentId'] ?? a['student_id'] ?? 0,
+                        'student_name': a['studentName'] ?? a['student_name'] ?? 'Student',
+                        'student_code': a['studentCode'] ?? a['student_code'] ?? '—',
+                        'status': 'present',
+                      }).toList();
+                      isFetching = false;
+                    });
+                  } else {
+                    setModalState(() {
+                      fetchError = "Failed to load attendance list";
+                      isFetching = false;
+                    });
+                  }
+                }
+              } catch (e) {
+                setModalState(() {
+                  fetchError = "Network error loading attendance list";
+                  isFetching = false;
+                });
+              }
+            }
+
+            if (isFetching && fetchError == null) {
+              loadRoster();
+            }
+
+            Future<void> toggleAttendance(int studentId, String currentStatus, String studentName) async {
+              final nextStatus = currentStatus == 'present' ? 'absent' : 'present';
+              try {
+                final res = await http.put(
+                  Uri.parse("${widget.apiBaseUrl}/sessions/$sessionId/attendance/$studentId"),
+                  headers: {
+                    "Authorization": "Bearer ${widget.authToken}",
+                    "Content-Type": "application/json",
+                  },
+                  body: jsonEncode({"status": nextStatus}),
+                );
+
+                if (res.statusCode == 200) {
+                  setModalState(() {
+                    final item = attendanceList.firstWhere((s) => s['student_id'] == studentId, orElse: () => null);
+                    if (item != null) {
+                      item['status'] = nextStatus;
+                    }
+                  });
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("$studentName marked as ${nextStatus.toUpperCase()}"),
+                        duration: const Duration(seconds: 2),
+                        backgroundColor: nextStatus == 'present' ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                      ),
+                    );
+                  }
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Failed to update attendance status")),
+                  );
+                }
+              }
+            }
+
+            final filtered = attendanceList.where((s) {
+              if (searchQuery.trim().isEmpty) return true;
+              final q = searchQuery.toLowerCase();
+              final name = (s['student_name'] ?? '').toString().toLowerCase();
+              final code = (s['student_code'] ?? '').toString().toLowerCase();
+              return name.contains(q) || code.contains(q);
+            }).toList();
+
+            final presentCount = attendanceList.where((s) => s['status'] == 'present').length;
+            final totalCount = attendanceList.length;
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.82,
+              decoration: BoxDecoration(
+                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    "$courseCode Attendees",
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: primaryTextColor,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "$courseCode - Student Attendance",
+                            style: GoogleFonts.spaceGrotesk(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: primaryTextColor,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            "Check & take attendance manually for students",
+                            style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        icon: Icon(Icons.close, size: 20, color: isDarkMode ? Colors.white70 : const Color(0xFF64748B)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          "Present: $presentCount",
+                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          "Absent: ${totalCount - presentCount}",
+                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFFEF4444)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          "Total: $totalCount",
+                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF3B82F6)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    onChanged: (val) => setModalState(() => searchQuery = val),
+                    style: GoogleFonts.inter(fontSize: 12, color: primaryTextColor),
+                    decoration: InputDecoration(
+                      hintText: "Search student name or ID...",
+                      hintStyle: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+                      prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF94A3B8)),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                      filled: true,
+                      fillColor: isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                      ),
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    icon: Icon(Icons.close, size: 20, color: isDarkMode ? Colors.white70 : const Color(0xFF64748B)),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: isFetching
+                        ? const Center(child: CircularProgressIndicator())
+                        : fetchError != null
+                            ? Center(child: Text(fetchError!, style: TextStyle(color: isDarkMode ? Colors.white70 : Colors.black54)))
+                            : filtered.isEmpty
+                                ? Center(child: Text("No students found.", style: TextStyle(color: isDarkMode ? Colors.white70 : Colors.black54)))
+                                : ListView.separated(
+                                    itemCount: filtered.length,
+                                    separatorBuilder: (c, i) => Divider(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                    itemBuilder: (c, idx) {
+                                      final student = filtered[idx];
+                                      final isPresent = student['status'] == 'present';
+                                      final sId = student['student_id'];
+                                      final sName = student['student_name'] ?? 'Student';
+                                      final sCode = student['student_code'] ?? '—';
+
+                                      return ListTile(
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                        leading: CircleAvatar(
+                                          backgroundColor: (isPresent ? const Color(0xFF10B981) : const Color(0xFF64748B)).withValues(alpha: 0.15),
+                                          child: Icon(
+                                            isPresent ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                                            color: isPresent ? const Color(0xFF10B981) : const Color(0xFF64748B),
+                                            size: 20,
+                                          ),
+                                        ),
+                                        title: Text(
+                                          sName,
+                                          style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, fontSize: 13, color: primaryTextColor),
+                                        ),
+                                        subtitle: Text(
+                                          "ID: $sCode · Status: ${student['status']?.toUpperCase() ?? 'ABSENT'}",
+                                          style: GoogleFonts.inter(
+                                            fontSize: 10,
+                                            color: isPresent ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        trailing: ElevatedButton.icon(
+                                          onPressed: () => toggleAttendance(sId, student['status'] ?? 'absent', sName),
+                                          icon: Icon(isPresent ? Icons.remove_circle_outline : Icons.add_circle_outline, size: 14),
+                                          label: Text(isPresent ? "Mark Absent" : "Mark Present"),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: isPresent ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                            textStyle: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: FutureBuilder<http.Response>(
-                  future: http.get(
-                    Uri.parse("${widget.apiBaseUrl}/attendance/session-attendees/$sessionId"),
-                    headers: {"Authorization": "Bearer ${widget.authToken}"},
-                  ),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (snapshot.hasError || snapshot.data?.statusCode != 200) {
-                      return Center(
-                        child: Text("Error fetching attendees list.", style: TextStyle(color: isDarkMode ? Colors.white70 : Colors.black54)),
-                      );
-                    }
-                    final List<dynamic> attendees = jsonDecode(snapshot.data!.body);
-                    if (attendees.isEmpty) {
-                      return Center(
-                        child: Text("No students checked in yet.", style: TextStyle(color: isDarkMode ? Colors.white70 : Colors.black54)),
-                      );
-                    }
-                    return ListView.separated(
-                      itemCount: attendees.length,
-                      separatorBuilder: (c, i) => Divider(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-                      itemBuilder: (c, idx) {
-                        final att = attendees[idx];
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: const Color(0xFF2563EB).withValues(alpha: 0.15),
-                            child: const Icon(Icons.person, color: Color(0xFF2563EB), size: 18),
-                          ),
-                          title: Text(
-                            att['studentName'] ?? 'Student',
-                            style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold, fontSize: 13, color: primaryTextColor),
-                          ),
-                          subtitle: Text(
-                            "ID: ${att['studentCode']} · ${att['verifiedAt'] ?? 'Verified'}",
-                            style: GoogleFonts.inter(fontSize: 10, color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                          ),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              "PRESENT",
-                              style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -427,7 +605,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              "Lecturer Portal",
+                              "Staff Portal",
                               style: GoogleFonts.spaceGrotesk(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
@@ -575,6 +753,24 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                             color: primaryTextColor,
                                           ),
                                         ),
+                                        const SizedBox(height: 4),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: primaryColor.withValues(alpha: 0.12),
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: primaryColor.withValues(alpha: 0.25)),
+                                          ),
+                                          child: Text(
+                                            "Role: ${widget.staffRole}",
+                                            style: GoogleFonts.inter(
+                                              fontSize: 9.5,
+                                              fontWeight: FontWeight.bold,
+                                              color: primaryColor,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
                                         Text(
                                           "Staff ID: ${widget.staffCode} · ${widget.staffEmail}",
                                           style: GoogleFonts.inter(
@@ -928,8 +1124,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                 Expanded(
                                                   child: OutlinedButton.icon(
                                                     onPressed: () => _showAttendeesModal(context, session['id'], session['courseCode']),
-                                                    icon: const Icon(Icons.people_outline, size: 14),
-                                                    label: const Text("View Attendees"),
+                                                    icon: const Icon(Icons.assignment_turned_in_outlined, size: 14),
+                                                    label: const Text("Check & Take Attendance"),
                                                     style: OutlinedButton.styleFrom(
                                                       foregroundColor: primaryColor,
                                                       side: BorderSide(color: primaryColor.withValues(alpha: 0.5)),

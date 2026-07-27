@@ -260,3 +260,32 @@ class Alert(Base):
 
     student      = relationship("Student")
     course       = relationship("Course")
+
+# System action audit logs
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id     = Column(UUID(as_uuid=False), nullable=True, index=True)
+    user_name   = Column(String, nullable=False, default="System Administrator")
+    user_role   = Column(String, nullable=False, default="admin")
+    category    = Column(String, nullable=False, default="admin")  # 'admin' | 'staff'
+    action      = Column(String, nullable=False)
+    details     = Column(Text, nullable=True)
+    ip_address  = Column(String, nullable=True, default="127.0.0.1")
+    created_at  = Column(DateTime, server_default=func.now())
+
+# Student feedback & issue reports
+class StudentFeedback(Base):
+    __tablename__ = "student_feedback"
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    student_id    = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=True, index=True)
+    student_name  = Column(String, nullable=False)
+    student_code  = Column(String, nullable=False)
+    subject       = Column(String, nullable=False)
+    category      = Column(String, nullable=False, default="General")  # 'Attendance Issue', 'App Bug', 'Network Error', 'General'
+    message       = Column(Text, nullable=False)
+    status        = Column(String, nullable=False, default="Pending") # 'Pending', 'In Progress', 'Resolved'
+    admin_notes   = Column(Text, nullable=True)
+    created_at    = Column(DateTime, server_default=func.now())
+
+    student       = relationship("Student")

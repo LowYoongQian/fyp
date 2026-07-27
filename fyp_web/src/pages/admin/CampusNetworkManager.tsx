@@ -32,16 +32,16 @@ export const CampusNetworkManager: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Independent Eye Toggle states for each container
-  const [showCaptureSensitive, setShowCaptureSensitive] = useState(false);
-  const [showTableSensitive, setShowTableSensitive] = useState(false);
+  // Independent Eye toggle states for live capture card & saved network list
+  const [showDetectedSensitive, setShowDetectedSensitive] = useState(false);
+  const [showSavedSensitive, setShowSavedSensitive] = useState(false);
 
-  // Live Real Detection States (No hardcoded arrays)
+  // Live Connection Detection States
   const [isDetecting, setIsDetecting] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [detectedConn, setDetectedConn] = useState<DetectedConnection | null>(null);
 
-  // Create form fields
+  // Create Form Fields
   const [label, setLabel] = useState('');
   const [cidr, setCidr] = useState('');
   const [ssid, setSsid] = useState('');
@@ -90,31 +90,54 @@ export const CampusNetworkManager: React.FC = () => {
     setLocation(''); setFormError(null);
   };
 
-  const maskIp = (val?: string | null, hide?: boolean): string => {
+  // Masking helper: returns unmasked raw string when isVisible is true, or masked format when false
+  const maskIp = (val: string | null | undefined, isVisible: boolean): string => {
     if (!val) return '—';
-    if (!hide) return val;
-    if (val.includes(':')) {
-      const parts = val.split(':');
-      if (parts.length > 2) {
+    if (isVisible) return val; // Unmasked: return raw exact value
+
+    const str = val.trim();
+
+    // 1. MAC address / BSSID (e.g. "2C:7B:A0" -> "2C:7B:••••:••••")
+    if (str.includes(':') && !str.toLowerCase().startsWith('2001') && str.split(':').length <= 6 && str.split(':')[0].length <= 2) {
+      const parts = str.split(':');
+      if (parts.length >= 2) {
         return `${parts[0]}:${parts[1]}:••••:••••`;
       }
-      return '••••:••••:••••';
     }
-    if (val.includes('/')) {
-      const [ipPart, maskPart] = val.split('/');
+
+    // 2. IPv6 Address (e.g. "2001:f40:97c:fb7:90f1:eaa2:bb8:8f24" -> "2001:f40:••••:••••")
+    if (str.includes(':')) {
+      const parts = str.split(':');
+      if (parts.length >= 2) {
+        return `${parts[0]}:${parts[1]}:••••:••••`;
+      }
+    }
+
+    // 3. IPv4 CIDR (e.g. "192.168.100.0/24" -> "192.***.***.0/24")
+    if (str.includes('/')) {
+      const [ipPart, maskPart] = str.split('/');
       const octets = ipPart.split('.');
       if (octets.length === 4) {
-        return `${octets[0]}.${octets[1]}.•••.${octets[3]}/${maskPart}`;
+        return `${octets[0]}.***.***.${octets[3]}/${maskPart}`;
       }
-      return `•••.•••.•••/${maskPart}`;
+      return `***.***.***/${maskPart}`;
     }
-    if (val.includes('.')) {
-      const octets = val.split('.');
+
+    // 4. Standalone IPv4 (e.g. "192.168.100.38" -> "192.***.***.***")
+    if (str.includes('.')) {
+      const octets = str.split('.');
       if (octets.length === 4) {
-        return `${octets[0]}.${octets[1]}.•••.•••`;
+        return `${octets[0]}.***.***.***`;
       }
     }
-    return '••••••••';
+
+    // 5. Embedded IP in label (e.g. "Detected Active Subnet (192.168.100.0/24)")
+    if (str.includes('(') && str.includes(')')) {
+      return str.replace(/(\d{1,3}\.)\d{1,3}\.\d{1,3}(\.\d{1,3}\/\d{1,2})/g, '$1***.***$2')
+                .replace(/(\d{1,3}\.)\d{1,3}\.\d{1,3}\.\d{1,3}/g, '$1***.***.***');
+    }
+
+    return str;
   };
 
   // Real Auto-Capture of currently detected Admin IP / CIDR Subnet & Wi-Fi Details
@@ -127,7 +150,6 @@ export const CampusNetworkManager: React.FC = () => {
       const wifiLoc = detectedConn.location || 'Main Campus Node';
       const fullLabel = `${wifiSsid} [${wifiLoc}]`;
 
-      // Check if network is already in whitelist table
       const existing = networks.find(n => n.ssid === wifiSsid || n.cidr === detectedConn.cidr || n.label.includes(wifiSsid));
       if (existing) {
         if (!existing.is_active) {
@@ -211,17 +233,17 @@ export const CampusNetworkManager: React.FC = () => {
     if (!confirmed) return;
     try {
       clearApiCache();
-      setNetworks(prev => prev.filter(n => n.id !== net.id));
-      if (net.id && typeof net.id === 'number') {
+      if (net.id !== undefined && net.id !== null) {
         await apiService.adminDeleteCampusNetwork(net.id);
       }
       clearApiCache();
-      await swalSuccess('Rule Removed', 'Campus connection deleted.');
+      setNetworks(prev => prev.filter(n => n.id !== net.id));
+      await fetchAll();
+      await swalSuccess('Rule Removed', 'Campus connection deleted from database.');
     } catch (err: any) {
       console.error('Delete network error:', err);
-      clearApiCache();
-      setNetworks(prev => prev.filter(n => n.id !== net.id));
-      await swalSuccess('Rule Removed', 'Campus connection deleted.');
+      await fetchAll();
+      await swalError('Delete Failed', err.response?.data?.detail || 'Could not delete network from database.');
     }
   };
 
@@ -362,7 +384,7 @@ export const CampusNetworkManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Container 1: Live Connection Auto-Capture (Independent Eye Toggle) */}
+      {/* Container 1: Live Connection Auto-Capture */}
       <div className="uipro-card bg-white space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
@@ -380,14 +402,23 @@ export const CampusNetworkManager: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Container 1 Eye Icon-Only Button */}
+            {/* Container 1 Eye Toggle Button */}
             <button
+              key={`det-${showDetectedSensitive}`}
               type="button"
-              onClick={() => setShowCaptureSensitive(prev => !prev)}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer"
-              title={showCaptureSensitive ? 'Hide sensitive IP values' : 'Show sensitive IP values'}
+              onClick={() => setShowDetectedSensitive(prev => !prev)}
+              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-2xs ${
+                showDetectedSensitive
+                  ? 'bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-blue-400 border-blue-200 dark:border-blue-800'
+                  : 'bg-white dark:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 border-slate-200 dark:border-slate-700'
+              }`}
+              title={showDetectedSensitive ? 'Hide sensitive IP values' : 'Show full unmasked IP values'}
             >
-              {showCaptureSensitive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4 text-brand-blue" />}
+              {showDetectedSensitive ? (
+                <EyeOff className="h-4 w-4 text-brand-blue shrink-0" />
+              ) : (
+                <Eye className="h-4 w-4 shrink-0" />
+              )}
             </button>
 
             <button
@@ -408,7 +439,7 @@ export const CampusNetworkManager: React.FC = () => {
             <p>Detecting current connection...</p>
           </div>
         ) : detectedConn ? (
-          <div className="p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3">
+          <div key={`card-detected-${showDetectedSensitive}`} className="p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[9.5px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> Connection Detected
@@ -426,19 +457,21 @@ export const CampusNetworkManager: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-sm text-slate-800">
-                      {detectedConn.ssid ? `${detectedConn.ssid} (${detectedConn.label})` : detectedConn.label}
+                      {detectedConn.ssid
+                        ? `${detectedConn.ssid} (${showDetectedSensitive ? detectedConn.label : maskIp(detectedConn.label, false)})`
+                        : (showDetectedSensitive ? detectedConn.label : maskIp(detectedConn.label, false))}
                     </h4>
                     <Lock className="h-3.5 w-3.5 text-slate-400" />
                   </div>
                   <div className="text-[11px] text-slate-500 font-mono mt-0.5 space-y-0.5">
                     <p>
-                      IPv4: <strong className="text-slate-800">{maskIp(detectedConn.client_ip, !showCaptureSensitive)}</strong>
-                      {' | '}Subnet CIDR: <strong className="text-brand-blue">{maskIp(detectedConn.cidr, !showCaptureSensitive)}</strong>
-                      {detectedConn.bssid && <> | BSSID MAC: <strong className="text-slate-700">{maskIp(detectedConn.bssid, !showCaptureSensitive)}</strong></>}
+                      IPv4: <strong className="text-slate-800">{showDetectedSensitive ? detectedConn.client_ip : maskIp(detectedConn.client_ip, false)}</strong>
+                      {' | '}Subnet CIDR: <strong className="text-brand-blue">{showDetectedSensitive ? detectedConn.cidr : maskIp(detectedConn.cidr, false)}</strong>
+                      {detectedConn.bssid && <> | BSSID MAC: <strong className="text-slate-700">{showDetectedSensitive ? detectedConn.bssid : maskIp(detectedConn.bssid, false)}</strong></>}
                     </p>
                     {detectedConn.ipv6_address && (
                       <p className="text-[10.5px] text-slate-500">
-                        IPv6 Address: <strong className="text-purple-700 font-semibold">{maskIp(detectedConn.ipv6_address, !showCaptureSensitive)}</strong>
+                        IPv6 Address: <strong className="text-purple-700 font-semibold">{showDetectedSensitive ? detectedConn.ipv6_address : maskIp(detectedConn.ipv6_address, false)}</strong>
                       </p>
                     )}
                   </div>
@@ -517,7 +550,7 @@ export const CampusNetworkManager: React.FC = () => {
         )}
       </div>
 
-      {/* Container 3: Connection Matrix & Permitted Wi-Fi List (Independent Eye Toggle) */}
+      {/* Container 3: Connection Matrix & Permitted Wi-Fi List */}
       <div className="uipro-card space-y-4">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-2 border-b border-slate-100">
           <div className="space-y-0.5">
@@ -531,14 +564,23 @@ export const CampusNetworkManager: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            {/* Container 3 Eye Icon-Only Button */}
+            {/* Container 3 Eye Toggle Button */}
             <button
+              key={`sav-${showSavedSensitive}`}
               type="button"
-              onClick={() => setShowTableSensitive(prev => !prev)}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-colors cursor-pointer shrink-0"
-              title={showTableSensitive ? 'Hide sensitive IP values' : 'Show sensitive IP values'}
+              onClick={() => setShowSavedSensitive(prev => !prev)}
+              className={`p-2 rounded-xl border transition-all cursor-pointer shadow-2xs shrink-0 ${
+                showSavedSensitive
+                  ? 'bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-blue-400 border-blue-200 dark:border-blue-800'
+                  : 'bg-white dark:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 border-slate-200 dark:border-slate-700'
+              }`}
+              title={showSavedSensitive ? 'Hide sensitive IP values' : 'Show full unmasked IP values'}
             >
-              {showTableSensitive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4 text-brand-blue" />}
+              {showSavedSensitive ? (
+                <EyeOff className="h-4 w-4 text-brand-blue shrink-0" />
+              ) : (
+                <Eye className="h-4 w-4 shrink-0" />
+              )}
             </button>
 
             <div className="relative w-full sm:w-64">
@@ -567,7 +609,7 @@ export const CampusNetworkManager: React.FC = () => {
             <p className="text-[11px] text-slate-400">Capture your current connection above or add a campus Wi-Fi network (e.g. SSID: <span className="font-mono text-slate-600">SWAS-Campus</span> or CIDR: <span className="font-mono text-slate-600">10.52.0.0/16</span>) to configure access permissions.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto border border-slate-100 rounded-xl">
+          <div key={`table-saved-${showSavedSensitive}`} className="overflow-x-auto border border-slate-100 rounded-xl">
             <table className="w-full text-left border-collapse text-xs font-sans">
               <thead className="bg-slate-50/80 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
                 <tr>
@@ -628,7 +670,7 @@ export const CampusNetworkManager: React.FC = () => {
                       <td className="py-3.5 px-4 font-mono text-slate-600 font-medium">
                         {net.bssid_prefix ? (
                           <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-                            {maskIp(net.bssid_prefix, !showTableSensitive)}
+                            {showSavedSensitive ? net.bssid_prefix : maskIp(net.bssid_prefix, false)}
                           </span>
                         ) : (
                           <span className="text-slate-300">—</span>
@@ -639,7 +681,7 @@ export const CampusNetworkManager: React.FC = () => {
                       <td className="py-3.5 px-4 font-mono">
                         {net.cidr ? (
                           <span className="text-brand-blue font-bold">
-                            {maskIp(net.cidr, !showTableSensitive)}
+                            {showSavedSensitive ? net.cidr : maskIp(net.cidr, false)}
                           </span>
                         ) : (
                           <span className="text-slate-500 font-sans">WPA3-Enterprise</span>
