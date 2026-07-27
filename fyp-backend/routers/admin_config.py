@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Union, Optional
 
 from utils.database import get_db
 import ipaddress
@@ -187,8 +187,8 @@ def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_d
 
 
 @router.put("/campus-networks/{net_id}", response_model=CampusNetworkResponse)
-def update_campus_network(net_id: int, body: CampusNetworkUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    net = get_or_404(db, CampusNetwork, net_id, detail="Campus network rule not found")
+def update_campus_network(net_id: Union[int, str], body: CampusNetworkUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    net = get_or_404(db, CampusNetwork, str(net_id), detail="Campus network rule not found")
     if body.cidr is not None and body.cidr != "":
         _validate_cidr(body.cidr)
     for field in ("label", "cidr", "ssid", "bssid_prefix", "is_active"):
@@ -201,8 +201,8 @@ def update_campus_network(net_id: int, body: CampusNetworkUpdate, db: Session = 
 
 
 @router.delete("/campus-networks/{net_id}", response_model=MessageResponse)
-def delete_campus_network(net_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    net = get_or_404(db, CampusNetwork, net_id, detail="Campus network rule not found")
+def delete_campus_network(net_id: Union[int, str], db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    net = get_or_404(db, CampusNetwork, str(net_id), detail="Campus network rule not found")
     db.delete(net)
     db.commit()
     return {"message": "Campus network rule deleted"}

@@ -206,8 +206,11 @@ class RiskScore(Base):
 class CampusNetwork(Base):
     __tablename__ = "campus_networks"
     id               = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    location_name    = Column(String, nullable=False)
-    ssid             = Column(String, nullable=False)
+    label            = Column(String, nullable=True)
+    cidr             = Column(String, nullable=True)
+    ssid             = Column(String, nullable=True)
+    bssid_prefix     = Column(String, nullable=True)
+    location_name    = Column(String, nullable=True)
     bssid            = Column(String, nullable=True)
     gateway_ip       = Column(String, nullable=True)
     subnet_range     = Column(String, nullable=True)
