@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2 } from 'lucide-react';
 import { swalError } from '../../utils/swal';
+import sasLogoLocal from '../../assets/saslogo.png';
 
 export type SceneId = 'early_morning' | 'morning' | 'noon' | 'afternoon' | 'evening' | 'night' | 'late_night';
 
@@ -157,6 +158,30 @@ export const Login: React.FC = () => {
   
   // Real-Time Malaysia (UTC+8) Time State
   const [timeState, setTimeState] = useState(() => getMalaysiaTimeDetails());
+
+  // Supabase Storage & Database System Logo with Local Asset Fallback
+  const SUPABASE_LOGO_URL = 'https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/assets/saslogo.png';
+  const [logoSrc, setLogoSrc] = useState<string>(SUPABASE_LOGO_URL);
+
+  useEffect(() => {
+    // Attempt fetching remote logo from API / Supabase setting
+    fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/public/logo`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.logo_url) {
+          setLogoSrc(data.logo_url);
+        }
+      })
+      .catch(() => {
+        setLogoSrc(sasLogoLocal);
+      });
+  }, []);
+
+  const handleLogoError = () => {
+    if (logoSrc !== sasLogoLocal) {
+      setLogoSrc(sasLogoLocal);
+    }
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -507,21 +532,20 @@ export const Login: React.FC = () => {
       <div className="max-w-md w-full uipro-card relative z-10 space-y-6 bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-white/60 dark:border-slate-800/60 shadow-2xl">
         
         {/* Header */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center p-3 bg-brand-blue-light dark:bg-blue-500/10 rounded-xl text-brand-blue dark:text-blue-400 mb-1 shadow-sm transition-all duration-300">
-            {portalMode === 'student' ? (
-              <GraduationCap className="h-6 w-6 text-brand-blue dark:text-blue-400" />
-            ) : (
-              <Shield className="h-6 w-6 text-brand-blue dark:text-blue-400" />
-            )}
-          </div>
+        <div className="text-center space-y-3">
+          <img
+            src={logoSrc}
+            onError={handleLogoError}
+            alt="Smart Attendance Logo"
+            className="h-36 w-36 sm:h-44 sm:w-44 md:h-48 md:w-48 object-contain drop-shadow-lg mx-auto transition-transform duration-300 transform hover:scale-105"
+          />
           
           <div className="flex flex-col items-center">
             <h2 className="text-3xl font-display font-bold tracking-tight text-slate-900 dark:text-slate-100">
-              Smart Attendance
+              Smart Attendance System
             </h2>
-            <span className="text-[10px] font-sans font-semibold text-brand-blue dark:text-blue-400 uppercase tracking-wider mt-1 block">
-              {portalMode === 'student' ? 'Student Verification Portal' : 'Staff & Admin Portal'}
+            <span className="text-[11px] font-sans font-bold uppercase tracking-wider px-3.5 py-1 rounded-full mt-1.5 transition-all bg-blue-50 dark:bg-blue-900/30 text-brand-blue dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50">
+              {portalMode === 'student' ? 'Student Portal' : 'Staff Portal'}
             </span>
           </div>
         </div>
@@ -646,7 +670,7 @@ export const Login: React.FC = () => {
             <button
               type="button"
               onClick={() => switchPortal('staff')}
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-slate-900 font-medium text-sm shadow-sm transition-all duration-200 cursor-pointer w-full justify-center"
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-blue-50/50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-brand-blue font-medium text-sm shadow-sm transition-all duration-200 cursor-pointer w-full justify-center"
             >
               <Shield className="h-4 w-4 text-brand-blue dark:text-blue-400" />
               Staff Login Portal
@@ -655,7 +679,7 @@ export const Login: React.FC = () => {
             <button
               type="button"
               onClick={() => switchPortal('student')}
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-slate-900 font-medium text-sm shadow-sm transition-all duration-200 cursor-pointer w-full justify-center"
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-blue-50/50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-brand-blue font-medium text-sm shadow-sm transition-all duration-200 cursor-pointer w-full justify-center"
             >
               <GraduationCap className="h-4 w-4 text-brand-blue dark:text-blue-400" />
               Student Login Portal

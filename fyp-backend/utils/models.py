@@ -166,9 +166,50 @@ class AttendanceRecord(Base):
     mc_proof_url           = Column(String, nullable=True)
     liveness_challenge_ms  = Column(Integer, nullable=True)
     liveness_suspicious    = Column(Boolean, default=False)
+    source_ip              = Column(String, nullable=True)
+    reported_ssid          = Column(String, nullable=True)
+    reported_bssid         = Column(String, nullable=True)
+    reported_gateway_ip    = Column(String, nullable=True)
+    network_verified       = Column(Boolean, default=False)
+    verify_detail          = Column(String, nullable=True)
+    device_id              = Column(String, nullable=True)
     
     session                = relationship("ClassSession", back_populates="records")
     student                = relationship("Student", back_populates="attendance_records")
+
+    @property
+    def marked_at(self):
+        return self.timestamp
+
+    @marked_at.setter
+    def marked_at(self, value):
+        self.timestamp = value
+
+    @property
+    def confidence_score(self):
+        return self.confidence
+
+    @confidence_score.setter
+    def confidence_score(self, value):
+        self.confidence = value
+
+    @property
+    def wifi_verified(self):
+        return bool(getattr(self, 'network_verified', False))
+
+    @wifi_verified.setter
+    def wifi_verified(self, value):
+        self.network_verified = bool(value)
+
+    @property
+    def liveness_passed(self):
+        if self.status == 'absent' and getattr(self, 'confidence', None) is None:
+            return False
+        return not bool(getattr(self, 'liveness_suspicious', False))
+
+    @liveness_passed.setter
+    def liveness_passed(self, value):
+        self.liveness_suspicious = not bool(value)
 
 # 128-d Face Embeddings
 class FaceEmbedding(Base):

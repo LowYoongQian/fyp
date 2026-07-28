@@ -114,7 +114,7 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
     return result
 
 @router.get("/sessions/{session_id}/attendance", response_model=dict)
-def get_admin_session_attendance(session_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def get_admin_session_attendance(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     session = get_or_404(db, ClassSession, session_id, "Session")
 
     course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
@@ -126,7 +126,7 @@ def get_admin_session_attendance(session_id: int, db: Session = Depends(get_db),
     enrolled_students = query.all()
 
     # Fetch attendance records for this session
-    records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id == session_id).all()
+    records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id == str(session_id)).all()
     record_map = {r.student_id: r for r in records}
 
     # Build student attendance status list
@@ -143,9 +143,9 @@ def get_admin_session_attendance(session_id: int, db: Session = Depends(get_db),
                 "confidence_score": rec.confidence_score,
                 "wifi_verified": rec.wifi_verified,
                 "liveness_passed": rec.liveness_passed,
-                "network_verified": rec.network_verified,
-                "source_ip": rec.source_ip,
-                "verify_detail": rec.verify_detail
+                "network_verified": getattr(rec, 'network_verified', False),
+                "source_ip": getattr(rec, 'source_ip', None),
+                "verify_detail": getattr(rec, 'verify_detail', None)
             })
         else:
             attendance_list.append({
@@ -170,8 +170,8 @@ def get_admin_session_attendance(session_id: int, db: Session = Depends(get_db),
 
 @router.put("/attendance/{session_id}/{student_id}", response_model=MessageResponse)
 def update_admin_attendance(
-    session_id: int, 
-    student_id: int, 
+    session_id: str, 
+    student_id: str, 
     body: AdminAttendanceUpdate, 
     db: Session = Depends(get_db), 
     current_user: User = Depends(require_admin)
@@ -190,18 +190,18 @@ def update_admin_attendance(
 
     if record:
         record.status = body.status
-        record.wifi_verified = body.wifi_verified
-        record.liveness_passed = body.liveness_passed
-        record.marked_at = utcnow()
+        record.network_verified = body.wifi_verified
+        record.liveness_suspicious = not body.liveness_passed
+        record.timestamp = utcnow()
     else:
         record = AttendanceRecord(
-            session_id=session_id,
-            student_id=student_id,
+            session_id=str(session_id),
+            student_id=str(student_id),
             status=body.status,
-            confidence_score=1.0,
-            wifi_verified=body.wifi_verified,
-            liveness_passed=body.liveness_passed,
-            marked_at=utcnow()
+            confidence=1.0,
+            network_verified=body.wifi_verified,
+            liveness_suspicious=not body.liveness_passed,
+            timestamp=utcnow()
         )
         db.add(record)
 

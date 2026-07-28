@@ -193,7 +193,7 @@ export const AttendanceManager: React.FC = () => {
       setAttendanceList(prev =>
         prev.map(item =>
           item.student_id === record.student_id
-            ? { ...item, status: newStatus, marked_at: new Date().toISOString() }
+            ? { ...item, status: newStatus, marked_at: newStatus === 'present' ? new Date().toISOString() : item.marked_at }
             : item
         )
       );
@@ -714,32 +714,46 @@ export const AttendanceManager: React.FC = () => {
                             {record.marked_at ? formatDateTime(record.marked_at) : 'Not marked'}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <button
-                              onClick={() => handleToggleOverride(record, 'wifi')}
-                              disabled={isSubmitting}
-                              className={`inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold cursor-pointer select-none transition-all ${
-                                record.wifi_verified
-                                  ? 'bg-success-green-light text-success-green border-success-green/10 hover:bg-success-green/10'
-                                  : 'bg-danger-red-light text-danger-red border-danger-red/10 hover:bg-danger-red/10'
-                              }`}
-                            >
-                              <Wifi className="h-3 w-3 shrink-0" />
-                              <span>{record.wifi_verified ? 'Verified' : 'Bypassed'}</span>
-                            </button>
+                            {record.status === 'absent' ? (
+                              <span className="inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 cursor-not-allowed select-none">
+                                <Wifi className="h-3 w-3 shrink-0 opacity-50" />
+                                <span>N/A</span>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleToggleOverride(record, 'wifi')}
+                                disabled={isSubmitting}
+                                className={`inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold cursor-pointer select-none transition-all ${
+                                  record.wifi_verified
+                                    ? 'bg-success-green-light text-success-green border-success-green/10 hover:bg-success-green/10'
+                                    : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                                }`}
+                              >
+                                <Wifi className="h-3 w-3 shrink-0" />
+                                <span>{record.wifi_verified ? 'Verified' : 'Bypassed'}</span>
+                              </button>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <button
-                              onClick={() => handleToggleOverride(record, 'liveness')}
-                              disabled={isSubmitting}
-                              className={`inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold cursor-pointer select-none transition-all ${
-                                record.liveness_passed
-                                  ? 'bg-success-green-light text-success-green border-success-green/10 hover:bg-success-green/10'
-                                  : 'bg-danger-red-light text-danger-red border-danger-red/10 hover:bg-danger-red/10'
-                              }`}
-                            >
-                              <User className="h-3 w-3 shrink-0" />
-                              <span>{record.liveness_passed ? 'Passed' : 'Bypassed'}</span>
-                            </button>
+                            {record.status === 'absent' ? (
+                              <span className="inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 cursor-not-allowed select-none">
+                                <User className="h-3 w-3 shrink-0 opacity-50" />
+                                <span>N/A</span>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleToggleOverride(record, 'liveness')}
+                                disabled={isSubmitting}
+                                className={`inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold cursor-pointer select-none transition-all ${
+                                  record.liveness_passed
+                                    ? 'bg-success-green-light text-success-green border-success-green/10 hover:bg-success-green/10'
+                                    : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                                }`}
+                              >
+                                <User className="h-3 w-3 shrink-0" />
+                                <span>{record.liveness_passed ? 'Passed' : 'Bypassed'}</span>
+                              </button>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-center">
                             {record.status === 'present' ? (

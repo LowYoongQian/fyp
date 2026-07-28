@@ -524,11 +524,11 @@ export const apiService = {
     return cachedGet('/admin/sessions');
   },
   adminGetSessionAttendance: async (sessionId: number | string): Promise<AdminSessionAttendanceResponse> => {
-    const response = await api.get(`/admin/sessions/${sessionId}/attendance`);
+    const response = await api.get(`/admin/sessions/${encodeURIComponent(String(sessionId))}/attendance`);
     return response.data;
   },
   adminUpdateAttendance: async (sessionId: number | string, studentId: number | string, data: { status: 'present' | 'absent'; wifi_verified: boolean; liveness_passed: boolean }): Promise<any> => {
-    const response = await api.put(`/admin/attendance/${sessionId}/${studentId}`, data);
+    const response = await api.put(`/admin/attendance/${encodeURIComponent(String(sessionId))}/${encodeURIComponent(String(studentId))}`, data);
     return response.data;
   },
 

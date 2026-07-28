@@ -467,7 +467,7 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
 
 # 5. Live Lecturer Attendance List (Lecturer/Admin only)
 @router.get("/{id}/attendance", response_model=SessionAttendanceResponse)
-def get_session_attendance(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+def get_session_attendance(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     session = get_or_404(db, ClassSession, id, "Session")
 
     course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
@@ -657,8 +657,8 @@ def get_course_sessions(course_id: int, db: Session = Depends(get_db), current_u
 # 9. Override/Update student attendance record (Lecturer/Admin only)
 @router.put("/attendance/{session_id}/{student_id}")
 def update_lecturer_attendance(
-    session_id: int,
-    student_id: int,
+    session_id: str,
+    student_id: str,
     body: LecturerAttendanceUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer)

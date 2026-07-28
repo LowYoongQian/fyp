@@ -192,6 +192,20 @@ app.include_router(admin_reports.router)
 app.include_router(admin_audit.router)
 
 # Public announcements endpoint for home screen
+@app.get("/public/logo")
+def get_public_logo():
+    db = SessionLocal()
+    try:
+        row = db.execute(text("SELECT value FROM security_settings WHERE key = 'system_logo_base64'")).first()
+        if row and row[0]:
+            return {"logo_url": row[0]}
+        url_row = db.execute(text("SELECT value FROM security_settings WHERE key = 'system_logo_url'")).first()
+        if url_row and url_row[0]:
+            return {"logo_url": url_row[0]}
+        return {"logo_url": "https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/assets/saslogo.png"}
+    finally:
+        db.close()
+
 @app.get("/public/announcements", response_model=list)
 def get_public_announcements():
     db = SessionLocal()
