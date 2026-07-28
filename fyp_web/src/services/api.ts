@@ -559,7 +559,7 @@ export const apiService = {
     return response.data;
   },
   adminDeleteCampusNetwork: async (netId: number | string): Promise<any> => {
-    const response = await api.delete(`/admin/campus-networks/${netId}`);
+    const response = await api.delete(`/admin/campus-networks/${encodeURIComponent(String(netId))}`);
     return response.data;
   },
   adminGetSecuritySettings: async (): Promise<SecuritySettings> => {
@@ -623,4 +623,76 @@ export const apiService = {
   fetchSystemLanguages: async () => {
     return cachedGet('/api/v1/system/languages');
   },
+
+  // Admin Reports & Audit Logs API
+  getAdminFeedback: async (status?: string, category?: string) => {
+    const params = new URLSearchParams();
+    if (status && status !== 'All') params.append('status', status);
+    if (category && category !== 'All') params.append('category', category);
+    const response = await api.get<StudentFeedbackReport[]>(`/admin/reports/feedback?${params.toString()}`);
+    return response.data;
+  },
+  updateAdminFeedback: async (feedbackId: string, data: { status: string; admin_notes?: string }) => {
+    const response = await api.put<StudentFeedbackReport>(`/admin/reports/feedback/${feedbackId}`, data);
+    return response.data;
+  },
+  getAdminMCReports: async (status?: string) => {
+    const params = new URLSearchParams();
+    if (status && status !== 'All') params.append('status', status);
+    const response = await api.get<MCReportItem[]>(`/admin/reports/mc?${params.toString()}`);
+    return response.data;
+  },
+  updateAdminMCReport: async (recordId: string, status: string) => {
+    const response = await api.put(`/admin/reports/mc/${recordId}`, { status });
+    return response.data;
+  },
+  getAdminAuditLogs: async (category?: string, search?: string) => {
+    const params = new URLSearchParams();
+    if (category && category.toLowerCase() !== 'all') params.append('category', category);
+    if (search) params.append('search', search);
+    const response = await api.get<AuditLogEntry[]>(`/admin/audit/logs?${params.toString()}`);
+    return response.data;
+  },
+  createAdminAuditLog: async (data: { category: string; action: string; details?: string; ip_address?: string }) => {
+    const response = await api.post<AuditLogEntry>('/admin/audit/logs', data);
+    return response.data;
+  },
 };
+
+export interface StudentFeedbackReport {
+  id: string;
+  student_id?: string;
+  student_name: string;
+  student_code: string;
+  subject: string;
+  category: string;
+  message: string;
+  status: string;
+  admin_notes?: string;
+  created_at: string;
+}
+
+export interface MCReportItem {
+  id: string;
+  student_id: string;
+  student_name: string;
+  student_code: string;
+  course_name: string;
+  course_code: string;
+  mc_proof_url?: string;
+  timestamp: string;
+  status: string;
+  flag_reason?: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  user_id?: string;
+  user_name: string;
+  user_role: string;
+  category: string; // 'admin' | 'staff'
+  action: string;
+  details?: string;
+  ip_address?: string;
+  created_at: string;
+}

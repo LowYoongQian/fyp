@@ -13,6 +13,7 @@ from utils.schemas import (
     CampusNetworkCreate, CampusNetworkUpdate, CampusNetworkResponse,
     SecuritySettingsUpdate, MessageResponse
 )
+from utils.audit import log_audit_event
 
 router = APIRouter(prefix="/admin", tags=["Admin Config"])
 
@@ -46,11 +47,20 @@ def create_announcement(body: AnnouncementCreate, db: Session = Depends(get_db),
     db.add(announcement)
     db.commit()
     db.refresh(announcement)
+    log_audit_event(
+        db,
+        user_id=str(current_user.id),
+        user_name=current_user.profile_name or current_user.email,
+        user_role="admin",
+        category="admin",
+        action="CREATE_ANNOUNCEMENT",
+        details=f"Created announcement: '{announcement.title}'"
+    )
     return announcement
 
 @router.put("/announcements/{announcement_id}", response_model=AnnouncementResponse)
-def update_announcement(announcement_id: int, body: AnnouncementCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    announcement = get_or_404(db, Announcement, announcement_id, "Announcement")
+def update_announcement(announcement_id: Union[int, str], body: AnnouncementCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    announcement = get_or_404(db, Announcement, str(announcement_id), "Announcement")
         
     announcement.title = body.title
     announcement.content = body.content
@@ -72,8 +82,8 @@ def update_announcement(announcement_id: int, body: AnnouncementCreate, db: Sess
     return announcement
 
 @router.delete("/announcements/{announcement_id}", response_model=MessageResponse)
-def delete_announcement(announcement_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    announcement = get_or_404(db, Announcement, announcement_id, "Announcement")
+def delete_announcement(announcement_id: Union[int, str], db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    announcement = get_or_404(db, Announcement, str(announcement_id), "Announcement")
         
     db.delete(announcement)
     db.commit()

@@ -271,6 +271,7 @@ class _AppRootState extends State<AppRoot> {
   String staffName = "";
   String staffCode = "";
   String staffEmail = "";
+  String staffRole = "Lecturer";
 
   @override
   void initState() {
@@ -456,6 +457,10 @@ class _AppRootState extends State<AppRoot> {
           staffEmail = resolvedEmail;
           staffName = name;
           staffCode = code;
+          staffRole = (authData['staff_role'] ?? authData['role'] ?? 'Lecturer').toString();
+          if (staffRole.toLowerCase() == 'lecturer') staffRole = 'Lecturer';
+          if (staffRole.toLowerCase() == 'admin') staffRole = 'Admin';
+          if (staffRole.toLowerCase() == 'tutor') staffRole = 'Tutor';
           isStaffLoggedIn = true;
         }
       });
@@ -1112,6 +1117,7 @@ class _AppRootState extends State<AppRoot> {
                 staffName: staffName,
                 staffCode: staffCode,
                 staffEmail: staffEmail,
+                staffRole: staffRole,
                 authToken: staffAuthToken,
                 apiBaseUrl: ApiConfig.getEffectiveUrl(),
                 isDatabaseOffline: isDatabaseOffline,

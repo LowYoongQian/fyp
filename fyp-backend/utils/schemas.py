@@ -143,17 +143,17 @@ class AnnouncementResponse(BaseModel):
     id: Any
     title: str
     content: str
-    faculty: str
-    department: str
+    faculty: Optional[str] = "All"
+    department: Optional[str] = "All"
     created_at: datetime
-    is_draft: bool
-    priority: str
-    publisher: str
+    is_draft: bool = False
+    priority: Optional[str] = "Medium"
+    publisher: Optional[str] = "ADMIN"
     image_base64: Optional[str] = None
     publish_start: Optional[datetime] = None
     publish_end: Optional[datetime] = None
-    target_scope: str
-    target_role: str
+    target_scope: Optional[str] = "all"
+    target_role: Optional[str] = "all"
     target_programme_code: Optional[str] = None
     target_course_code: Optional[str] = None
 

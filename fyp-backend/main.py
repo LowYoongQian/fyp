@@ -7,7 +7,7 @@ import hashlib
 
 from utils.database import engine, SessionLocal
 from utils.models import Base, ClassMeeting
-from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers
+from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit
 
 # Automatically create all tables in PostgreSQL on startup
 Base.metadata.create_all(bind=engine)
@@ -188,6 +188,8 @@ app.include_router(admin_config.router)
 app.include_router(student_self.router)
 app.include_router(analytics.router)
 app.include_router(lecturers.router)
+app.include_router(admin_reports.router)
+app.include_router(admin_audit.router)
 
 # Public announcements endpoint for home screen
 @app.get("/public/announcements", response_model=list)
