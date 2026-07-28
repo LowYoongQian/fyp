@@ -85,7 +85,17 @@ def _cosine_distance(a: list[float], b: list[float]) -> float:
 
 
 # Threshold below which two embeddings are considered the same person.
-# ArcFace cosine distance: < 0.40 is a common match threshold.
+#
+# NOTE: 0.40 is NOT deepface's tuned threshold for ArcFace — that is 0.68
+# (see deepface/config/threshold.py; 0.40 is Facenet's cosine value). 0.40 is a
+# deliberate ~41% tightening, chosen because the two error types are asymmetric
+# here: a false rejection just makes a legitimate student retake the photo, while
+# a false acceptance admits an impostor and produces exactly the proxy-attendance
+# record this system exists to prevent. Report §3.1.2 documents this reasoning.
+#
+# To be validated in Project II by measuring FAR/FRR over genuine vs impostor
+# embedding pairs across candidate thresholds, and loosened if the false
+# rejection rate proves too high for real classroom conditions.
 _FACE_MATCH_THRESHOLD = 0.40
 
 
