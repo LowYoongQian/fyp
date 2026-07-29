@@ -51,7 +51,7 @@ def get_students(
 
 @router.put("/students/{student_id}/programme", response_model=MessageResponse)
 def assign_student_programme(
-    student_id: int,
+    student_id: str,
     body: StudentProgrammeAssign,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
@@ -91,7 +91,7 @@ def create_student(
 
 @router.put("/students/{student_id}", response_model=MessageResponse)
 def update_student(
-    student_id: int,
+    student_id: str,
     body: AdminStudentUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
@@ -122,7 +122,7 @@ def update_student(
 
 @router.delete("/students/{student_id}", response_model=MessageResponse)
 def delete_student(
-    student_id: int,
+    student_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):

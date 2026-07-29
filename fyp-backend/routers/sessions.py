@@ -44,7 +44,29 @@ def _get_settings(db: Session) -> dict:
 def _truthy(v: str) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
-def get_course_group_slots(db: Session, course_id: int, class_group: str) -> list:
+
+def require_course_access(db: Session, current_user: User, course_id: str, action: str) -> Course:
+    """Return the course, or 403 unless the caller owns/is assigned to it.
+
+    Admins pass through. Every lecturer-facing endpoint that touches one course
+    routes through here so the rule is stated once — open, close, roster read
+    and attendance override all enforce the SAME ownership check. Without it any
+    authenticated lecturer could open, close, or edit any other lecturer's class.
+    """
+    course = get_or_404(db, Course, course_id, "Course")
+    if current_user.role == "admin":
+        return course
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    assigned_course_ids = [
+        a.course_id for a in db.query(CourseStaffAssignment)
+        .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
+    ]
+    if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
+        raise HTTPException(status_code=403, detail=f"Not authorized to {action} for this course")
+    return course
+
+
+def get_course_group_slots(db: Session, course_id: str, class_group: str) -> list:
     schedule_map = calculate_schedule(db)
     
     slots = []
@@ -67,7 +89,7 @@ def get_course_group_slots(db: Session, course_id: int, class_group: str) -> lis
     return slots
 
 
-def validate_session_opening(db: Session, course_id: int, class_group: str, now: datetime):
+def validate_session_opening(db: Session, course_id: str, class_group: str, now: datetime):
     slots = get_course_group_slots(db, course_id, class_group)
     if not slots:
         return
@@ -108,7 +130,7 @@ def validate_session_opening(db: Session, course_id: int, class_group: str, now:
         )
 
 
-def validate_student_checkin(db: Session, course_id: int, class_group: str, now: datetime):
+def validate_student_checkin(db: Session, course_id: str, class_group: str, now: datetime):
     slots = get_course_group_slots(db, course_id, class_group)
     if not slots:
         return
@@ -160,8 +182,8 @@ def validate_student_checkin(db: Session, course_id: int, class_group: str, now:
 # 1. Open Session (Lecturer/Admin only)
 @router.post("/open", response_model=SessionResponse, status_code=201)
 def open_session(body: SessionCreate, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    # Verify course exists
-    course = get_or_404(db, Course, body.course_id, "Course")
+    # Verify the course exists AND that this lecturer teaches it
+    course = require_course_access(db, current_user, body.course_id, "open a session")
 
     # Enforce session open window
     validate_session_opening(db, body.course_id, body.class_group, datetime.now())
@@ -196,9 +218,10 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
 
 # 2. Close Session (Lecturer/Admin only)
 @router.post("/{id}/close", response_model=SessionResponse)
-def close_session(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+def close_session(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     session = get_or_404(db, ClassSession, id, "Session")
-    
+    require_course_access(db, current_user, session.course_id, "close a session")
+
     if not session.is_open:
         raise HTTPException(status_code=400, detail="Session is already closed")
 
@@ -270,7 +293,7 @@ def get_active_student_sessions(db: Session = Depends(get_db), current_user: Use
 
 # 4. Student Check-in (Student only — face liveness + network location verification)
 @router.post("/{id}/attend", response_model=AttendanceResponse)
-def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     # Check if session exists and is active
     session = get_or_404(db, ClassSession, id, "Session")
         
@@ -470,19 +493,10 @@ def student_check_in(id: int, body: AttendanceSubmit, request: Request, db: Sess
 def get_session_attendance(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     session = get_or_404(db, ClassSession, id, "Session")
 
-    course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
-
     # A lecturer may only view the roster for a course they own or are assigned
     # to; admins may view any. Otherwise any lecturer could read another class's
-    # attendance. (Same authorization rule as the attendance-override endpoint.)
-    if current_user.role != "admin":
-        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        assigned_course_ids = [
-            a.course_id for a in db.query(CourseStaffAssignment)
-            .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-        ]
-        if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
-            raise HTTPException(status_code=403, detail="Not authorized to view attendance for this course")
+    # attendance.
+    course = require_course_access(db, current_user, session.course_id, "view attendance")
 
     # Fetch all students enrolled in this course group
     query = db.query(Student).join(Enrolment).filter(Enrolment.course_id == session.course_id)
@@ -542,11 +556,17 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
         else:
             raise HTTPException(status_code=404, detail="Lecturer profile not found")
     else:
-        # Get active sessions for courses taught by this lecturer
+        # Courses this lecturer teaches: owned OR assigned as staff. Filtering on
+        # Course.lecturer_id alone hid the sessions of every course they only
+        # tutor — the same "owned + assigned" rule require_course_access uses.
+        assigned_course_ids = [
+            a.course_id for a in db.query(CourseStaffAssignment)
+            .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
+        ]
         sessions = db.query(ClassSession).join(
             Course, Course.id == ClassSession.course_id
         ).filter(
-            Course.lecturer_id == lecturer.id,
+            (Course.lecturer_id == lecturer.id) | (Course.id.in_(assigned_course_ids)),
             ClassSession.is_open == True
         ).all()
 
@@ -633,22 +653,9 @@ class LecturerAttendanceUpdate(BaseModel):
 
 # 8. List all sessions for a specific course (Lecturer/Admin only)
 @router.get("/course/{course_id}/sessions", response_model=List[SessionResponse])
-def get_course_sessions(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    # Find the lecturer profile
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer and current_user.role != "admin":
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
-        
-    if current_user.role != "admin":
-        # Check authorization
-        assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-        assigned_course_ids = [a.course_id for a in assigned_assignments]
-        
-        course = get_or_404(db, Course, course_id, "Course")
-            
-        if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
-            raise HTTPException(status_code=403, detail="Not authorized to view sessions for this course")
-            
+def get_course_sessions(course_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    require_course_access(db, current_user, course_id, "view sessions")
+
     # Fetch all sessions for this course, ordered by opened_at desc
     sessions = db.query(ClassSession).filter(ClassSession.course_id == course_id).order_by(ClassSession.opened_at.desc()).all()
     return sessions
@@ -663,21 +670,9 @@ def update_lecturer_attendance(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer)
 ):
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-    if not lecturer and current_user.role != "admin":
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
-        
     session = get_or_404(db, ClassSession, session_id, "Session")
-        
-    if current_user.role != "admin":
-        course = get_or_404(db, Course, session.course_id, detail="Course associated with session not found")
-            
-        assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-        assigned_course_ids = [a.course_id for a in assigned_assignments]
-        
-        if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
-            raise HTTPException(status_code=403, detail="Not authorized to edit attendance for this course")
-            
+    require_course_access(db, current_user, session.course_id, "edit attendance")
+
     if body.status not in ["present", "absent"]:
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'present' or 'absent'")
 

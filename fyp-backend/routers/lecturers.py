@@ -17,8 +17,8 @@ from utils.db_helpers import require_own_profile, get_or_404
 router = APIRouter(prefix="/lecturers", tags=["Lecturers"])
 
 class AlertCreate(BaseModel):
-    student_id: int
-    course_id: int
+    student_id: str
+    course_id: str
 
 @router.get("/me/courses")
 def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
@@ -171,8 +171,11 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
         if is_primary or assigned_as_lecturer:
             lect_slot = schedule_map.get(f"Lecture-{c.id}")
             if lect_slot:
+                # "id" is the meeting_key, matching schedule_map. See the same
+                # note in routers/students.py — course ids are UUID strings, so
+                # arithmetic on them is either a TypeError or a junk string.
                 result.append({
-                    "id": c.id * 10,
+                    "id": f"Lecture-{c.id}",
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
@@ -193,7 +196,7 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
             tutor_slot = schedule_map.get(f"Tutor-{tutor_assign.id}")
             if tutor_slot:
                 result.append({
-                    "id": c.id * 10 + 1,
+                    "id": f"Tutor-{tutor_assign.id}",
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
@@ -214,7 +217,7 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
             prac_slot = schedule_map.get(f"Practical-{practical_assign.id}")
             if prac_slot:
                 result.append({
-                    "id": c.id * 10 + 2,
+                    "id": f"Practical-{practical_assign.id}",
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,

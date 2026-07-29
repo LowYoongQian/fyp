@@ -47,7 +47,7 @@ def require_email_domain(email: str, suffix: str, label: str) -> None:
         raise HTTPException(status_code=400, detail=f"{label} email must end with {suffix}")
 
 
-def require_own_profile(db: Session, model: Type, user_id: int, label: str):
+def require_own_profile(db: Session, model: Type, user_id: str, label: str):
     """Return the `model` row owned by `user_id` (via model.user_id), or raise
     404. Used to resolve the current user's Student/Lecturer profile — the
     single most-repeated 404 across the routers."""

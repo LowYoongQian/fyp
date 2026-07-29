@@ -79,7 +79,7 @@ def create_staff(
 
 @router.put("/staff/{lecturer_id}", response_model=MessageResponse)
 def update_staff(
-    lecturer_id: int,
+    lecturer_id: str,
     body: AdminStaffUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
@@ -114,7 +114,7 @@ def update_staff(
 
 @router.delete("/staff/{lecturer_id}", response_model=MessageResponse)
 def delete_staff(
-    lecturer_id: int,
+    lecturer_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):

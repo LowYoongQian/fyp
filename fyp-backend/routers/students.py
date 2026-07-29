@@ -14,6 +14,7 @@ from utils.models import (
 )
 from utils.security import require_student
 from utils.db_helpers import require_own_profile
+from utils.attendance import session_hours, attendance_rate_percent
 import math
 from datetime import datetime, timedelta
 from utils.scheduler import calculate_schedule
@@ -161,38 +162,49 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
     for c, group in rows:
         assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == c.id).all()
         
-        # Calculate attendance rate based on completed sessions
-        sessions = db.query(ClassSession).filter(
+        # Attendance rate: closed-only, present+leave, HOURS-weighted — the one
+        # policy in utils/attendance.py, shared with /students/me/enrolments and
+        # the risk model. This endpoint previously counted present-only over a
+        # flat session count and treated "open but past today" as held, so the
+        # app and the web dashboard showed two different percentages for the
+        # same student. See utils/attendance.py for the policy.
+        closed = db.query(
+            ClassSession.id, ClassSession.class_group,
+            ClassSession.opened_at, ClassSession.closed_at
+        ).filter(
             ClassSession.course_id == c.id,
-            (ClassSession.class_group == "All") | (ClassSession.class_group == group)
-        ).all()
-        
-        now = utcnow()
-        completed_sessions = []
-        for s in sessions:
-            opened_at_day_end = datetime(s.opened_at.year, s.opened_at.month, s.opened_at.day, 23, 59, 59)
-            if (not s.is_open) or (now > opened_at_day_end):
-                completed_sessions.append(s)
-                
-        if completed_sessions:
-            session_ids = [s.id for s in completed_sessions]
-            present_count = db.query(AttendanceRecord).filter(
+            ClassSession.is_open == False,
+        ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all()
+
+        course_sessions = [
+            (sid, sgroup, session_hours(opened, cl))
+            for sid, sgroup, opened, cl in closed
+        ]
+        session_ids = [row[0] for row in course_sessions]
+        present_set = set()
+        if session_ids:
+            present_rows = db.query(AttendanceRecord.session_id).filter(
                 AttendanceRecord.student_id == student.id,
                 AttendanceRecord.session_id.in_(session_ids),
-                AttendanceRecord.status == "present"
-            ).count()
-            attendance_rate = round((present_count / len(completed_sessions)) * 100.0, 1)
-        else:
-            attendance_rate = 100.0
+                AttendanceRecord.status.in_(["present", "leave"]),
+            ).all()
+            present_set = {(student.id, sid) for (sid,) in present_rows}
+
+        attendance_rate = attendance_rate_percent(
+            course_sessions, present_set, student.id, group)
 
         # 1. Primary Lecture Slot
+        # "id" is the meeting_key ("Lecture-<uuid>") — the same key that indexes
+        # schedule_map. It is stable and unique per timetable row. Do NOT derive
+        # it arithmetically from c.id: those are UUID strings, so c.id * 10 + 1
+        # raises TypeError and c.id * 10 silently returns 360 junk characters.
         lect_slot = schedule_map.get(f"Lecture-{c.id}")
         if lect_slot:
             lecturer_assign = next((a for a in assignments if a.role == 'Lecturer'), None)
             lecturer_name = lecturer_assign.lecturer.name if (lecturer_assign and lecturer_assign.lecturer) else (c.lecturer.name if c.lecturer else "TBA")
-            
+
             result.append({
-                "id": c.id * 10,
+                "id": f"Lecture-{c.id}",
                 "course_id": c.id,
                 "course_code": c.course_code,
                 "course_name": c.course_name,
@@ -213,7 +225,7 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
             if tutor_slot:
                 tutor_name = tutor_assign.lecturer.name if tutor_assign.lecturer else "TBA"
                 result.append({
-                    "id": c.id * 10 + 1,
+                    "id": f"Tutor-{tutor_assign.id}",
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
@@ -234,7 +246,7 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
             if prac_slot:
                 practical_name = practical_assign.lecturer.name if practical_assign.lecturer else "TBA"
                 result.append({
-                    "id": c.id * 10 + 2,
+                    "id": f"Practical-{practical_assign.id}",
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
@@ -351,7 +363,10 @@ def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depend
         .join(ClassSession, ClassSession.id == AttendanceRecord.session_id)
         .join(Course, Course.id == ClassSession.course_id)
         .filter(AttendanceRecord.student_id == student.id)
-        .order_by(AttendanceRecord.marked_at.desc())
+        # Order on the real column. marked_at is a Python @property aliasing
+        # timestamp, so it has no .desc() — sorting by it raised AttributeError
+        # and made this whole endpoint a 500.
+        .order_by(AttendanceRecord.timestamp.desc())
         .all()
     )
     return [

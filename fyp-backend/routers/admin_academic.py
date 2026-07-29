@@ -4,7 +4,7 @@ from typing import List
 from pydantic import BaseModel
 
 from utils.database import get_db
-from utils.scheduler import pick_slot_for_new
+from utils.scheduler import pick_slot_for_new, meeting_key_for
 from utils.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
@@ -36,7 +36,7 @@ def create_programme(body: ProgrammeCreate, db: Session = Depends(get_db), curre
     return programme
 
 @router.put("/programmes/{programme_id}", response_model=ProgrammeResponse)
-def update_programme(programme_id: int, body: ProgrammeCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def update_programme(programme_id: str, body: ProgrammeCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     programme = get_or_404(db, Programme, programme_id, "Programme")
     
     ensure_unique(db, Programme, Programme.code, body.code, exclude_id=programme_id, detail="Programme code already exists")
@@ -48,7 +48,7 @@ def update_programme(programme_id: int, body: ProgrammeCreate, db: Session = Dep
     return programme
 
 @router.delete("/programmes/{programme_id}", response_model=MessageResponse)
-def delete_programme(programme_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def delete_programme(programme_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     programme = get_or_404(db, Programme, programme_id, "Programme")
         
     db.query(Student).filter(Student.programme_id == programme_id).update({Student.programme_id: None})
@@ -124,7 +124,8 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
     db.add(ClassMeeting(
-        meeting_key=f"Lecture-{course.id}", course_id=course.id, assignment_id=None,
+        meeting_key=meeting_key_for("Lecture", course.id, None),
+        course_id=course.id, assignment_id=None,
         role="Lecture", lecturer_id=course.lecturer_id, **slot,
     ))
 
@@ -133,7 +134,7 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
     return course
 
 @router.put("/courses/{course_id}", response_model=CourseResponse)
-def update_course(course_id: int, body: CourseCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     course = get_or_404(db, Course, course_id, "Course")
         
     ensure_unique(db, Course, Course.course_code, body.course_code, exclude_id=course_id, detail="Course code already exists")
@@ -154,8 +155,12 @@ def update_course(course_id: int, body: CourseCreate, db: Session = Depends(get_
 
     # Timetable times live in class_meetings, not on the course. Keep the
     # Lecture meeting's lecturer in sync so clash detection stays correct.
+    # Matched on the course_id foreign key, not the meeting_key string: seeded
+    # rows still carry pre-UUID keys ("Lecture-8"), so a string match silently
+    # found nothing and left the meeting pointing at the previous lecturer.
     lecture_meeting = db.query(ClassMeeting).filter(
-        ClassMeeting.meeting_key == f"Lecture-{course.id}"
+        ClassMeeting.course_id == course.id,
+        ClassMeeting.role == "Lecture",
     ).first()
     if lecture_meeting:
         lecture_meeting.lecturer_id = body.lecturer_id
@@ -165,7 +170,7 @@ def update_course(course_id: int, body: CourseCreate, db: Session = Depends(get_
     return course
 
 @router.delete("/courses/{course_id}", response_model=MessageResponse)
-def delete_course(course_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def delete_course(course_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     course = get_or_404(db, Course, course_id, "Course")
         
     db.query(Enrolment).filter(Enrolment.course_id == course_id).delete()
@@ -233,7 +238,8 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
             db.rollback()
             raise HTTPException(status_code=400, detail=str(e))
         db.add(ClassMeeting(
-            meeting_key=f"{body.role}-{assignment.id}", course_id=assignment.course_id,
+            meeting_key=meeting_key_for(body.role, assignment.course_id, assignment.id),
+            course_id=assignment.course_id,
             assignment_id=assignment.id, role=body.role,
             lecturer_id=assignment.lecturer_id, **slot,
         ))
@@ -243,7 +249,7 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
     return assignment
 
 @router.delete("/assignments/{assignment_id}", response_model=MessageResponse)
-def delete_assignment(assignment_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     assignment = get_or_404(db, CourseStaffAssignment, assignment_id, "Assignment")
     db.delete(assignment)
     db.commit()
@@ -283,7 +289,7 @@ class TimetableSlotUpdate(BaseModel):
 
 
 @router.put("/timetable/{meeting_id}", response_model=MessageResponse)
-def update_timetable_slot(meeting_id: int, body: TimetableSlotUpdate,
+def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
                           db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     meeting = get_or_404(db, ClassMeeting, meeting_id, detail="Timetable slot not found")
 
@@ -383,7 +389,7 @@ def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: Us
     return {"message": "Student successfully enrolled"}
 
 @router.delete("/enrolments/{enrolment_id}", response_model=MessageResponse)
-def delete_enrolment(enrolment_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def delete_enrolment(enrolment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     enrol = get_or_404(db, Enrolment, enrolment_id, "Enrolment")
     db.delete(enrol)
     db.commit()

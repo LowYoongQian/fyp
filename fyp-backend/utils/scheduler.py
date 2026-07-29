@@ -24,11 +24,28 @@ TIMES = [
 ROOMS = ["Theatre 1", "Theatre 2", "Lab 1", "Lab 2", "Lab 3", "Seminar Room 1", "Seminar Room 2"]
 
 
+def meeting_key_for(role: str, course_id, assignment_id) -> str:
+    """The lookup key callers build: "Lecture-<course_id>" for a course lecture,
+    "<role>-<assignment_id>" for a Tutor/Practical staff assignment."""
+    if role == "Lecture":
+        return f"Lecture-{course_id}"
+    return f"{role}-{assignment_id}"
+
+
 def calculate_schedule(db: Session) -> dict:
-    """Return { meeting_key: {day,start,end,room} } read from class_meetings."""
+    """Return { meeting_key: {day,start,end,room} } read from class_meetings.
+
+    The key is DERIVED from the row's foreign keys, not read from the stored
+    meeting_key column. The UUID migration left the seeded rows with pre-migration
+    integer keys ("Lecture-8") while course_id/assignment_id were correctly
+    converted, so every f"Lecture-{course.id}" lookup missed and the whole
+    timetable came back empty. Deriving the key keeps this correct even if the
+    stored column drifts again.
+    """
     rows = db.query(ClassMeeting).all()
     return {
-        r.meeting_key: {"day": r.day, "start": r.start, "end": r.end, "room": r.room}
+        meeting_key_for(r.role, r.course_id, r.assignment_id):
+            {"day": r.day, "start": r.start, "end": r.end, "room": r.room}
         for r in rows
     }
 
@@ -47,13 +64,13 @@ def _desired_meetings(db: Session):
     meetings = []
     for c in db.query(Course).order_by(Course.id).all():
         meetings.append({
-            "meeting_key": f"Lecture-{c.id}", "course_id": c.id,
+            "meeting_key": meeting_key_for("Lecture", c.id, None), "course_id": c.id,
             "assignment_id": None, "role": "Lecture", "lecturer_id": c.lecturer_id,
         })
     for a in db.query(CourseStaffAssignment).order_by(CourseStaffAssignment.id).all():
         if a.role in ("Tutor", "Practical"):
             meetings.append({
-                "meeting_key": f"{a.role}-{a.id}", "course_id": a.course_id,
+                "meeting_key": meeting_key_for(a.role, a.course_id, a.id), "course_id": a.course_id,
                 "assignment_id": a.id, "role": a.role, "lecturer_id": a.lecturer_id,
             })
     return meetings
@@ -97,7 +114,7 @@ def generate_clashfree_slots(db: Session) -> list:
     return [{**m, **allocated[m["meeting_key"]]} for m in meetings]
 
 
-def pick_slot_for_new(db: Session, course_id: int, lecturer_id, role: str) -> dict:
+def pick_slot_for_new(db: Session, course_id: str, lecturer_id, role: str) -> dict:
     """Pick one clash-free slot for a single new meeting, against the slots
     already taken by existing class_meetings rows. Raises ValueError if full."""
     occupied_rooms, occupied_lecturers, occupied_courses = set(), set(), set()

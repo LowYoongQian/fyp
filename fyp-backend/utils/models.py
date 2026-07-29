@@ -218,8 +218,13 @@ class FaceEmbedding(Base):
     student_id    = Column(UUID(as_uuid=False), ForeignKey("students.id"), unique=True, index=True)
     embedding     = Column(LargeBinary, nullable=False)
     sample_count  = Column(Integer, default=1)
+    # Set False to retire a stored face without deleting the row. The check-in
+    # query filters on it (routers/sessions.py), so it must stay declared here —
+    # it exists in the database and dropping it from the model turns every
+    # face check-in into a 500.
+    is_active     = Column(Boolean, default=True)
     updated_at    = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    
+
     student       = relationship("Student", back_populates="face_embedding")
 
 # ML At-Risk Model Scores
@@ -235,8 +240,11 @@ class RiskScore(Base):
     updated_at          = Column(DateTime, server_default=func.now())
 
     # Legacy fields are retained because the existing database includes them.
-    risk_level          = Column(String, nullable=False)
-    absent_percentage   = Column(Float, nullable=False)
+    # Nullable: the live table has them NULL-able and recompute_risk_scores
+    # (routers/analytics.py) never populates them. Declaring NOT NULL here made
+    # create_all() build a schema that rejects every risk score the app writes.
+    risk_level          = Column(String, nullable=True)
+    absent_percentage   = Column(Float, nullable=True)
     consecutive_absences= Column(Integer, default=0)
     calculated_at       = Column(DateTime, server_default=func.now())
     
@@ -298,6 +306,12 @@ class Alert(Base):
     message      = Column(Text, nullable=True)
     is_resolved  = Column(Boolean, default=False)
     triggered_at = Column(DateTime, server_default=func.now())
+    # The lecturer alert endpoints read and write these three (routers/lecturers.py).
+    # They exist in the database; leaving them off the model made both
+    # GET and POST /lecturers/me/alerts raise AttributeError/TypeError.
+    email_body   = Column(Text, nullable=True)
+    triggered_by = Column(String, default="system")
+    sent_at      = Column(DateTime, nullable=True)
 
     student      = relationship("Student")
     course       = relationship("Course")
