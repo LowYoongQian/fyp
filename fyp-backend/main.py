@@ -57,15 +57,20 @@ class ETagMiddleware(BaseHTTPMiddleware):
         etag = f'W/"{hashlib.md5(response_body).hexdigest()}"'
         
         if_none_match = request.headers.get("if-none-match")
+        # must-revalidate, not max-age=30: with a 30s freshness window the browser
+        # answered its own cache after a PUT/POST, so an edit saved fine but the list
+        # kept showing the old row. Revalidating always still costs only a 304.
+        cache_control = "private, no-cache, must-revalidate"
+
         if if_none_match and if_none_match == etag:
             return Response(
                 status_code=304,
-                headers={"ETag": etag, "Cache-Control": "private, max-age=30"}
+                headers={"ETag": etag, "Cache-Control": cache_control}
             )
-            
+
         headers = dict(response.headers)
         headers["ETag"] = etag
-        headers["Cache-Control"] = "private, max-age=30"
+        headers["Cache-Control"] = cache_control
         headers["content-length"] = str(len(response_body))
         
         return Response(

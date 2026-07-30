@@ -170,13 +170,15 @@ export const AdminPanel: React.FC = () => {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-600">Student Code (TP-ID)</label>
+                <label className="text-xs font-semibold text-slate-600">Student Code (ST-ID)</label>
                 <input
                   type="text"
                   required
+                  pattern="ST[0-9]{7}"
+                  title="ST followed by 7 digits, e.g. ST2510091"
                   value={studentCode}
                   onChange={(e) => setStudentCode(e.target.value)}
-                  placeholder="e.g. TP061234"
+                  placeholder="e.g. ST2510091"
                   className="w-full uipro-input"
                 />
               </div>

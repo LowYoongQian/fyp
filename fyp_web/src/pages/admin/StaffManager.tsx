@@ -328,9 +328,11 @@ export const StaffManager: React.FC = () => {
                   <input
                     type="text"
                     required
+                    pattern="T[0-9]{6}"
+                    title="T followed by 6 digits, e.g. T000001"
                     value={staffId}
                     onChange={(e) => setStaffId(e.target.value)}
-                    placeholder="e.g. STF-0092"
+                    placeholder="e.g. T000092"
                     className="w-full uipro-input !pl-10"
                   />
                 </div>
@@ -453,9 +455,11 @@ export const StaffManager: React.FC = () => {
                   <input
                     type="text"
                     required
+                    pattern="T[0-9]{6}"
+                    title="T followed by 6 digits, e.g. T000001"
                     value={staffId}
                     onChange={(e) => setStaffId(e.target.value)}
-                    placeholder="e.g. STF-0092"
+                    placeholder="e.g. T000092"
                     className="w-full uipro-input !pl-10"
                   />
                 </div>

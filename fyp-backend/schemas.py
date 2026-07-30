@@ -1,6 +1,26 @@
-from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, Any, Union
+import re
+
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict, field_validator
+from typing import Annotated, Optional, Any, Union
 from enum import Enum
+
+
+# Canonical student code: ST followed by exactly 7 digits (e.g. ST2510091). Mirrors the
+# ck_students_student_code_format CHECK constraint in the DB, so a bad code is rejected
+# with a readable 422 instead of a raw IntegrityError.
+STUDENT_CODE_PATTERN = r"^ST\d{7}$"
+StudentCode = Annotated[
+    str,
+    Field(pattern=STUDENT_CODE_PATTERN, description="ST followed by 7 digits, e.g. ST2510091"),
+]
+
+# Canonical staff id: T followed by exactly 6 digits (e.g. T000001). Mirrors the
+# ck_lecturers_staff_id_format CHECK constraint in the DB.
+STAFF_ID_PATTERN = r"^T\d{6}$"
+StaffId = Annotated[
+    str,
+    Field(pattern=STAFF_ID_PATTERN, description="T followed by 6 digits, e.g. T000001"),
+]
 
 
 class StaffRole(str, Enum):
@@ -31,6 +51,16 @@ class RegisterRequest(BaseModel):
     name: str
     code: Optional[str] = None          # student_code or staff_id
     class_group: Optional[str] = None   # alias/fallback sent by some frontend UI versions
+
+    @field_validator("code", "class_group")
+    @classmethod
+    def _student_code_format(cls, v, info):
+        # This endpoint only ever creates students (lecturer self-registration is
+        # rejected in the router), and whichever of these fields is set becomes the
+        # student_code -- so both must satisfy the canonical format.
+        if v is not None and not re.fullmatch(STUDENT_CODE_PATTERN, v):
+            raise ValueError("Student code must be ST followed by 7 digits, e.g. ST2510091")
+        return v
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -168,20 +198,20 @@ class AdminStudentCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     name: str
-    student_code: str
+    student_code: StudentCode
 
 class AdminStudentUpdate(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = Field(default=None, min_length=8)
     name: Optional[str] = None
-    student_code: Optional[str] = None
+    student_code: Optional[StudentCode] = None
 
 class AdminStaffCreate(BaseModel):
     model_config = ConfigDict(use_enum_values=True, validate_default=True)
     email: EmailStr
     password: str = Field(min_length=8)
     name: str
-    staff_id: str
+    staff_id: StaffId
     role: Optional[StaffRole] = StaffRole.lecturer
 
 class AdminStaffUpdate(BaseModel):
@@ -189,7 +219,7 @@ class AdminStaffUpdate(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = Field(default=None, min_length=8)
     name: Optional[str] = None
-    staff_id: Optional[str] = None
+    staff_id: Optional[StaffId] = None
     role: Optional[StaffRole] = None
 
 # Academic Schemas

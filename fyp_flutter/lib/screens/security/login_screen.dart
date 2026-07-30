@@ -35,10 +35,10 @@ class _LoginScreenState extends State<LoginScreen> {
   void handleDemoFill() {
     setState(() {
       if (widget.portalType == 'student') {
-        _emailOrIdController.text = 'TP061111'; // student 'low'
+        _emailOrIdController.text = 'ST0061111'; // student 'low'
         _passwordController.text = 'password123';
       } else {
-        _emailOrIdController.text = 'L999'; // lecturer 'Dr. Wong'
+        _emailOrIdController.text = 'T000001'; // lecturer 'Dr. Wong'
         _passwordController.text = 'password123';
       }
     });
@@ -62,7 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final Color primaryColor = isStudent ? const Color(0xFF2563EB) : const Color(0xFF800000);
     final String portalTitle = isStudent ? "Student Login" : "Staff Login";
     final String idLabel = isStudent ? "Student ID / Email Address" : "Staff ID / Email Address";
-    final String idHint = isStudent ? "eg. TP061111 or email" : "eg. L999 or email";
+    final String idHint = isStudent ? "eg. ST2510091 or email" : "eg. T000001 or email";
 
     final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
     final secondaryTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);

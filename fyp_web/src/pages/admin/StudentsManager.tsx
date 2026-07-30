@@ -350,15 +350,17 @@ export const StudentsManager: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="font-semibold text-slate-600">Student Code (TP-ID)</label>
+                <label className="font-semibold text-slate-600">Student Code (ST-ID)</label>
                 <div className="relative">
                   <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
                     type="text"
                     required
+                    pattern="ST[0-9]{7}"
+                    title="ST followed by 7 digits, e.g. ST2510091"
                     value={studentCode}
                     onChange={(e) => setStudentCode(e.target.value)}
-                    placeholder="e.g. TP065432"
+                    placeholder="e.g. ST2510091"
                     className="w-full uipro-input !pl-10"
                   />
                 </div>
@@ -458,15 +460,17 @@ export const StudentsManager: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <label className="font-semibold text-slate-600">Student Code (TP-ID)</label>
+                <label className="font-semibold text-slate-600">Student Code (ST-ID)</label>
                 <div className="relative">
                   <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
                     type="text"
                     required
+                    pattern="ST[0-9]{7}"
+                    title="ST followed by 7 digits, e.g. ST2510091"
                     value={studentCode}
                     onChange={(e) => setStudentCode(e.target.value)}
-                    placeholder="e.g. TP065432"
+                    placeholder="e.g. ST2510091"
                     className="w-full uipro-input !pl-10"
                   />
                 </div>
