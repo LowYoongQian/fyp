@@ -54,5 +54,67 @@ Thumbs.db
 **/android/app/release/
 
 
+# Python tooling caches & test artifacts
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/.coverage
+**/.coverage.*
+**/htmlcov/
+
+# deepface / TensorFlow downloaded model weights (fetched on first use, ~100MB+).
+# NOT ml/risk_model.pkl — that one is committed on purpose and loaded at runtime.
+**/.deepface/
+**/weights/*.h5
+
+# Node/Vite extra caches & debug logs
+**/.vite/
+**/.eslintcache
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+
+# Flutter/Dart extras
+**/*.iml
+**/.flutter-plugins
+**/.packages
+**/*.g.dart.bak
+
+# Editor leftovers & local history
+**/.history/
+**/*.swp
+**/*~
+**/*.orig
+**/*.rej
+
+# Generic local-only files
+**/*.log
+**/*.bak
+**/*.tmp
+**/*.local
+**/*.sqlite
+**/*.sqlite3
+
+# Credentials & signing material (never commit these)
+**/*.pem
+**/*.key
+**/*.p12
+**/*.jks
+**/*.keystore
+**/key.properties
+**/google-services.json
+**/GoogleService-Info.plist
+**/serviceAccountKey*.json
+
+# OneDrive / Windows sync conflict copies. This repo lives in OneDrive and a doc
+# really did get clobbered mid-edit, so keep the duplicates out of commits.
+**/*-DESKTOP-*.*
+**/*-LAPTOP-*.*
+**/* - Copy.*
+**/* (1).*
+**/* (2).*
+
 #Other
 /docs
