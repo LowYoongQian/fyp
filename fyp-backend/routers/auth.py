@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from utils.database import get_db
+from utils.timeutil import utcnow
+from db.database import get_db
 from datetime import datetime
-from utils.models import User, Student, Lecturer
+from db.models import User, Student, Lecturer
 from utils.security import hash_password, verify_password, create_access_token
-from utils.schemas import LoginRequest, RegisterRequest, TokenResponse
+from schemas import LoginRequest, RegisterRequest, TokenResponse
 from utils.db_helpers import ensure_unique, require_email_domain
 from pydantic import BaseModel
 from typing import Optional
@@ -99,7 +100,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     token = create_access_token(token_data)
 
     try:
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = utcnow()
         db.commit()
     except Exception as e:
         db.rollback()
@@ -188,7 +189,7 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "code": code,
         "avatar_url": user.avatar_url,
         "status": user.status or "Active",
-        "last_login_at": (user.last_login_at.isoformat() + "Z") if user.last_login_at else (datetime.utcnow().isoformat() + "Z"),
+        "last_login_at": (user.last_login_at.isoformat() + "Z") if user.last_login_at else (utcnow().isoformat() + "Z"),
         "two_factor_enabled": user.two_factor_enabled,
         "theme_preference": user.theme_preference or "light",
         "font_size_preference": user.font_size_preference or "medium",

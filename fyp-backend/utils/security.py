@@ -8,8 +8,8 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
-from utils.database import get_db
-from utils.models import User
+from db.database import get_db
+from db.models import User
 
 # Configurations
 SECRET_KEY  = os.getenv("JWT_SECRET_KEY")

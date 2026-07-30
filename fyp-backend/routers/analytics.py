@@ -33,15 +33,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from utils.timeutil import utcnow
 
-from utils.database import get_db
+from db.database import get_db
 import math
-from utils.models import (
+from db.models import (
     Student, Course, Enrolment, ClassSession,
     AttendanceRecord, RiskScore, User, Lecturer, CourseStaffAssignment,
 )
 from utils.security import require_lecturer
-from utils.db_helpers import require_own_profile
-from utils.attendance import session_hours, build_attendance_sequence
+from utils.db_helpers import my_course_ids, require_own_profile
+from domain.attendance import session_hours, build_attendance_sequence
 
 # --- At-risk decision policy ----------------------------------------------
 BAR_THRESHOLD = 0.80     # university rule: < 80% attendance => barred
@@ -256,12 +256,7 @@ def get_risk_scores(
     allowed_course_ids = None
     if current_user.role == "lecturer":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-        assigned_course_ids = [a.course_id for a in assigned_assignments]
-        courses = db.query(Course).filter(
-            (Course.lecturer_id == lecturer.id) | (Course.id.in_(assigned_course_ids))
-        ).all()
-        allowed_course_ids = [c.id for c in courses]
+        allowed_course_ids = my_course_ids(db, lecturer.id)
 
     q = (
         db.query(RiskScore, Student, Course)

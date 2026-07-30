@@ -1,103 +1,30 @@
-import base64
-import struct
-import cv2
-import numpy as np
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from utils.database import get_db
+from db.database import get_db
 from utils.timeutil import utcnow
-from utils.models import (
+from db.models import (
     User, Student, FaceEmbedding, Enrolment, Course,
     ClassSession, AttendanceRecord, CourseStaffAssignment,
 )
 from utils.security import require_student
 from utils.db_helpers import require_own_profile
-from utils.attendance import session_hours, attendance_rate_percent
-import math
-from datetime import datetime, timedelta
-from utils.scheduler import calculate_schedule
-from utils.session_sync import sync_class_sessions
+from domain.attendance import session_hours, attendance_rate_percent
+from integrations.face import (
+    _extract_face_embedding, _embedding_to_floats,
+    _cosine_distance, _FACE_MATCH_THRESHOLD,
+)
+from domain.scheduler import calculate_schedule, get_course_group_slots, meeting_key_for, session_end_utc
+from domain.session_sync import sync_class_sessions
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
-# Try to import deepface; fall back gracefully so the app runs without it.
-try:
-    from deepface import DeepFace  # type: ignore
-    _DEEPFACE_AVAILABLE = True
-except ImportError:
-    _DEEPFACE_AVAILABLE = False
 
 class FaceRegisterSubmit(BaseModel):
     image_base64: str
-
-
-def _extract_face_embedding(image_base64: str, enforce_detection: bool = True) -> bytes:
-    """Extract a 512-d ArcFace embedding from a base64-encoded JPEG/PNG.
-
-    Uses DeepFace with the ArcFace model (report §2.2.2). The returned bytes are
-    512 little-endian C floats (2048 bytes total), matching the
-    FaceEmbedding.embedding column schema.
-
-    enforce_detection=True (registration): reject images with no detectable face,
-    so a garbage vector can never be stored as someone's identity. check-in
-    passes False for tolerance — a wrong face is caught by the cosine threshold.
-    """
-    if not _DEEPFACE_AVAILABLE:
-        raise HTTPException(
-            status_code=503,
-            detail="Face recognition is unavailable: the ArcFace model (deepface) is not installed."
-        )
-    try:
-        img_bytes = base64.b64decode(image_base64)
-        img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("could not decode image bytes")
-        result = DeepFace.represent(
-            img_path=img,
-            model_name="ArcFace",
-            enforce_detection=enforce_detection,
-        )
-        embedding = result[0]["embedding"]  # list of 512 floats
-        return struct.pack("f" * len(embedding), *embedding)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Face embedding extraction failed: {e}. Ensure a clear face is visible in the image."
-        )
-
-
-def _embedding_to_floats(b: bytes) -> list[float]:
-    n = len(b) // 4
-    return list(struct.unpack("f" * n, b))
-
-
-def _cosine_distance(a: list[float], b: list[float]) -> float:
-    """Return cosine distance in [0, 2]; 0 = identical, 2 = opposite."""
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0 or nb == 0:
-        return 1.0
-    return 1.0 - dot / (na * nb)
-
-
-# Threshold below which two embeddings are considered the same person.
-#
-# NOTE: 0.40 is NOT deepface's tuned threshold for ArcFace — that is 0.68
-# (see deepface/config/threshold.py; 0.40 is Facenet's cosine value). 0.40 is a
-# deliberate ~41% tightening, chosen because the two error types are asymmetric
-# here: a false rejection just makes a legitimate student retake the photo, while
-# a false acceptance admits an impostor and produces exactly the proxy-attendance
-# record this system exists to prevent. Report §3.1.2 documents this reasoning.
-#
-# To be validated in Project II by measuring FAR/FRR over genuine vs impostor
-# embedding pairs across candidate thresholds, and loosened if the false
-# rejection rate proves too high for real classroom conditions.
-_FACE_MATCH_THRESHOLD = 0.40
 
 
 @router.post("/me/face", status_code=200)
@@ -138,16 +65,11 @@ def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), curre
     }
 
 
-def _require_student_profile(db: Session, current_user: User) -> Student:
-    student = require_own_profile(db, Student, current_user.id, "Student")
-    return student
-
-
 @router.get("/me/courses")
 def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Courses this student is enrolled in, with timetable info for the app."""
     sync_class_sessions(db)
-    student = _require_student_profile(db, current_user)
+    student = require_own_profile(db, Student, current_user.id, "Student")
     rows = (
         db.query(Course, Enrolment.class_group)
         .join(Enrolment, Enrolment.course_id == Course.id)
@@ -157,41 +79,43 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
     
     # Calculate deterministic clash-free schedules
     schedule_map = calculate_schedule(db)
-    
+
+    # Everything the loop needs, fetched once per query instead of once per course.
+    course_ids = [c.id for c, _ in rows]
+    assignments_by_course = {}
+    for a in db.query(CourseStaffAssignment).filter(
+        CourseStaffAssignment.course_id.in_(course_ids)
+    ).all():
+        assignments_by_course.setdefault(a.course_id, []).append(a)
+
+    # Attendance rate: closed-only, present+leave, HOURS-weighted — the one policy in
+    # domain/attendance.py, shared with /students/me/enrolments and the risk model. This
+    # endpoint once counted present-only over a flat session count and treated "open but
+    # past today" as held, so the app and the web dashboard disagreed for one student.
+    sessions_by_course = {}
+    for sid, cid, sgroup, opened, closed_at in db.query(
+        ClassSession.id, ClassSession.course_id, ClassSession.class_group,
+        ClassSession.opened_at, ClassSession.closed_at
+    ).filter(
+        ClassSession.course_id.in_(course_ids),
+        ClassSession.is_open == False,  # noqa: E712
+    ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all():
+        sessions_by_course.setdefault(cid, []).append(
+            (sid, sgroup, session_hours(opened, closed_at)))
+
+    attended = {
+        (student.id, sid) for (sid,) in db.query(AttendanceRecord.session_id).filter(
+            AttendanceRecord.student_id == student.id,
+            AttendanceRecord.status.in_(["present", "leave"]),
+        ).all()
+    }
+
     result = []
     for c, group in rows:
-        assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == c.id).all()
-        
-        # Attendance rate: closed-only, present+leave, HOURS-weighted — the one
-        # policy in utils/attendance.py, shared with /students/me/enrolments and
-        # the risk model. This endpoint previously counted present-only over a
-        # flat session count and treated "open but past today" as held, so the
-        # app and the web dashboard showed two different percentages for the
-        # same student. See utils/attendance.py for the policy.
-        closed = db.query(
-            ClassSession.id, ClassSession.class_group,
-            ClassSession.opened_at, ClassSession.closed_at
-        ).filter(
-            ClassSession.course_id == c.id,
-            ClassSession.is_open == False,
-        ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all()
-
-        course_sessions = [
-            (sid, sgroup, session_hours(opened, cl))
-            for sid, sgroup, opened, cl in closed
-        ]
-        session_ids = [row[0] for row in course_sessions]
-        present_set = set()
-        if session_ids:
-            present_rows = db.query(AttendanceRecord.session_id).filter(
-                AttendanceRecord.student_id == student.id,
-                AttendanceRecord.session_id.in_(session_ids),
-                AttendanceRecord.status.in_(["present", "leave"]),
-            ).all()
-            present_set = {(student.id, sid) for (sid,) in present_rows}
-
+        assignments = assignments_by_course.get(c.id, [])
+        course_sessions = sessions_by_course.get(c.id, [])
         attendance_rate = attendance_rate_percent(
-            course_sessions, present_set, student.id, group)
+            course_sessions, attended, student.id, group)
 
         # 1. Primary Lecture Slot
         # "id" is the meeting_key ("Lecture-<uuid>") — the same key that indexes
@@ -218,14 +142,15 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
                 "attendance_rate": attendance_rate,
             })
         
-        # 2. Tutor Slot (if assigned)
+        # 2. Tutor Slot (if assigned) — this student's group only.
         tutor_assign = next((a for a in assignments if a.role == 'Tutor'), None)
         if tutor_assign:
-            tutor_slot = schedule_map.get(f"Tutor-{tutor_assign.id}")
+            tutor_slot = schedule_map.get(
+                meeting_key_for("Tutor", c.id, tutor_assign.id, group))
             if tutor_slot:
                 tutor_name = tutor_assign.lecturer.name if tutor_assign.lecturer else "TBA"
                 result.append({
-                    "id": f"Tutor-{tutor_assign.id}",
+                    "id": meeting_key_for("Tutor", c.id, tutor_assign.id, group),
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
@@ -242,11 +167,12 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
         # 3. Practical Slot (if assigned)
         practical_assign = next((a for a in assignments if a.role == 'Practical'), None)
         if practical_assign:
-            prac_slot = schedule_map.get(f"Practical-{practical_assign.id}")
+            prac_slot = schedule_map.get(
+                meeting_key_for("Practical", c.id, practical_assign.id, group))
             if prac_slot:
                 practical_name = practical_assign.lecturer.name if practical_assign.lecturer else "TBA"
                 result.append({
-                    "id": f"Practical-{practical_assign.id}",
+                    "id": meeting_key_for("Practical", c.id, practical_assign.id, group),
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
@@ -266,7 +192,7 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
 def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Open sessions matching this student's enrolments (course + group)."""
     sync_class_sessions(db)
-    student = _require_student_profile(db, current_user)
+    student = require_own_profile(db, Student, current_user.id, "Student")
     rows = (
         db.query(ClassSession, Course, Enrolment.class_group)
         .join(Enrolment, Enrolment.course_id == ClassSession.course_id)
@@ -282,48 +208,11 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
     # Read-only: exclude sessions already past their scheduled end in-memory.
     # Persisting the close is owned by sync_class_sessions (called above) and the
     # check-in guard, so this GET stays idempotent (see J in the review doc).
-    schedule_map = calculate_schedule(db)
     now_utc = utcnow()
-
-    # Calculate local timezone offset dynamically
-    local_now = datetime.now()
-    utc_now = utcnow()
-    tz_offset = local_now - utc_now
-
-    valid_rows = []
-    for s, c, cg in rows:
-        slots = []
-        if s.class_group == "All":
-            slot = schedule_map.get(f"Lecture-{s.course_id}")
-            if slot:
-                slots.append(slot)
-        else:
-            assignments = db.query(CourseStaffAssignment).filter(
-                CourseStaffAssignment.course_id == s.course_id,
-                CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-            ).all()
-            for a in assignments:
-                slot = schedule_map.get(f"{a.role}-{a.id}")
-                if slot:
-                    slots.append(slot)
-
-        if slots:
-            slot = slots[0]
-            opened_at_local = s.opened_at + tz_offset
-            opened_date_local = opened_at_local.date()
-
-            sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
-            sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
-            sched_end_dt_utc = sched_end_dt_local - tz_offset
-
-            if now_utc <= sched_end_dt_utc:
-                valid_rows.append((s, c, cg))
-        else:
-            default_end_dt = s.opened_at + timedelta(hours=2)
-            if now_utc <= default_end_dt:
-                valid_rows.append((s, c, cg))
-
-    rows = valid_rows
+    rows = [
+        (s, c, cg) for s, c, cg in rows
+        if now_utc <= session_end_utc(s, get_course_group_slots(db, s.course_id, s.class_group))
+    ]
 
     # Which of these sessions the student has already checked into.
     session_ids = [s.id for s, _, _ in rows]
@@ -357,16 +246,13 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
 def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """This student's full attendance history, most recent first."""
     sync_class_sessions(db)
-    student = _require_student_profile(db, current_user)
+    student = require_own_profile(db, Student, current_user.id, "Student")
     rows = (
         db.query(AttendanceRecord, ClassSession, Course)
         .join(ClassSession, ClassSession.id == AttendanceRecord.session_id)
         .join(Course, Course.id == ClassSession.course_id)
         .filter(AttendanceRecord.student_id == student.id)
-        # Order on the real column. marked_at is a Python @property aliasing
-        # timestamp, so it has no .desc() — sorting by it raised AttributeError
-        # and made this whole endpoint a 500.
-        .order_by(AttendanceRecord.timestamp.desc())
+        .order_by(AttendanceRecord.marked_at.desc())
         .all()
     )
     return [

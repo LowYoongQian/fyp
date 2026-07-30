@@ -15,7 +15,38 @@ Policy (must stay in sync across both consumers):
   - The rate is HOURS-WEIGHTED: each session's weight is its contact hours
     (closed_at - opened_at, clamped), not a flat 1 per session.
 """
+from fastapi import HTTPException
+
 from ml.features import compute_features
+from db.models import Enrolment
+
+
+def require_session_enrolment(db, session, student_id, status_code: int = 400):
+    """Return the student's enrolment for this session's course, or raise.
+
+    A session belongs to a course and (unless it is the whole-class "All" group) to one
+    class group, so anyone appearing in its register must be enrolled on that course and
+    in that group. Both override endpoints and the student's own check-in go through
+    here: a mistyped student_id would otherwise fabricate a record for someone who never
+    took the class, and that record feeds attendance rates and the risk model.
+
+    status_code exists because the same rule is a 403 when you are the student being
+    refused, and a 400 when you are staff supplying a bad id.
+    """
+    enrolment = db.query(Enrolment).filter(
+        Enrolment.student_id == student_id,
+        Enrolment.course_id == session.course_id,
+    ).first()
+    if not enrolment:
+        raise HTTPException(status_code=status_code,
+                            detail="That student is not enrolled in this course")
+    if session.class_group != "All" and session.class_group != enrolment.class_group:
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"That student is in group '{enrolment.class_group}', "
+                   f"not this session's group '{session.class_group}'",
+        )
+    return enrolment
 
 
 def session_hours(opened_at, closed_at) -> float:

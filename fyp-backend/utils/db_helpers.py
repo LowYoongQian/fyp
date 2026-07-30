@@ -55,3 +55,24 @@ def require_own_profile(db: Session, model: Type, user_id: str, label: str):
     if row is None:
         raise HTTPException(status_code=404, detail=f"{label} profile not found")
     return row
+
+
+def my_course_ids(db: Session, lecturer_id) -> list:
+    """Courses this lecturer is responsible for: the ones they own, plus the ones they
+    are assigned to as staff.
+
+    Stated once because it was stated six times, and one copy had drifted to owner-only
+    — so a lecturer who was purely a tutor saw an empty course list on the staff
+    dashboard while every other screen showed their classes.
+    """
+    from db.models import Course, CourseStaffAssignment
+
+    assigned = [
+        a.course_id for a in db.query(CourseStaffAssignment)
+        .filter(CourseStaffAssignment.lecturer_id == lecturer_id).all()
+    ]
+    return [
+        c.id for c in db.query(Course.id).filter(
+            (Course.lecturer_id == lecturer_id) | (Course.id.in_(assigned))
+        ).all()
+    ]

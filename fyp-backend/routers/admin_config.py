@@ -2,18 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List, Union, Optional
 
-from utils.database import get_db
+from domain.security_settings import is_enabled
+from db.database import get_db
 import ipaddress
 import socket
-from utils.models import User, Announcement, CampusNetwork, SecuritySetting
+from db.models import User, Announcement, CampusNetwork, SecuritySetting
 from utils.security import require_admin
 from utils.db_helpers import get_or_404
-from utils.schemas import (
+from schemas import (
     AnnouncementCreate, AnnouncementResponse,
     CampusNetworkCreate, CampusNetworkUpdate, CampusNetworkResponse,
     SecuritySettingsUpdate, MessageResponse
 )
-from utils.audit import log_audit_event
+from domain.audit import log_audit_event
 
 router = APIRouter(prefix="/admin", tags=["Admin Config"])
 
@@ -95,11 +96,8 @@ def delete_announcement(announcement_id: Union[int, str], db: Session = Depends(
 
 @router.get("/detect-connection")
 def detect_connection(request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    # Check security setting for trusting reverse proxy headers
-    trust_proxy = False
-    setting = db.query(SecuritySetting).filter(SecuritySetting.key == "trust_proxy_header").first()
-    if setting and setting.value and setting.value.lower() == "true":
-        trust_proxy = True
+    # Same policy read the check-in path uses, so both agree on what "trusted" means.
+    trust_proxy = is_enabled(db, "trust_proxy_header")
 
     client_host = request.client.host if (request and request.client) else "127.0.0.1"
     if trust_proxy:

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from utils.models import AuditLog
+from db.models import AuditLog
 from typing import Optional
 
 def log_audit_event(

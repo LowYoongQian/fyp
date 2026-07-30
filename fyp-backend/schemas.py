@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, Any, Union
 from enum import Enum
 
@@ -92,8 +92,11 @@ class AttendanceResponse(BaseModel):
     session_id: Any
     status: str
     confidence_score: Optional[float] = None
-    wifi_verified: bool
-    liveness_passed: bool
+    # The column is network_verified; both clients read "wifi_verified". Pydantic
+    # bridges the two names so the storage layer keeps the accurate one and the
+    # published contract stays unchanged.
+    wifi_verified: bool = Field(validation_alias=AliasChoices("wifi_verified", "network_verified"))
+    liveness_passed: Optional[bool] = None
     marked_at: datetime
     network_verified: Optional[bool] = None
     verify_detail: Optional[str] = None
@@ -208,11 +211,8 @@ class CourseCreate(BaseModel):
     credit_hours: Optional[float] = 3.0
     lecturer_id: Optional[Any] = None
     programme_id: Optional[Any] = None
-    
-    schedule_day: Optional[str] = None
-    schedule_start: Optional[str] = None
-    schedule_end: Optional[str] = None
-    schedule_room: Optional[str] = None
+    # No schedule_* fields: the timetable lives in class_meetings and is edited through
+    # /admin/timetable. Accepting them here promised a write that never happened.
 
 class CourseResponse(BaseModel):
     id: Any
@@ -221,11 +221,6 @@ class CourseResponse(BaseModel):
     credit_hours: Optional[float] = 3.0
     lecturer_id: Optional[Any] = None
     programme_id: Optional[Any] = None
-    
-    schedule_day: Optional[str] = None
-    schedule_start: Optional[str] = None
-    schedule_end: Optional[str] = None
-    schedule_room: Optional[str] = None
 
     class Config:
         from_attributes = True

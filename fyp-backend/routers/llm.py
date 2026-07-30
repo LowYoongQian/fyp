@@ -6,9 +6,9 @@ from sqlalchemy.exc import ProgrammingError, OperationalError
 from fastapi import APIRouter, HTTPException, Depends
 
 from utils.security import require_lecturer
-from utils.models import User
-from utils.schemas import QueryRequest, QueryResponse
-from utils.database import engine
+from db.models import User
+from schemas import QueryRequest, QueryResponse
+from db.database import engine
 
 # Gemini setup
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -29,7 +29,7 @@ Database Tables:
 4. courses: id, course_name, course_code, credit_hours (float, default 3.0), lecturer_id (ref lecturers.id)
 5. enrolments: id, student_id (ref students.id), course_id (ref courses.id), semester, class_group
 6. class_sessions: id, course_id (ref courses.id), opened_at, closed_at, is_open, class_group
-7. attendance_records: id, student_id (ref students.id), session_id (ref class_sessions.id), status ('present', 'absent'), confidence_score, wifi_verified, liveness_passed, marked_at
+7. attendance_records: id, student_id (ref students.id), session_id (ref class_sessions.id), status ('present', 'absent'), confidence_score, network_verified, liveness_passed, liveness_suspicious, marked_at
 8. risk_scores: id, student_id (ref students.id), course_id (ref courses.id), risk_score, risk_label ('low', 'medium', 'high'), attendance_rate
 """
 

@@ -6,43 +6,29 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
-from utils.database import get_db
-from utils.scheduler import calculate_schedule
-from utils.session_sync import sync_class_sessions
-from utils.models import (
+from domain.security_settings import get_settings, truthy
+from db.database import get_db
+from domain.scheduler import get_course_group_slots, lecture_meetings, session_end_utc
+from domain.session_sync import sync_class_sessions
+from db.models import (
     User, Student, Lecturer, Course, Enrolment, ClassSession,
     AttendanceRecord, CampusNetwork, SecuritySetting, FaceEmbedding,
     CourseStaffAssignment, ClassMeeting
 )
 from utils.security import require_lecturer, require_student
-from utils.db_helpers import require_own_profile, get_or_404
-from utils.network_verify import get_client_ip, verify_network
-from utils.schemas import (
+from domain.attendance import require_session_enrolment
+from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
+from integrations.network_verify import get_client_ip, verify_network
+from schemas import (
     SessionCreate, SessionResponse, AttendanceSubmit,
     AttendanceResponse, SessionAttendanceResponse, StudentAttendanceStatus
 )
-from routers.students import (
+from integrations.face import (
     _extract_face_embedding, _embedding_to_floats,
     _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
 
 router = APIRouter(prefix="/sessions", tags=["Attendance"])
-
-
-def _get_settings(db: Session) -> dict:
-    """Load security settings as a plain dict with safe defaults."""
-    rows = db.query(SecuritySetting).all()
-    cfg = {r.key: (r.value or "") for r in rows}
-    cfg.setdefault("network_check_enabled", "true")
-    cfg.setdefault("fail_closed", "true")
-    cfg.setdefault("trust_proxy_header", "false")
-    cfg.setdefault("demo_simulate_network", "false")
-    cfg.setdefault("demo_simulated_ip", "")
-    return cfg
-
-
-def _truthy(v: str) -> bool:
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 def require_course_access(db: Session, current_user: User, course_id: str, action: str) -> Course:
@@ -57,36 +43,9 @@ def require_course_access(db: Session, current_user: User, course_id: str, actio
     if current_user.role == "admin":
         return course
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-    assigned_course_ids = [
-        a.course_id for a in db.query(CourseStaffAssignment)
-        .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-    ]
-    if course.lecturer_id != lecturer.id and course.id not in assigned_course_ids:
+    if course.id not in my_course_ids(db, lecturer.id):
         raise HTTPException(status_code=403, detail=f"Not authorized to {action} for this course")
     return course
-
-
-def get_course_group_slots(db: Session, course_id: str, class_group: str) -> list:
-    schedule_map = calculate_schedule(db)
-    
-    slots = []
-    if class_group == "All":
-        # Lecture slot
-        slot = schedule_map.get(f"Lecture-{course_id}")
-        if slot:
-            slots.append(slot)
-    else:
-        # Tutor / Practical slots for this course
-        assignments = db.query(CourseStaffAssignment).filter(
-            CourseStaffAssignment.course_id == course_id,
-            CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-        ).all()
-        for a in assignments:
-            slot = schedule_map.get(f"{a.role}-{a.id}")
-            if slot:
-                slots.append(slot)
-                
-    return slots
 
 
 def validate_session_opening(db: Session, course_id: str, class_group: str, now: datetime):
@@ -231,65 +190,10 @@ def close_session(id: str, db: Session = Depends(get_db), current_user: User = D
     db.refresh(session)
     return session
 
-# 3. List active sessions matching student enrolments (Student only)
-@router.get("/open", response_model=List[SessionResponse])
-def get_active_student_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    sync_class_sessions(db)
-    # Get student profile
-    student = require_own_profile(db, Student, current_user.id, "Student")
-
-    # Join ClassSession with Enrolments to filter active sessions student is enrolled in
-    sessions = db.query(ClassSession).join(
-        Enrolment, Enrolment.course_id == ClassSession.course_id
-    ).filter(
-        Enrolment.student_id == student.id,
-        ClassSession.is_open == True,
-        (ClassSession.class_group == "All") | (ClassSession.class_group == Enrolment.class_group)
-    ).all()
-
-    schedule_map = calculate_schedule(db)
-    now_utc = utcnow()
-    # Calculate local timezone offset dynamically
-    local_now = datetime.now()
-    utc_now = utcnow()
-    tz_offset = local_now - utc_now
-    active_sessions = []
-
-    # Read-only: decide in-memory which sessions are still within their window.
-    # A session past its end is simply excluded from the response; persisting the
-    # closed state is left to sync_class_sessions (and the check-in guard), so
-    # this GET stays idempotent.
-    for s in sessions:
-        slots = []
-        if s.class_group == "All":
-            slot = schedule_map.get(f"Lecture-{s.course_id}")
-            if slot:
-                slots.append(slot)
-        else:
-            assignments = db.query(CourseStaffAssignment).filter(
-                CourseStaffAssignment.course_id == s.course_id,
-                CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-            ).all()
-            for a in assignments:
-                slot = schedule_map.get(f"{a.role}-{a.id}")
-                if slot:
-                    slots.append(slot)
-
-        if slots:
-            slot = slots[0]
-            opened_at_local = s.opened_at + tz_offset
-            opened_date_local = opened_at_local.date()
-            sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
-            sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
-            sched_end_dt_utc = sched_end_dt_local - tz_offset
-            if now_utc <= sched_end_dt_utc:
-                active_sessions.append(s)
-        else:
-            default_end_dt = s.opened_at + timedelta(hours=2)
-            if now_utc <= default_end_dt:
-                active_sessions.append(s)
-
-    return active_sessions
+# A GET /sessions/open used to sit here answering "which of my classes can I check into
+# right now?" — the same question /students/me/active-sessions answers, in a different
+# response shape. Both clients call that one; this had no callers. One endpoint per
+# question, so the two shapes cannot drift apart.
 
 # 4. Student Check-in (Student only — face liveness + network location verification)
 @router.post("/{id}/attend", response_model=AttendanceResponse)
@@ -298,49 +202,13 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     session = get_or_404(db, ClassSession, id, "Session")
         
     if session.is_open:
-        schedule_map = calculate_schedule(db)
         now_utc = utcnow()
-        
-        # Calculate local timezone offset dynamically
-        local_now = datetime.now()
-        utc_now = utcnow()
-        tz_offset = local_now - utc_now
-        
-        slots = []
-        if session.class_group == "All":
-            slot = schedule_map.get(f"Lecture-{session.course_id}")
-            if slot:
-                slots.append(slot)
-        else:
-            assignments = db.query(CourseStaffAssignment).filter(
-                CourseStaffAssignment.course_id == session.course_id,
-                CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-            ).all()
-            for a in assignments:
-                slot = schedule_map.get(f"{a.role}-{a.id}")
-                if slot:
-                    slots.append(slot)
-                    
-        is_stale = False
-        if slots:
-            slot = slots[0]
-            opened_at_local = session.opened_at + tz_offset
-            opened_date_local = opened_at_local.date()
-            sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
-            sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
-            sched_end_dt_utc = sched_end_dt_local - tz_offset
-            if now_utc > sched_end_dt_utc:
-                session.is_open = False
-                session.closed_at = sched_end_dt_utc
-                is_stale = True
-        else:
-            default_end_dt = session.opened_at + timedelta(hours=2)
-            if now_utc > default_end_dt:
-                session.is_open = False
-                session.closed_at = default_end_dt
-                is_stale = True
-                
-        if is_stale:
+        slots = get_course_group_slots(db, session.course_id, session.class_group)
+        scheduled_end = session_end_utc(session, slots)
+
+        if now_utc > scheduled_end:
+            session.is_open = False
+            session.closed_at = scheduled_end
             db.commit()
             
     if not session.is_open:
@@ -349,21 +217,8 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     # Get student profile
     student = require_own_profile(db, Student, current_user.id, "Student")
 
-    # Check if student is enrolled in this session's course
-    enrolment = db.query(Enrolment).filter(
-        Enrolment.student_id == student.id,
-        Enrolment.course_id == session.course_id
-    ).first()
-    if not enrolment:
-        raise HTTPException(status_code=403, detail="You are not enrolled in this course")
-
-    # Check the student's class group matches the session group (unless "All")
-    if session.class_group != "All" and session.class_group != enrolment.class_group:
-        raise HTTPException(
-            status_code=403,
-            detail=f"This session is for group '{session.class_group}', "
-                   f"but you are in group '{enrolment.class_group}'"
-        )
+    # Enrolled on this course, and in this session's group unless it is for everyone.
+    enrolment = require_session_enrolment(db, session, student.id, status_code=403)
 
     # Check if student already checked in for this session
     existing_record = db.query(AttendanceRecord).filter(
@@ -373,7 +228,7 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     if existing_record:
         raise HTTPException(status_code=400, detail="You have already registered attendance for this session")
 
-    cfg = _get_settings(db)
+    cfg = get_settings(db)
     # Enforce student check-in start time limit
     validate_student_checkin(db, session.course_id, session.class_group, datetime.now())
 
@@ -422,17 +277,17 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     liveness_suspicious = bool(challenge_ms is not None and challenge_ms < 800)
 
     # 2. Network-based location verification
-    source_ip = get_client_ip(request, trust_proxy_header=_truthy(cfg["trust_proxy_header"]))
+    source_ip = get_client_ip(request, trust_proxy_header=truthy(cfg["trust_proxy_header"]))
 
     # Demo mode: override the observed IP with a simulated campus IP so the
     # full flow can be exercised on localhost. Documented as demo-only.
-    if _truthy(cfg["demo_simulate_network"]) and cfg["demo_simulated_ip"]:
+    if truthy(cfg["demo_simulate_network"]) and cfg["demo_simulated_ip"]:
         source_ip = cfg["demo_simulated_ip"].strip()
 
     network_verified = False
     verify_detail = "network check disabled"
 
-    if _truthy(cfg["network_check_enabled"]):
+    if truthy(cfg["network_check_enabled"]):
         active_networks = db.query(CampusNetwork).filter(CampusNetwork.is_active == True).all()
         network_verified, verify_detail = verify_network(
             source_ip=source_ip,
@@ -444,7 +299,7 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
         )
 
         # Fail-closed: reject the check-in if the network can't be verified
-        if not network_verified and _truthy(cfg["fail_closed"]):
+        if not network_verified and truthy(cfg["fail_closed"]):
             raise HTTPException(
                 status_code=403,
                 detail="You must be connected to the campus network to check in. "
@@ -453,16 +308,15 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     else:
         network_verified = True  # check disabled -> don't block
 
-    # wifi_verified mirrors the network verdict (kept for backward compatibility)
-    wifi_verified = network_verified
-
-    # Register attendance record
+    # Register attendance record. liveness_passed (what the client reported) and
+    # liveness_suspicious (gesture faster than the floor) are separate columns —
+    # they used to be two names for one, so whichever was assigned last won and the
+    # reported result was thrown away.
     record = AttendanceRecord(
         student_id=student.id,
         session_id=id,
         status="present",
         confidence_score=confidence_score,
-        wifi_verified=wifi_verified,
         liveness_passed=liveness_passed,
         marked_at=utcnow(),
         source_ip=source_ip,
@@ -556,63 +410,21 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
         else:
             raise HTTPException(status_code=404, detail="Lecturer profile not found")
     else:
-        # Courses this lecturer teaches: owned OR assigned as staff. Filtering on
-        # Course.lecturer_id alone hid the sessions of every course they only
-        # tutor — the same "owned + assigned" rule require_course_access uses.
-        assigned_course_ids = [
-            a.course_id for a in db.query(CourseStaffAssignment)
-            .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-        ]
-        sessions = db.query(ClassSession).join(
-            Course, Course.id == ClassSession.course_id
-        ).filter(
-            (Course.lecturer_id == lecturer.id) | (Course.id.in_(assigned_course_ids)),
+        sessions = db.query(ClassSession).filter(
+            ClassSession.course_id.in_(my_course_ids(db, lecturer.id)),
             ClassSession.is_open == True
         ).all()
 
-    schedule_map = calculate_schedule(db)
     now_utc = utcnow()
-    # Calculate local timezone offset dynamically
-    local_now = datetime.now()
-    utc_now = utcnow()
-    tz_offset = local_now - utc_now
-    active_sessions = []
 
     # Read-only: decide in-memory which sessions are still within their window.
     # A session past its end is simply excluded from the response; persisting the
     # closed state is left to sync_class_sessions (and the check-in guard), so
     # this GET stays idempotent.
-    for s in sessions:
-        slots = []
-        if s.class_group == "All":
-            slot = schedule_map.get(f"Lecture-{s.course_id}")
-            if slot:
-                slots.append(slot)
-        else:
-            assignments = db.query(CourseStaffAssignment).filter(
-                CourseStaffAssignment.course_id == s.course_id,
-                CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-            ).all()
-            for a in assignments:
-                slot = schedule_map.get(f"{a.role}-{a.id}")
-                if slot:
-                    slots.append(slot)
-
-        if slots:
-            slot = slots[0]
-            opened_at_local = s.opened_at + tz_offset
-            opened_date_local = opened_at_local.date()
-            sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
-            sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
-            sched_end_dt_utc = sched_end_dt_local - tz_offset
-            if now_utc <= sched_end_dt_utc:
-                active_sessions.append(s)
-        else:
-            default_end_dt = s.opened_at + timedelta(hours=2)
-            if now_utc <= default_end_dt:
-                active_sessions.append(s)
-
-    return active_sessions
+    return [
+        s for s in sessions
+        if now_utc <= session_end_utc(s, get_course_group_slots(db, s.course_id, s.class_group))
+    ]
 
 
 # 7. List courses taught by the lecturer (Lecturer/Admin only)
@@ -623,15 +435,16 @@ def get_my_taught_courses(db: Session = Depends(get_db), current_user: User = De
     if current_user.role == "admin":
         courses = db.query(Course).all()
     else:
+        # Owned OR assigned — the same rule every other lecturer screen uses. This one
+        # checked ownership only, so a tutor saw an empty list here and their classes
+        # everywhere else.
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        courses = db.query(Course).filter(Course.lecturer_id == lecturer.id).all()
+        courses = db.query(Course).filter(
+            Course.id.in_(my_course_ids(db, lecturer.id))
+        ).all()
 
     # Lecture times come from class_meetings (source of truth), not Course.schedule_*.
-    course_ids = [c.id for c in courses]
-    lecture_by_course = {
-        m.course_id: m for m in db.query(ClassMeeting)
-        .filter(ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(course_ids)).all()
-    }
+    lecture_by_course = lecture_meetings(db, [c.id for c in courses])
     result = []
     for c in courses:
         m = lecture_by_course.get(c.id)
@@ -676,22 +489,7 @@ def update_lecturer_attendance(
     if body.status not in ["present", "absent"]:
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'present' or 'absent'")
 
-    # The target student must actually belong to this session: enrolled in the
-    # course, and (for a group-specific session) in the matching group. Without
-    # this, a mistyped student_id would fabricate an orphan record for a student
-    # who never took the class.
-    enrolment = db.query(Enrolment).filter(
-        Enrolment.student_id == student_id,
-        Enrolment.course_id == session.course_id
-    ).first()
-    if not enrolment:
-        raise HTTPException(status_code=400, detail="That student is not enrolled in this course")
-    if session.class_group != "All" and session.class_group != enrolment.class_group:
-        raise HTTPException(
-            status_code=400,
-            detail=f"That student is in group '{enrolment.class_group}', "
-                   f"not this session's group '{session.class_group}'"
-        )
+    require_session_enrolment(db, session, student_id)
 
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id,
@@ -713,7 +511,7 @@ def update_lecturer_attendance(
             student_id=student_id,
             status=body.status,
             confidence_score=1.0 if body.status == "present" else None,
-            wifi_verified=True if body.status == "present" else False,
+            network_verified=True if body.status == "present" else False,
             liveness_passed=True if body.status == "present" else False,
             marked_at=utcnow(),
             source_ip="Staff Override" if body.status == "present" else None
@@ -737,10 +535,10 @@ def verify_attendance_network(
     Standalone API endpoint to verify real incoming request IP network location
     against active whitelisted campus subnets stored in database.
     """
-    cfg = _get_settings(db)
-    source_ip = get_client_ip(request, trust_proxy_header=_truthy(cfg["trust_proxy_header"]))
+    cfg = get_settings(db)
+    source_ip = get_client_ip(request, trust_proxy_header=truthy(cfg["trust_proxy_header"]))
 
-    if _truthy(cfg["demo_simulate_network"]) and cfg["demo_simulated_ip"]:
+    if truthy(cfg["demo_simulate_network"]) and cfg["demo_simulated_ip"]:
         source_ip = cfg["demo_simulated_ip"].strip()
 
     active_networks = db.query(CampusNetwork).filter(CampusNetwork.is_active == True).all()

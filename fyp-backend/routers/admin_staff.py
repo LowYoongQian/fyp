@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
-from utils.database import get_db
-from utils.models import User, Lecturer, Course, Enrolment, ClassSession, AttendanceRecord, RiskScore, Alert
+from db.database import get_db
+from db.models import User, Lecturer, Course, Enrolment, ClassSession, AttendanceRecord, RiskScore, Alert
 from utils.security import require_admin, hash_password
 from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
-from utils.schemas import (
+from schemas import (
     AdminStaffCreate, AdminStaffUpdate,
     MessageResponse
 )

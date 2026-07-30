@@ -4,13 +4,14 @@ from datetime import datetime, timedelta
 from utils.timeutil import utcnow
 from typing import List
 
-from utils.database import get_db
-from utils.session_sync import sync_class_sessions
-from utils.scheduler import calculate_schedule
-from utils.models import User, Student, Course, Enrolment, ClassSession, AttendanceRecord, CourseStaffAssignment
+from db.database import get_db
+from domain.session_sync import sync_class_sessions
+from domain.scheduler import get_course_group_slots, session_window_utc
+from db.models import User, Student, Course, Enrolment, ClassSession, AttendanceRecord
 from utils.security import require_admin
+from domain.attendance import require_session_enrolment
 from utils.db_helpers import get_or_404
-from utils.schemas import (
+from schemas import (
     MessageResponse, AdminAttendanceUpdate
 )
 
@@ -30,70 +31,34 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
         joinedload(ClassSession.course).joinedload(Course.lecturer)
     ).order_by(ClassSession.opened_at.desc()).all()
 
-    schedule_map = calculate_schedule(db)
-
+    # One clock for the whole response. Reading it per session let rows in the same
+    # list be judged against different instants, so a list crossing a slot boundary
+    # could contradict itself.
+    now_utc = utcnow()
     result = []
 
     for s in sessions:
         course = s.course
         lecturer = course.lecturer if course else None
-        
-        now_utc = utcnow()
-        # Calculate local timezone offset dynamically
-        local_now = datetime.now()
-        utc_now = utcnow()
-        tz_offset = local_now - utc_now
-        
+
         is_open = s.is_open
         closed_at = s.closed_at
-        
+
         if is_open:
-            slots = []
-            if s.class_group == "All":
-                slot = schedule_map.get(f"Lecture-{s.course_id}")
-                if slot:
-                    slots.append(slot)
+            slots = get_course_group_slots(db, s.course_id, s.class_group)
+            sched_start, sched_end = session_window_utc(s, slots)
+            # An unscheduled session has no start time, so "not started yet" falls back
+            # to a 10 minute grace window after it was opened.
+            not_started_before = sched_start or (s.opened_at + timedelta(minutes=10))
+
+            if now_utc > sched_end:
+                is_open = False
+                closed_at = sched_end
+                status_str = "Closed"
+            elif now_utc < not_started_before:
+                status_str = "Active"
             else:
-                assignments = db.query(CourseStaffAssignment).filter(
-                    CourseStaffAssignment.course_id == s.course_id,
-                    CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-                ).all()
-                for a in assignments:
-                    slot = schedule_map.get(f"{a.role}-{a.id}")
-                    if slot:
-                        slots.append(slot)
-                        
-            if slots:
-                slot = slots[0]
-                opened_at_local = s.opened_at + tz_offset
-                opened_date_local = opened_at_local.date()
-                sched_start_time = datetime.strptime(slot["start"], "%H:%M").time()
-                sched_end_time = datetime.strptime(slot["end"], "%H:%M").time()
-                sched_start_dt_local = datetime.combine(opened_date_local, sched_start_time)
-                sched_end_dt_local = datetime.combine(opened_date_local, sched_end_time)
-                
-                sched_start_dt_utc = sched_start_dt_local - tz_offset
-                sched_end_dt_utc = sched_end_dt_local - tz_offset
-                
-                if now_utc > sched_end_dt_utc:
-                    is_open = False
-                    closed_at = sched_end_dt_utc
-                    status_str = "Closed"
-                elif now_utc < sched_start_dt_utc:
-                    status_str = "Active"
-                else:
-                    status_str = "On Going"
-            else:
-                # Default fallback: 2 hours
-                default_end_dt = s.opened_at + timedelta(hours=2)
-                if now_utc > default_end_dt:
-                    is_open = False
-                    closed_at = default_end_dt
-                    status_str = "Closed"
-                elif now_utc < s.opened_at + timedelta(minutes=10):
-                    status_str = "Active"
-                else:
-                    status_str = "On Going"
+                status_str = "On Going"
         else:
             status_str = "Closed"
             
@@ -141,8 +106,11 @@ def get_admin_session_attendance(session_id: str, db: Session = Depends(get_db),
                 "status": rec.status,
                 "marked_at": rec.marked_at,
                 "confidence_score": rec.confidence_score,
-                "wifi_verified": rec.wifi_verified,
-                "liveness_passed": rec.liveness_passed,
+                # Outward names kept for the clients: the column is network_verified,
+                # and liveness_passed is NULL on rows where no check was attempted
+                # (system-marked absences) while the web table types it as a boolean.
+                "wifi_verified": bool(rec.network_verified),
+                "liveness_passed": bool(rec.liveness_passed),
                 "network_verified": getattr(rec, 'network_verified', False),
                 "source_ip": getattr(rec, 'source_ip', None),
                 "verify_detail": getattr(rec, 'verify_detail', None)
@@ -180,8 +148,11 @@ def update_admin_attendance(
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'present' or 'absent'.")
         
     session = get_or_404(db, ClassSession, session_id, "Session")
-        
-    student = get_or_404(db, Student, student_id, "Student")
+    get_or_404(db, Student, student_id, "Student")
+    # Same rule the lecturer override enforces. Being an admin is authority over WHOSE
+    # register you may edit, not licence to invent a record for a student who never
+    # took the course — that record would still land in attendance rates and the risk model.
+    require_session_enrolment(db, session, student_id)
 
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id,
@@ -191,17 +162,17 @@ def update_admin_attendance(
     if record:
         record.status = body.status
         record.network_verified = body.wifi_verified
-        record.liveness_suspicious = not body.liveness_passed
-        record.timestamp = utcnow()
+        record.liveness_passed = body.liveness_passed
+        record.marked_at = utcnow()
     else:
         record = AttendanceRecord(
             session_id=str(session_id),
             student_id=str(student_id),
             status=body.status,
-            confidence=1.0,
+            confidence_score=1.0,
             network_verified=body.wifi_verified,
-            liveness_suspicious=not body.liveness_passed,
-            timestamp=utcnow()
+            liveness_passed=body.liveness_passed,
+            marked_at=utcnow()
         )
         db.add(record)
 

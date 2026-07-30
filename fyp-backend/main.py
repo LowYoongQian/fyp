@@ -5,110 +5,47 @@ from sqlalchemy import text
 import os
 import hashlib
 
-from utils.database import engine, SessionLocal
-from utils.models import Base, ClassMeeting
+from domain.announcements import announcement_dict
+from db.database import SessionLocal
 from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit
 
-# Automatically create all tables in PostgreSQL on startup
-Base.metadata.create_all(bind=engine)
-
-# Execute schema migration scripts inside a transaction block
-try:
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS credit_hours DOUBLE PRECISION DEFAULT 3.0;"))
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS planned_total_hours DOUBLE PRECISION;"))
-        conn.execute(text("ALTER TABLE risk_scores ADD COLUMN IF NOT EXISTS risk_factors VARCHAR;"))
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_day VARCHAR;"))
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_start VARCHAR;"))
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_end VARCHAR;"))
-        conn.execute(text("ALTER TABLE courses ADD COLUMN IF NOT EXISTS schedule_room VARCHAR;"))
-
-        # Network-based location verification: attendance audit columns
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS source_ip VARCHAR;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS reported_ssid VARCHAR;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS reported_bssid VARCHAR;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS reported_gateway_ip VARCHAR;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS network_verified BOOLEAN DEFAULT FALSE;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS verify_detail VARCHAR;"))
-
-        # Behavioral biometrics columns
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS liveness_challenge_ms INTEGER;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS liveness_suspicious BOOLEAN DEFAULT FALSE;"))
-
-        # Announcement publisher column
-        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS publisher VARCHAR DEFAULT 'ADMIN';"))
-
-        # User profile and preference columns
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_name VARCHAR;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_code VARCHAR;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'Active';"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference VARCHAR DEFAULT 'light';"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS font_size_preference VARCHAR DEFAULT 'medium';"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS language_preference VARCHAR DEFAULT 'en';"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_enabled BOOLEAN DEFAULT TRUE;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_notifications BOOLEAN DEFAULT TRUE;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS push_notifications BOOLEAN DEFAULT TRUE;"))
-        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS in_app_notifications BOOLEAN DEFAULT TRUE;"))
-        conn.execute(text("ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS device_id VARCHAR;"))
-        conn.execute(text("DROP TABLE IF EXISTS device_sessions;"))
-
-        # Announcement targeting: scope (all/programme/course) × role (all/students/staff).
-        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_scope VARCHAR DEFAULT 'all';"))
-        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_role VARCHAR DEFAULT 'all';"))
-        conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS target_course_code VARCHAR;"))
-        conn.execute(text("ALTER TABLE announcements ALTER COLUMN target_audience DROP NOT NULL;"))
-
-        # Seed default security settings (idempotent) if the table is empty
-        existing = conn.execute(text("SELECT COUNT(*) FROM security_settings;")).scalar()
-        if not existing:
-            defaults = {
-                "network_check_enabled": "true",   # master switch for network verification
-                "fail_closed": "true",             # reject check-in when network not verified
-                "trust_proxy_header": "false",     # honour X-Forwarded-For (only behind a trusted proxy)
-                "demo_simulate_network": "false",  # demo: override observed IP with a simulated one
-                "demo_simulated_ip": "10.52.13.77" # the simulated campus IP used in demo mode
-            }
-            for k, v in defaults.items():
-                conn.execute(
-                    text("INSERT INTO security_settings (key, value) VALUES (:k, :v) ON CONFLICT (key) DO NOTHING;"),
-                    {"k": k, "v": v}
-                )
-            print("Seeded default security settings.")
-    print("Database migrations applied successfully.")
-except Exception as e:
-    print("Database migration execution warning:", e)
+# Schema is owned by Alembic (`alembic upgrade head`, which the Procfile/Dockerfile run
+# before uvicorn starts). Data seeds live in seed.py. Nothing here touches the database
+# at import time: the old create_all + hand-written ALTER TABLE block could half-apply
+# and only print a warning, so the app would start against a schema it assumed was
+# migrated. A failed migration now stops the deploy instead.
 
 
-def _seed_class_meetings():
-    from utils.scheduler import generate_clashfree_slots
-    db = SessionLocal()
-    try:
-        if db.query(ClassMeeting).first() is not None:
-            return  # already seeded
-        rows = generate_clashfree_slots(db)
-        for r in rows:
-            db.add(ClassMeeting(**r))
-        db.commit()
-        print(f"Seeded class_meetings timetable with {len(rows)} meetings.")
-    finally:
-        db.close()
+# Attendance state changes the moment a lecturer opens or closes a session, and both
+# clients poll these endpoints to decide whether check-in is available. A 30 second
+# cache there means a student cannot see a class that just opened, and still sees the
+# entry for one that just closed. Correctness beats the saved round trip on these.
+NO_STORE_PREFIXES = (
+    "/sessions/",              # open / active / per-session register
+    "/students/me/active-sessions",
+    "/students/me/attendance",
+    "/admin/sessions",
+)
 
-_seed_class_meetings()
+
+def _is_realtime(path: str) -> bool:
+    return path == "/sessions" or path.startswith(NO_STORE_PREFIXES)
 
 
 class ETagMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.method not in ("GET", "HEAD"):
             return await call_next(request)
-        
+
         response = await call_next(request)
-        
+
         if response.status_code != 200:
             return response
-            
+
+        if _is_realtime(request.url.path):
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
         content_type = response.headers.get("content-type", "")
         if "application/json" not in content_type and "text/" not in content_type:
             return response
@@ -210,26 +147,14 @@ def get_public_logo():
 def get_public_announcements():
     db = SessionLocal()
     try:
-        from utils.models import Announcement
-        announcements = db.query(Announcement).filter(Announcement.is_draft == False).order_by(Announcement.created_at.desc()).all()
-        return [
-            {
-                "id": a.id,
-                "title": a.title,
-                "content": a.content,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "priority": a.priority,
-                "publisher": a.publisher,
-                "image_base64": a.image_base64,
-                "publish_start": a.publish_start,
-                "publish_end": a.publish_end,
-                "target_scope": a.target_scope,
-                "target_role": a.target_role,
-                "target_programme_code": a.target_programme_code,
-                "target_course_code": a.target_course_code,
-            }
-            for a in announcements
-        ]
+        from db.models import Announcement
+        announcements = (
+            db.query(Announcement).filter(Announcement.is_draft == False)  # noqa: E712
+            .order_by(Announcement.created_at.desc()).all()
+        )
+        # Same serialiser as the authenticated views. This copy omitted faculty and
+        # department, so the mobile login screen read them as null.
+        return [announcement_dict(a) for a in announcements]
     finally:
         db.close()
 

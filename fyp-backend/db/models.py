@@ -1,7 +1,7 @@
 import uuid
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float,
-    ForeignKey, DateTime, LargeBinary, Text, func, Index, UniqueConstraint
+    ForeignKey, DateTime, LargeBinary, Text, func, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, declarative_base
@@ -82,12 +82,11 @@ class Course(Base):
     planned_total_hours = Column(Float, nullable=True)
     lecturer_id  = Column(UUID(as_uuid=False), ForeignKey("lecturers.id"), index=True)
     programme_id = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
-    
-    schedule_day   = Column(String, nullable=True)
-    schedule_start = Column(String, nullable=True)
-    schedule_end   = Column(String, nullable=True)
-    schedule_room  = Column(String, nullable=True)
-    
+    # A course has no schedule of its own: class_meetings holds the timetable, one row
+    # per lecture/tutorial/practical. The four schedule_* columns that used to sit here
+    # were never read after that change, so a client sending schedule_day got a 200 and
+    # no effect.
+
     lecturer    = relationship("Lecturer", back_populates="courses")
     programme   = relationship("Programme", back_populates="courses")
     enrolments  = relationship("Enrolment", back_populates="course")
@@ -112,6 +111,11 @@ class ClassMeeting(Base):
     course_id     = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
     assignment_id = Column(UUID(as_uuid=False), ForeignKey("course_staff_assignments.id", ondelete="CASCADE"), nullable=True, index=True)
     role          = Column(String, nullable=False)
+    # NULL only for a Lecture, meaning the whole course attends it. Tutorials and
+    # practicals run per group, so they must name theirs — a CHECK constraint enforces
+    # that split. Without this column there was no way to map "G1's practical" to a
+    # specific slot, so the window check picked an arbitrary one.
+    class_group   = Column(String, nullable=True)
     day           = Column(String, nullable=False)
     start         = Column(String, nullable=False)
     end           = Column(String, nullable=False)
@@ -149,6 +153,13 @@ class ClassSession(Base):
 # Attendance check-in records
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
+    # One record per student per session, enforced by the database. The check-in
+    # handler's "already checked in?" query cannot stop two concurrent requests from
+    # both passing it; this constraint is what turns that race into an IntegrityError
+    # the handler already knows how to swallow.
+    __table_args__ = (
+        UniqueConstraint("student_id", "session_id", name="uq_attendance_student_session"),
+    )
     id                     = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     session_id             = Column(UUID(as_uuid=False), ForeignKey("class_sessions.id"), index=True)
     student_id             = Column(UUID(as_uuid=False), ForeignKey("students.id"), index=True)
@@ -158,13 +169,18 @@ class AttendanceRecord(Base):
     bssid                  = Column(String, nullable=True)
     gateway_ip             = Column(String, nullable=True)
     local_ip               = Column(String, nullable=True)
-    timestamp              = Column(DateTime, server_default=func.now())
+    marked_at              = Column(DateTime, server_default=func.now())
     is_flagged             = Column(Boolean, default=False)
     flag_reason            = Column(String, nullable=True)
-    confidence             = Column(Float, nullable=True)
+    confidence_score       = Column(Float, nullable=True)
     image_url              = Column(String, nullable=True)
     mc_proof_url           = Column(String, nullable=True)
     liveness_challenge_ms  = Column(Integer, nullable=True)
+    # Two independent signals, deliberately not each other's negation:
+    # liveness_passed is the client's liveness result, liveness_suspicious flags a
+    # gesture completed suspiciously fast. A property that derived one from the other
+    # collapsed them into a single column and silently discarded the reported result.
+    liveness_passed        = Column(Boolean, nullable=True)
     liveness_suspicious    = Column(Boolean, default=False)
     source_ip              = Column(String, nullable=True)
     reported_ssid          = Column(String, nullable=True)
@@ -177,41 +193,12 @@ class AttendanceRecord(Base):
     session                = relationship("ClassSession", back_populates="records")
     student                = relationship("Student", back_populates="attendance_records")
 
-    @property
-    def marked_at(self):
-        return self.timestamp
+    # No @property may shadow a physical column here. Four of them used to: a rename
+    # left the old names as forwarding properties, SQLAlchemy stopped mapping the real
+    # columns, and every row's data became invisible to the API. Rename the column
+    # instead; where the outward name must differ, let Pydantic express that.
 
-    @marked_at.setter
-    def marked_at(self, value):
-        self.timestamp = value
-
-    @property
-    def confidence_score(self):
-        return self.confidence
-
-    @confidence_score.setter
-    def confidence_score(self, value):
-        self.confidence = value
-
-    @property
-    def wifi_verified(self):
-        return bool(getattr(self, 'network_verified', False))
-
-    @wifi_verified.setter
-    def wifi_verified(self, value):
-        self.network_verified = bool(value)
-
-    @property
-    def liveness_passed(self):
-        if self.status == 'absent' and getattr(self, 'confidence', None) is None:
-            return False
-        return not bool(getattr(self, 'liveness_suspicious', False))
-
-    @liveness_passed.setter
-    def liveness_passed(self, value):
-        self.liveness_suspicious = not bool(value)
-
-# 128-d Face Embeddings
+# 512-d Face Embeddings (ArcFace)
 class FaceEmbedding(Base):
     __tablename__ = "face_embeddings"
     id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)

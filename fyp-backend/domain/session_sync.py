@@ -1,11 +1,21 @@
+import logging
 from datetime import datetime, timedelta, time
+
+from sqlalchemy.exc import IntegrityError
 from utils.timeutil import utcnow
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from utils.models import Course, Enrolment, ClassSession, AttendanceRecord, Student, CourseStaffAssignment
+from db.models import Course, Enrolment, ClassSession, AttendanceRecord, Student, CourseStaffAssignment
 import time as time_module
-from utils.scheduler import calculate_schedule
+from domain.scheduler import calculate_schedule, meeting_key_for
 
+logger = logging.getLogger(__name__)
+
+# Throttle state is per PROCESS, so it only holds with a single worker — which is how
+# this app is deployed (one uvicorn process). Under multiple workers each would keep its
+# own clock and they would sync concurrently; the unique constraint on attendance still
+# prevents duplicate rows, so the failure mode is wasted queries, not bad data. If the
+# deployment ever scales out, move this to an advisory lock or a row in the database.
 _last_sync_time = 0.0
 _is_syncing = False
 _SYNC_THROTTLE_SECONDS = 60.0 # Only sync once per minute max to prevent query storms
@@ -69,10 +79,12 @@ def sync_class_sessions(db: Session):
                 if lect_slot and lect_slot["day"] == day_name:
                     slots.append((lect_slot, "All"))
                 
-                # 2. Tutor/Practical Slots matching this group
+                # 2. Tutor/Practical Slots matching this group. Each group has its own
+                # meeting, so the key carries the group — without it this picked up
+                # another group's slot and opened sessions on the wrong day.
                 assignments = assignments_by_course.get(course_id, [])
                 for a in assignments:
-                    slot = schedule_map.get(f"{a.role}-{a.id}")
+                    slot = schedule_map.get(meeting_key_for(a.role, course_id, a.id, class_group))
                     if slot and slot["day"] == day_name:
                         slots.append((slot, class_group))
                 
@@ -142,8 +154,10 @@ def sync_class_sessions(db: Session):
                                         student_id=student.id,
                                         session_id=session.id,
                                         status="absent",
-                                        wifi_verified=False,
-                                        liveness_passed=False,
+                                        network_verified=False,
+                                        # liveness_passed stays NULL: nobody attempted a
+                                        # liveness check on a no-show, so False would claim
+                                        # a check ran and failed. status='absent' says it.
                                         marked_at=marked_time_utc,
                                         verify_detail=marked_time_local.strftime("System on %a %d/%m/%y %I:%M%p")
                                     )
@@ -154,9 +168,17 @@ def sync_class_sessions(db: Session):
                                 db.commit()
                                 
         _last_sync_time = time_module.time()
-    except Exception as e:
+    except IntegrityError:
+        # Another request already wrote the row this one was about to insert — the unique
+        # constraint on (student_id, session_id) doing its job. Expected under
+        # concurrency, not a failure worth alarming about.
         db.rollback()
-        print(f"Error during class session sync: {e}")
+    except Exception as e:
+        # Everything else is a real fault: sessions did not open, or students were not
+        # marked absent, and the request that triggered this still returns 200. Say so
+        # with a traceback rather than one context-free line.
+        db.rollback()
+        logger.exception("Class session sync failed: %s", e)
     finally:
         _is_syncing = False
 

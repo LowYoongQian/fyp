@@ -6,13 +6,14 @@ from datetime import datetime
 from utils.timeutil import utcnow
 from typing import List
 
-from utils.database import get_db
-from utils.scheduler import calculate_schedule
-from utils.models import (
+from domain.announcements import announcement_dict, visible_announcements
+from db.database import get_db
+from domain.scheduler import calculate_schedule, lecture_meetings, meeting_key_for, slots_for_assignment
+from db.models import (
     User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement, ClassMeeting
 )
 from utils.security import require_lecturer
-from utils.db_helpers import require_own_profile, get_or_404
+from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
 
 router = APIRouter(prefix="/lecturers", tags=["Lecturers"])
 
@@ -26,12 +27,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
     # Get courses assigned directly or via assignments
-    assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-    assigned_course_ids = [a.course_id for a in assigned_assignments]
-    
-    courses = db.query(Course).filter(
-        (Course.lecturer_id == lecturer.id) | (Course.id.in_(assigned_course_ids))
-    ).all()
+    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
 
     # Batch enrolled counts — single GROUP BY instead of one COUNT per course
     course_ids = [c.id for c in courses]
@@ -43,10 +39,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
     )
 
     # Lecture times come from class_meetings (source of truth).
-    lecture_by_course = {
-        m.course_id: m for m in db.query(ClassMeeting)
-        .filter(ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(course_ids)).all()
-    }
+    lecture_by_course = lecture_meetings(db, course_ids)
 
     result = []
     for c in courses:
@@ -70,12 +63,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
 def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
-    assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-    assigned_course_ids = [a.course_id for a in assigned_assignments]
-    
-    courses = db.query(Course).filter(
-        (Course.lecturer_id == lecturer.id) | (Course.id.in_(assigned_course_ids))
-    ).all()
+    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
     course_ids = [c.id for c in courses]
     
     alerts = db.query(Alert).filter(Alert.course_id.in_(course_ids)).order_by(Alert.triggered_at.desc()).all()
@@ -142,11 +130,7 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
         
     # Get all courses where this lecturer is primary OR has staff assignments
     assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-    assigned_course_ids = [a.course_id for a in assigned_assignments]
-    
-    courses = db.query(Course).filter(
-        (Course.lecturer_id == lecturer.id) | (Course.id.in_(assigned_course_ids))
-    ).all()
+    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
 
     # Batch enrolled counts — single GROUP BY instead of one COUNT per course
     timetable_course_ids = [c.id for c in courses]
@@ -190,48 +174,32 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
                     "role": "Lecture"
                 })
             
-        # 2. Check if assigned as Tutor for this course
-        tutor_assign = next((a for a in assigned_assignments if a.course_id == c.id and a.role == 'Tutor'), None)
-        if tutor_assign:
-            tutor_slot = schedule_map.get(f"Tutor-{tutor_assign.id}")
-            if tutor_slot:
+        # 2 & 3. Tutor / Practical assignments — one row PER GROUP. Each group meets at
+        # its own time, so a staff member teaching two groups has two entries here.
+        for role in ("Tutor", "Practical"):
+            assign = next((a for a in assigned_assignments
+                           if a.course_id == c.id and a.role == role), None)
+            if not assign:
+                continue
+            for slot in slots_for_assignment(schedule_map, assign.id):
                 result.append({
-                    "id": f"Tutor-{tutor_assign.id}",
+                    "id": meeting_key_for(role, c.id, assign.id, slot["class_group"]),
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
                     "credit_hours": c.credit_hours,
-                    "schedule_day": tutor_slot["day"],
-                    "schedule_start": tutor_slot["start"],
-                    "schedule_end": tutor_slot["end"],
-                    "schedule_room": tutor_slot["room"],
+                    "class_group": slot["class_group"],
+                    "schedule_day": slot["day"],
+                    "schedule_start": slot["start"],
+                    "schedule_end": slot["end"],
+                    "schedule_room": slot["room"],
                     "enrolled_students_count": enrolled_count,
                     "lecturer_id": c.lecturer_id,
                     "lecturer_name": lecturer.name,
-                    "role": "Tutor"
+                    "role": role
                 })
-            
-        # 3. Check if assigned as Practical for this course
-        practical_assign = next((a for a in assigned_assignments if a.course_id == c.id and a.role == 'Practical'), None)
-        if practical_assign:
-            prac_slot = schedule_map.get(f"Practical-{practical_assign.id}")
-            if prac_slot:
-                result.append({
-                    "id": f"Practical-{practical_assign.id}",
-                    "course_id": c.id,
-                    "course_code": c.course_code,
-                    "course_name": c.course_name,
-                    "credit_hours": c.credit_hours,
-                    "schedule_day": prac_slot["day"],
-                    "schedule_start": prac_slot["start"],
-                    "schedule_end": prac_slot["end"],
-                    "schedule_room": prac_slot["room"],
-                    "enrolled_students_count": enrolled_count,
-                    "lecturer_id": c.lecturer_id,
-                    "lecturer_name": lecturer.name,
-                    "role": "Practical"
-                })
-            
+
+
     return result
 
 
@@ -247,72 +215,15 @@ def get_my_announcements(
         
     now = utcnow()
 
-    # Courses this lecturer teaches: owned (Course.lecturer_id) + staff assignments.
-    owned = db.query(Course).filter(Course.lecturer_id == lecturer.id).all()
-    assigned = (
-        db.query(Course)
-        .join(CourseStaffAssignment, CourseStaffAssignment.course_id == Course.id)
-        .filter(CourseStaffAssignment.lecturer_id == lecturer.id)
-        .all()
-    )
-    my_courses = {c.id: c for c in (owned + assigned)}.values()
-    my_course_codes = {c.course_code.upper() for c in my_courses if c.course_code}
-    my_prog_codes = {
-        c.programme.code.upper()
-        for c in my_courses if getattr(c, "programme", None) and c.programme.code
-    }
+    my_courses = db.query(Course).filter(
+        Course.id.in_(my_course_ids(db, lecturer.id))
+    ).all()
 
-    # Query all published announcements (not drafts)
-    query = db.query(Announcement).filter(Announcement.is_draft == False)
-    announcements = query.all()
-
-    filtered = []
-    for a in announcements:
-        # Window checks
-        if a.publish_start and now < a.publish_start:
-            continue
-        if a.publish_end and now >= a.publish_end:
-            continue
-
-        # Role gate: staff only see 'all' or 'staff'-targeted announcements.
-        if (a.target_role or "all") == "students":
-            continue
-
-        # Scope gate
-        scope = a.target_scope or "all"
-        if scope == "all":
-            filtered.append(a)
-        elif scope == "programme":
-            if a.target_programme_code and a.target_programme_code.upper() in my_prog_codes:
-                filtered.append(a)
-        elif scope == "course":
-            if a.target_course_code and a.target_course_code.upper() in my_course_codes:
-                filtered.append(a)
-
-    # Sort by priority and created_at descending
-    priority_weight = {'High': 3, 'Medium': 2, 'Low': 1}
-    filtered_sorted = sorted(
-        filtered,
-        key=lambda x: (priority_weight.get(x.priority, 2), x.created_at or datetime.min),
-        reverse=True
-    )
-    
     return [
-        {
-            "id": a.id,
-            "title": a.title,
-            "content": a.content,
-            "faculty": a.faculty,
-            "department": a.department,
-            "created_at": a.created_at.isoformat() if a.created_at else None,
-            "priority": a.priority,
-            "image_base64": a.image_base64,
-            "publish_start": a.publish_start.isoformat() if a.publish_start else None,
-            "publish_end": a.publish_end.isoformat() if a.publish_end else None,
-            "target_scope": a.target_scope,
-            "target_role": a.target_role,
-            "target_programme_code": a.target_programme_code,
-            "target_course_code": a.target_course_code,
-        }
-        for a in filtered_sorted
+        announcement_dict(a) for a in visible_announcements(
+            db, "staff",
+            {c.programme.code for c in my_courses
+             if getattr(c, "programme", None) and c.programme.code},
+            {c.course_code for c in my_courses if c.course_code},
+        )
     ]

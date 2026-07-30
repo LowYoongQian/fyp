@@ -4,8 +4,8 @@ from typing import List, Optional, Any
 from datetime import datetime
 from pydantic import BaseModel
 
-from utils.database import get_db
-from utils.models import User, AuditLog
+from db.database import get_db
+from db.models import User, AuditLog
 from utils.security import require_admin
 
 router = APIRouter(prefix="/admin/audit", tags=["Admin Audit"])

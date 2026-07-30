@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List
 from pydantic import BaseModel
 
-from utils.database import get_db
-from utils.scheduler import pick_slot_for_new, meeting_key_for
-from utils.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
+from db.database import get_db
+from domain.scheduler import groups_for_course, lecture_meetings, meeting_key_for, pick_slot_for_new
+from db.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
-from utils.schemas import (
+from schemas import (
     MessageResponse,
     ProgrammeCreate, ProgrammeResponse,
     CourseCreate, CourseResponse,
@@ -71,9 +71,7 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
     ).all()
     # Lecture times come from class_meetings (source of truth), not the dead
     # Course.schedule_* columns.
-    lecture_by_course = {
-        m.course_id: m for m in db.query(ClassMeeting).filter(ClassMeeting.role == "Lecture").all()
-    }
+    lecture_by_course = lecture_meetings(db, [c.id for c in courses])
     result = []
     for c in courses:
         m = lecture_by_course.get(c.id)
@@ -232,17 +230,23 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
     # clash-free slot and record it. (A "Lecturer" role assignment is not a
     # separate meeting; the course's Lecture already covers it.)
     if body.role in ("Tutor", "Practical"):
-        try:
-            slot = pick_slot_for_new(db, assignment.course_id, assignment.lecturer_id, body.role)
-        except ValueError as e:
-            db.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
-        db.add(ClassMeeting(
-            meeting_key=meeting_key_for(body.role, assignment.course_id, assignment.id),
-            course_id=assignment.course_id,
-            assignment_id=assignment.id, role=body.role,
-            lecturer_id=assignment.lecturer_id, **slot,
-        ))
+        # One meeting per enrolled group: the groups meet separately, so a single row
+        # could not say when each of them sits. A course with nobody enrolled yet gets
+        # no meeting — there is no group to name, and inventing one would be a lie the
+        # CHECK constraint is there to prevent.
+        for group in groups_for_course(db, assignment.course_id):
+            try:
+                slot = pick_slot_for_new(db, assignment.course_id, assignment.lecturer_id, body.role)
+            except ValueError as e:
+                db.rollback()
+                raise HTTPException(status_code=400, detail=str(e))
+            db.add(ClassMeeting(
+                meeting_key=meeting_key_for(body.role, assignment.course_id, assignment.id, group),
+                course_id=assignment.course_id,
+                assignment_id=assignment.id, role=body.role, class_group=group,
+                lecturer_id=assignment.lecturer_id, **slot,
+            ))
+            db.flush()   # so the next group's slot sees this one as occupied
 
     db.commit()
     db.refresh(assignment)
@@ -322,6 +326,17 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
         if meeting.lecturer_id and o.lecturer_id == meeting.lecturer_id:
             raise HTTPException(status_code=400,
                 detail=f"This lecturer already teaches another class on {body.day} during {o.start}-{o.end}")
+        # Same students cannot be in two places at once. A lecture has no group
+        # because the whole course attends it, so it overlaps EVERY group — treating
+        # its NULL as just another value would let a lecture and a tutorial for the
+        # same students be booked at the same hour.
+        if o.course_id == meeting.course_id and (
+            meeting.class_group is None or o.class_group is None
+            or o.class_group == meeting.class_group
+        ):
+            who = o.class_group or "all groups"
+            raise HTTPException(status_code=400,
+                detail=f"{o.role} for {who} is already scheduled on {body.day} during {o.start}-{o.end}")
 
     meeting.day, meeting.start, meeting.end, meeting.room = body.day, body.start, body.end, body.room
     db.commit()

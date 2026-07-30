@@ -12,16 +12,18 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
-from utils.database import get_db
+from domain.scheduler import lecture_meetings
+from domain.announcements import announcement_dict, visible_announcements
+from db.database import get_db
 from datetime import datetime
-from utils.session_sync import sync_class_sessions
-from utils.models import (
+from domain.session_sync import sync_class_sessions
+from db.models import (
     User, Student, Course, Enrolment, ClassSession,
     AttendanceRecord, Announcement, ClassMeeting
 )
 from utils.security import require_student
 from utils.db_helpers import require_own_profile
-from utils.attendance import session_hours, attendance_rate_percent
+from domain.attendance import session_hours, attendance_rate_percent
 from utils.timeutil import utcnow
 
 router = APIRouter(prefix="/students/me", tags=["Student Self-Service"])
@@ -72,41 +74,35 @@ def get_my_enrolments(
 
     # Lecture times come from class_meetings (source of truth), not Course.schedule_*.
     course_ids = [e.course_id for e in enrolments]
-    lecture_by_course = {
-        m.course_id: m for m in db.query(ClassMeeting)
-        .filter(ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(course_ids)).all()
+    lecture_by_course = lecture_meetings(db, course_ids)
+
+    # Attendance rate: the SAME hours-weighted, present+leave, closed-only computation
+    # the risk model uses (domain/attendance.py), so the student's number always matches
+    # the lecturer's dashboard. Both lookups are built once, not once per enrolment.
+    sessions_by_course = {}
+    for sid, cid, group, opened, closed_at in db.query(
+        ClassSession.id, ClassSession.course_id, ClassSession.class_group,
+        ClassSession.opened_at, ClassSession.closed_at
+    ).filter(
+        ClassSession.course_id.in_(course_ids),
+        ClassSession.is_open == False,  # noqa: E712
+    ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all():
+        sessions_by_course.setdefault(cid, []).append(
+            (sid, group, session_hours(opened, closed_at)))
+
+    attended = {
+        (student.id, sid) for (sid,) in db.query(AttendanceRecord.session_id).filter(
+            AttendanceRecord.student_id == student.id,
+            AttendanceRecord.status.in_(["present", "leave"]),
+        ).all()
     }
 
     result = []
     for e in enrolments:
         m = lecture_by_course.get(e.course_id)
-        # Attendance rate: use the SAME hours-weighted, present+leave, closed-only
-        # computation as the risk model (utils/attendance) so the student's number
-        # always matches the lecturer's dashboard. See utils/attendance.py.
-        closed = db.query(
-            ClassSession.id, ClassSession.class_group,
-            ClassSession.opened_at, ClassSession.closed_at
-        ).filter(
-            ClassSession.course_id == e.course_id,
-            ClassSession.is_open == False,
-        ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all()
-
-        course_sessions = [
-            (sid, group, session_hours(opened, cl))
-            for sid, group, opened, cl in closed
-        ]
-        session_ids = [row[0] for row in course_sessions]
-        present_set = set()
-        if session_ids:
-            present_rows = db.query(AttendanceRecord.session_id).filter(
-                AttendanceRecord.student_id == student.id,
-                AttendanceRecord.session_id.in_(session_ids),
-                AttendanceRecord.status.in_(["present", "leave"]),
-            ).all()
-            present_set = {(student.id, sid) for (sid,) in present_rows}
-
+        course_sessions = sessions_by_course.get(e.course_id, [])
         attendance_rate = attendance_rate_percent(
-            course_sessions, present_set, student.id, e.class_group)
+            course_sessions, attended, student.id, e.class_group)
 
         result.append({
             "id": e.id,
@@ -144,71 +140,17 @@ def get_my_announcements(
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
         
-    now = utcnow()
-
-    # Course codes this student is enrolled in (for scope='course' matching).
     my_course_codes = {
-        code.upper() for (code,) in (
+        code for (code,) in (
             db.query(Course.course_code)
             .join(Enrolment, Enrolment.course_id == Course.id)
             .filter(Enrolment.student_id == student.id)
             .all()
         ) if code
     }
-    my_prog_code = student.programme.code.upper() if student.programme else None
+    my_prog_codes = {student.programme.code} if student.programme else set()
 
-    # Query all published announcements (not drafts)
-    query = db.query(Announcement).filter(Announcement.is_draft == False)
-    announcements = query.all()
-
-    filtered = []
-    for a in announcements:
-        # Window checks
-        if a.publish_start and now < a.publish_start:
-            continue
-        if a.publish_end and now >= a.publish_end:
-            continue
-
-        # Role gate: students only see 'all' or 'students'-targeted announcements.
-        if (a.target_role or "all") == "staff":
-            continue
-
-        # Scope gate
-        scope = a.target_scope or "all"
-        if scope == "all":
-            filtered.append(a)
-        elif scope == "programme":
-            if a.target_programme_code and my_prog_code and \
-               a.target_programme_code.upper() == my_prog_code:
-                filtered.append(a)
-        elif scope == "course":
-            if a.target_course_code and a.target_course_code.upper() in my_course_codes:
-                filtered.append(a)
-
-    # Sort by priority and created_at descending
-    priority_weight = {'High': 3, 'Medium': 2, 'Low': 1}
-    filtered_sorted = sorted(
-        filtered,
-        key=lambda x: (priority_weight.get(x.priority, 2), x.created_at or datetime.min),
-        reverse=True
-    )
-    
     return [
-        {
-            "id": a.id,
-            "title": a.title,
-            "content": a.content,
-            "faculty": a.faculty,
-            "department": a.department,
-            "created_at": a.created_at.isoformat() if a.created_at else None,
-            "priority": a.priority,
-            "image_base64": a.image_base64,
-            "publish_start": a.publish_start.isoformat() if a.publish_start else None,
-            "publish_end": a.publish_end.isoformat() if a.publish_end else None,
-            "target_scope": a.target_scope,
-            "target_role": a.target_role,
-            "target_programme_code": a.target_programme_code,
-            "target_course_code": a.target_course_code,
-        }
-        for a in filtered_sorted
+        announcement_dict(a) for a in
+        visible_announcements(db, "students", my_prog_codes, my_course_codes)
     ]

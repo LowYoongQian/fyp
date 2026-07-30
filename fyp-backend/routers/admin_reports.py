@@ -4,8 +4,8 @@ from typing import List, Optional, Any
 from datetime import datetime
 from pydantic import BaseModel
 
-from utils.database import get_db
-from utils.models import User, StudentFeedback, AttendanceRecord, Student, ClassSession, Course
+from db.database import get_db
+from db.models import User, StudentFeedback, AttendanceRecord, Student, ClassSession, Course
 from utils.security import require_admin
 from utils.db_helpers import get_or_404
 
@@ -73,7 +73,7 @@ def update_feedback_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    item = get_or_404(db, StudentFeedback, str(feedback_id), "Feedback report not found")
+    item = get_or_404(db, StudentFeedback, str(feedback_id), detail="Feedback report not found")
     item.status = body.status
     if body.admin_notes is not None:
         item.admin_notes = body.admin_notes
@@ -97,7 +97,7 @@ def get_mc_reports(
         Course.course_name.label("course_name"),
         Course.course_code.label("course_code"),
         AttendanceRecord.mc_proof_url,
-        AttendanceRecord.timestamp,
+        AttendanceRecord.marked_at,
         AttendanceRecord.status,
         AttendanceRecord.flag_reason
     ).join(
@@ -118,7 +118,7 @@ def get_mc_reports(
         elif status == "Rejected":
             query = query.filter(AttendanceRecord.status == "mc_rejected")
 
-    results = query.order_by(AttendanceRecord.timestamp.desc()).all()
+    results = query.order_by(AttendanceRecord.marked_at.desc()).all()
     
     reports = []
     for r in results:
@@ -130,7 +130,7 @@ def get_mc_reports(
             "course_name": r.course_name,
             "course_code": r.course_code,
             "mc_proof_url": r.mc_proof_url or "https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?auto=format&fit=crop&q=80&w=800",
-            "timestamp": r.timestamp,
+            "timestamp": r.marked_at,   # outward key kept: the web report table reads it
             "status": "Approved" if r.status == "mc_approved" else "Rejected" if r.status == "mc_rejected" else "Pending",
             "flag_reason": r.flag_reason or "Medical Leave Certificate"
         })
@@ -144,7 +144,7 @@ def update_mc_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    rec = get_or_404(db, AttendanceRecord, str(record_id), "Attendance record not found")
+    rec = get_or_404(db, AttendanceRecord, str(record_id), detail="Attendance record not found")
     new_status = body.status.lower()
     if new_status == "approved":
         rec.status = "mc_approved"
