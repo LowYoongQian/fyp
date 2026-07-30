@@ -104,17 +104,18 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
   Future<void> fetchActiveSessions() async {
     try {
-      final uri = Uri.parse("${widget.apiBaseUrl}/attendance/active-sessions");
+      final uri = Uri.parse("${widget.apiBaseUrl}/sessions/active");
       final res = await http.get(uri, headers: {
         "Authorization": "Bearer ${widget.authToken}",
       }).timeout(const Duration(seconds: 5));
 
       if (res.statusCode == 200) {
+        // /sessions/active already filters by lecturer server-side
+        // (owned-or-assigned), so no client-side filter is needed.
         final List<dynamic> data = jsonDecode(res.body);
-        final staffSessions = data.where((s) => s['createdById'] == widget.staffId).toList();
         if (mounted) {
           setState(() {
-            myActiveSessions = staffSessions;
+            myActiveSessions = data;
           });
         }
       }

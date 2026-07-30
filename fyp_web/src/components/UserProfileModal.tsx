@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiService, clearApiCache } from '../services/api';
-import { swalSuccess, swalError } from '../utils/swal';
+import { swalSuccess } from '../utils/swal';
 import {
   User, Mail, ShieldCheck, Lock, Camera, Clock,
-  CheckCircle, Loader2, X, KeyRound, Smartphone, Shield, AlertTriangle, Pencil, Save,
-  Eye, EyeOff, UploadCloud, Trash2, Laptop
+  CheckCircle, Loader2, X, KeyRound, Shield, AlertTriangle, Pencil, Save,
+  Eye, EyeOff, UploadCloud, Trash2
 } from 'lucide-react';
 import { ShimmerProfileModal } from './Shimmer';
 import { THEME_TOKENS } from '../theme/themeTokens';
@@ -150,13 +150,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [identityError, setIdentityError] = useState<string | null>(null);
   const [identityForm, setIdentityForm] = useState({ name: '', email: '', code: '' });
 
-  // Active Sessions state
-  const [sessions, setSessions] = useState<any[]>([]);
-
   useEffect(() => {
     if (isOpen) {
       loadProfile();
-      loadSessions();
     }
   }, [isOpen]);
 
@@ -180,85 +176,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       setIdentityForm({ name: 'User', email: initialEmail || 'user@school.edu', code: 'N/A' });
     } finally {
       setLoading(false);
-    }
-  };
-
-  const getBrowserDeviceInfo = () => {
-    const ua = navigator.userAgent;
-    let os = 'PC';
-    let deviceType: 'desktop' | 'mobile' = 'desktop';
-
-    if (/windows/i.test(ua)) {
-      os = 'Windows PC';
-    } else if (/macintosh|mac os x/i.test(ua)) {
-      os = 'Mac Computer';
-    } else if (/linux/i.test(ua) && !/android/i.test(ua)) {
-      os = 'Linux Computer';
-    } else if (/android/i.test(ua)) {
-      os = 'Android Mobile';
-      deviceType = 'mobile';
-    } else if (/iphone|ipad|ipod/i.test(ua)) {
-      os = 'iOS Mobile';
-      deviceType = 'mobile';
-    }
-
-    let browser = 'Web';
-    if (/chrome|crios/i.test(ua) && !/edg/i.test(ua)) browser = 'Chrome';
-    else if (/edg/i.test(ua)) browser = 'Edge';
-    else if (/firefox|fxios/i.test(ua)) browser = 'Firefox';
-    else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = 'Safari';
-
-    if (deviceType === 'desktop') {
-      return {
-        deviceName: `Current Active Computer (${os})`,
-        platform: `PC web (${browser})`,
-        deviceType: 'desktop' as const,
-      };
-    } else {
-      return {
-        deviceName: `Current Active Mobile Device (${os})`,
-        platform: `Mobile web (${browser})`,
-        deviceType: 'mobile' as const,
-      };
-    }
-  };
-
-  const loadSessions = async () => {
-    const clientDevice = getBrowserDeviceInfo();
-    try {
-      const list = await apiService.getUserActiveSessions();
-      const updatedList = (list && list.length > 0) ? list.map((sess: any) => {
-        if (sess.is_current || list.length === 1) {
-          return {
-            ...sess,
-            device_name: clientDevice.deviceName,
-            platform: clientDevice.platform,
-            device_type: clientDevice.deviceType,
-            is_current: true,
-          };
-        }
-        return sess;
-      }) : [
-        {
-          id: 'current-session',
-          device_name: clientDevice.deviceName,
-          platform: clientDevice.platform,
-          device_type: clientDevice.deviceType,
-          is_current: true,
-        }
-      ];
-      setSessions(updatedList);
-    } catch (e) {
-      console.error('Failed to load active sessions', e);
-      setSessions([
-        {
-          id: 'current-session',
-          device_name: clientDevice.deviceName,
-          platform: clientDevice.platform,
-          device_type: clientDevice.deviceType,
-          is_current: true,
-        }
-      ]);
     }
   };
 
@@ -313,16 +230,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       setAvatarError(err.response?.data?.detail || 'Failed to update avatar. Check image URL.');
     } finally {
       setUploadingAvatar(false);
-    }
-  };
-
-  const handleLogoutSession = async (sessId: string) => {
-    try {
-      await apiService.logoutSession(sessId);
-      setSessions(prev => prev.filter(s => s.id !== sessId));
-      await swalSuccess('Session Ended', 'Device session logged out.');
-    } catch {
-      await swalError('Failed', 'Could not terminate session.');
     }
   };
 
@@ -821,80 +728,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   <span>Update Password</span>
                 </button>
               </form>
-
-              {/* Actionable Item 2: Active Device Sessions */}
-              <div
-                style={{
-                  backgroundColor: THEME_TOKENS.surface,
-                  borderColor: THEME_TOKENS.border,
-                }}
-                className="p-5 border rounded-2xl space-y-3"
-              >
-                <h4 style={{ color: THEME_TOKENS.textPrimary }} className="font-bold text-xs flex items-center gap-2">
-                  <Laptop style={{ color: THEME_TOKENS.accent }} className="h-4 w-4" /> Active Device Sessions
-                </h4>
-
-                <div className="space-y-2.5 pt-1">
-                  {sessions.map((sess) => {
-                    const isDesktop = sess.device_type === 'desktop' ||
-                      /pc|computer|mac|windows|laptop|desktop|linux/i.test(sess.device_name || '') ||
-                      /pc|web|chrome|firefox|edge|safari/i.test(sess.platform || '');
-                    const DeviceIcon = isDesktop ? Laptop : Smartphone;
-
-                    return (
-                      <div
-                        key={sess.id}
-                        style={{
-                          backgroundColor: THEME_TOKENS.bg,
-                          borderColor: THEME_TOKENS.border,
-                        }}
-                        className="p-3.5 rounded-xl border flex items-center justify-between shadow-xs transition-all hover:border-[#2563eb]/30"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            style={{
-                              backgroundColor: THEME_TOKENS.accentLight,
-                              color: THEME_TOKENS.accent,
-                            }}
-                            className="p-2.5 rounded-xl shrink-0"
-                          >
-                            <DeviceIcon className="h-4 w-4" />
-                          </div>
-                          <div>
-                            <p style={{ color: THEME_TOKENS.textPrimary }} className="font-semibold text-xs">
-                              {sess.device_name}
-                            </p>
-                            <p style={{ color: THEME_TOKENS.textSecondary }} className="text-[10px] font-mono mt-0.5">
-                              Platform: {sess.platform}
-                            </p>
-                          </div>
-                        </div>
-                        {sess.is_current ? (
-                          <span
-                            style={{
-                              backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                              color: THEME_TOKENS.success,
-                              borderColor: 'rgba(16, 185, 129, 0.4)',
-                            }}
-                            className="text-[10px] font-bold px-3 py-1 rounded-full border shadow-2xs shrink-0"
-                          >
-                            Current Device
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleLogoutSession(sess.id)}
-                            style={{ color: THEME_TOKENS.danger }}
-                            className="min-h-[36px] px-3 rounded-lg text-[11px] font-bold transition-colors cursor-pointer hover:bg-[#252525] shrink-0"
-                          >
-                            Log out
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           )}
         </div>

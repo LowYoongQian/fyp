@@ -107,36 +107,6 @@ class UserService {
     }
   }
 
-  static Future<List<dynamic>> fetchActiveSessions() async {
-    try {
-      final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/active-sessions');
-      final response = await http.get(url, headers: headers);
-
-      if (response.statusCode == 200) {
-        return jsonDecode(response.body) as List<dynamic>;
-      } else {
-        return [];
-      }
-    } catch (e) {
-      debugPrint('Error fetching active sessions: $e');
-      return [];
-    }
-  }
-
-  static Future<bool> logoutSession(String sessionId) async {
-    try {
-      final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/logout-session?session_id=$sessionId');
-      final response = await http.post(url, headers: headers);
-
-      return response.statusCode == 200;
-    } catch (e) {
-      debugPrint('Error logging out session: $e');
-      return false;
-    }
-  }
-
   static Future<Map<String, dynamic>?> fetchSystemLanguages() async {
     try {
       final url = Uri.parse('${ApiConfig.baseUrl}/api/v1/system/languages');

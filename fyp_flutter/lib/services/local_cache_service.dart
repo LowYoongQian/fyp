@@ -17,8 +17,8 @@ import 'package:sqflite/sqflite.dart';
 //
 // Device identity:
 //   getOrCreateDeviceId() generates a stable UUID-like fingerprint on first
-//   call and persists it in SharedPreferences.  This value is sent as
-//   `device_id` in the login request for multi-device session binding.
+//   call and persists it in SharedPreferences.  This value is recorded as
+//   `device_id` on each check-in for auditing purposes.
 // ---------------------------------------------------------------------------
 
 class LocalCacheService {

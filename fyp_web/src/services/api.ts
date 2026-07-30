@@ -613,13 +613,6 @@ export const apiService = {
     const response = await api.put('/auth/me/admin-profile', data);
     return response.data;
   },
-  getUserActiveSessions: async () => {
-    return cachedGet('/auth/active-sessions');
-  },
-  logoutSession: async (sessionId: string) => {
-    const response = await api.post(`/auth/logout-session?session_id=${sessionId}`);
-    return response.data;
-  },
   fetchSystemLanguages: async () => {
     return cachedGet('/api/v1/system/languages');
   },
