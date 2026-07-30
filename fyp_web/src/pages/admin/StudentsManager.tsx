@@ -58,7 +58,7 @@ export const StudentsManager: React.FC = () => {
     setError(null);
     try {
       const skip = (page - 1) * limit;
-      const res = await apiService.adminGetStudents(skip, limit, searchQuery);
+      const res = await apiService.adminGetStudents(skip, limit, searchQuery.trim());
       setStudents(res.items || []);
       setTotalCount(res.total || 0);
     } catch (err: any) {

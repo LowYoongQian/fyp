@@ -46,14 +46,21 @@ export const StaffManager: React.FC = () => {
 
   useEffect(() => {
     fetchStaff();
-  }, [page]);
+  }, [page, searchQuery]);
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    setPage(1);
+  };
 
   const fetchStaff = async () => {
     setLoading(true);
     setError(null);
     try {
       const skip = (page - 1) * limit;
-      const res = await apiService.adminGetStaff(skip, limit);
+      // Search is server-side: filtering staffList here would only ever match the
+      // 10 rows on the current page.
+      const res = await apiService.adminGetStaff(skip, limit, searchQuery.trim());
       setStaffList(res.items);
       setTotalCount(res.total);
     } catch (err: any) {
@@ -145,11 +152,7 @@ export const StaffManager: React.FC = () => {
     }
   };
 
-  const filteredStaff = staffList.filter(s =>
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.staff_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredStaff = staffList;
 
   return (
     <div className="space-y-6">
@@ -185,7 +188,7 @@ export const StaffManager: React.FC = () => {
             type="text"
             placeholder="Search by name, staff ID, or email..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             className="w-full uipro-input !pl-10"
           />
         </div>
