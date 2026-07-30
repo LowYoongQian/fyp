@@ -52,7 +52,7 @@ http://127.0.0.1:5173
 It expects the backend at:
 
 ```txt
-http://127.0.0.1:8003
+http://127.0.0.1:8000
 ```
 
 If the web app stops with an error, the script keeps the final message visible
@@ -117,7 +117,7 @@ Important:
 
 - do not rely on copying `node_modules` from one PC to another
 - let each machine run `setup_web.bat` for itself
-- the frontend default backend URL is `http://127.0.0.1:8003`
+- the frontend default backend URL is `http://127.0.0.1:8000`
 
 ## Troubleshooting
 
@@ -130,7 +130,7 @@ If `run_web.bat` fails:
 
 - make sure `node_modules` exists
 - make sure `setup_web.bat` completed successfully
-- make sure the backend is running on `127.0.0.1:8003`
+- make sure the backend is running on `127.0.0.1:8000`
 
 If dependencies seem broken:
 

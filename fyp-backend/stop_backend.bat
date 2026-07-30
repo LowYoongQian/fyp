@@ -3,7 +3,7 @@ setlocal
 
 cd /d "%~dp0"
 
-set "TARGET_PORT=8003"
+set "TARGET_PORT=8000"
 set "PAUSE_AFTER=1"
 set "FOUND="
 

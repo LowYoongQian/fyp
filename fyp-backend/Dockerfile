@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Python 3.11 is required, not preferred: tensorflow 2.14 (deepface/ArcFace) ships no
+# cp312 wheels, and the first TF with them (2.16) pulls numpy 2.x, which breaks the
+# deepface import. Do not bump without re-verifying face embedding extraction.
+FROM python:3.11-slim
 
 WORKDIR /app
 

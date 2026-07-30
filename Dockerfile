@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Python 3.11 is required, not preferred: tensorflow 2.14 (deepface/ArcFace) ships no
+# cp312 wheels, and the first TF with them (2.16) pulls numpy 2.x, which breaks the
+# deepface import. Do not bump without re-verifying face embedding extraction.
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -27,4 +30,6 @@ COPY fyp-backend/ .
 EXPOSE 8000
 
 # Start uvicorn with dynamic $PORT support for Railway/Cloud deployments
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Migrations run first and must succeed: a schema failure stops the container instead
+# of letting the app start against a half-migrated database.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

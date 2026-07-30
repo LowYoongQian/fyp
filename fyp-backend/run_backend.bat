@@ -49,6 +49,16 @@ if not exist "%PYTHON%" (
     exit /b 1
 )
 
+REM Schema is owned by Alembic. Procfile/Dockerfile run this before uvicorn; do the
+REM same locally so the app never starts against an un-migrated database.
+"%PYTHON%" -m alembic upgrade head
+if errorlevel 1 (
+    echo.
+    echo Database migration failed. Backend not started.
+    if defined PAUSE_AFTER pause
+    exit /b 1
+)
+
 REM Use the project interpreter directly so PATH cannot hijack the launcher.
 "%PYTHON%" "%~dp0launch_backend.py" %FORWARD_ARGS%
 set "APP_EXIT=%ERRORLEVEL%"

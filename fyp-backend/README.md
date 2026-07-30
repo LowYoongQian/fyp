@@ -10,7 +10,7 @@ This folder contains the FastAPI backend for the Smart Attendance System.
 - `requirements.txt` - Python dependencies
 - `setup_backend.bat` - creates/reuses `.venv` and installs requirements
 - `run_backend.bat` - starts the FastAPI server in reload mode by default
-- `stop_backend.bat` - force-stops anything still holding backend port 8003
+- `stop_backend.bat` - force-stops anything still holding backend port 8000
 - `launch_backend.py` - helper that keeps backend shutdown clean on Windows
 
 ## Requirements
@@ -54,13 +54,13 @@ visible instead of closing immediately.
 The API starts on:
 
 ```txt
-http://127.0.0.1:8003
+http://127.0.0.1:8000
 ```
 
 Basic health check:
 
 ```txt
-http://127.0.0.1:8003/
+http://127.0.0.1:8000/
 ```
 
 `run_backend.bat` now starts in reload mode by default, so when you edit
@@ -84,13 +84,13 @@ run_backend.bat
 
 ## Stop the backend
 
-If `8003` gets stuck or you want to close the backend forcefully:
+If `8000` gets stuck or you want to close the backend forcefully:
 
 ```bat
 stop_backend.bat
 ```
 
-This kills the whole process tree that is listening on port `8003`.
+This kills the whole process tree that is listening on port `8000`.
 
 ## Optional no-pause mode
 
@@ -144,7 +144,7 @@ If `run_backend.bat` fails:
 - make sure `GEMINI_API_KEY` is set
 - make sure `JWT_SECRET_KEY` is set
 
-If the backend closes but port `8003` still stays busy:
+If the backend closes but port `8000` still stays busy:
 
 ```bat
 stop_backend.bat
@@ -161,13 +161,16 @@ That will reuse the local `.venv` and reinstall from `requirements.txt`.
 ## Face recognition (deepface / ArcFace) setup
 
 The face recognition engine uses the `deepface` library with the ArcFace model.
-Two things are required for **real** identity matching (otherwise the code
-silently falls back to a mock embedding and skips matching):
+Two things are required for identity matching to work at all. There is no mock
+fallback: `integrations/face.py` raises 503 when deepface is missing, so a
+check-in fails loudly rather than recording attendance nobody verified.
 
 1. **deepface must import successfully.** It depends on TensorFlow 2.14, which
    only works with **numpy < 2.0**. `requirements.txt` pins `numpy==1.26.4` and
    `pandas==2.2.3` for this reason — do not bump numpy to 2.x. Also use
-   **Python 3.11** (TensorFlow 2.14 has no wheels for 3.12+/3.14).
+   **Python 3.11** — `tensorflow-intel==2.14.0` ships only cp39/cp310/cp311
+   wheels, so 3.12+ cannot install it, and the first TF with cp312 wheels (2.16)
+   pulls numpy 2.x. Dockerfiles, `runtime.txt` and `setup_backend.bat` all pin 3.11.
 
 2. **The ArcFace weights must be present.** On first use deepface tries to
    download `arcface_weights.h5` (~137 MB) to `%USERPROFILE%\.deepface\weights\`.
