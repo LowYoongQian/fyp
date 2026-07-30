@@ -402,7 +402,7 @@ def get_session_attendance(id: str, db: Session = Depends(get_db), current_user:
 # 6. List active sessions created by/for the lecturer (Lecturer/Admin only)
 @router.get("/active", response_model=List[SessionResponse])
 def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    sync_class_sessions(db)
+    sync_class_sessions()
     lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
     if not lecturer:
         if current_user.role == "admin":

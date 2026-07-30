@@ -25,7 +25,7 @@ router = APIRouter(prefix="/admin", tags=["Admin Attendance"])
 def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     # Persisting auto-open/close is owned by sync_class_sessions (throttled).
     # This handler then only READS and derives display status in-memory.
-    sync_class_sessions(db)
+    sync_class_sessions()
 
     sessions = db.query(ClassSession).options(
         joinedload(ClassSession.course).joinedload(Course.lecturer)

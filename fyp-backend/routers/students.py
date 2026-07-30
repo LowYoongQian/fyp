@@ -68,7 +68,7 @@ def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), curre
 @router.get("/me/courses")
 def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Courses this student is enrolled in, with timetable info for the app."""
-    sync_class_sessions(db)
+    sync_class_sessions()
     student = require_own_profile(db, Student, current_user.id, "Student")
     rows = (
         db.query(Course, Enrolment.class_group)
@@ -191,7 +191,7 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
 @router.get("/me/active-sessions")
 def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Open sessions matching this student's enrolments (course + group)."""
-    sync_class_sessions(db)
+    sync_class_sessions()
     student = require_own_profile(db, Student, current_user.id, "Student")
     rows = (
         db.query(ClassSession, Course, Enrolment.class_group)
@@ -245,7 +245,7 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
 @router.get("/me/attendance")
 def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """This student's full attendance history, most recent first."""
-    sync_class_sessions(db)
+    sync_class_sessions()
     student = require_own_profile(db, Student, current_user.id, "Student")
     rows = (
         db.query(AttendanceRecord, ClassSession, Course)

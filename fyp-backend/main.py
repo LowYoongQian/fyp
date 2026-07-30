@@ -1,12 +1,16 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import text
+import asyncio
+import logging
 import os
 import hashlib
 
 from domain.announcements import announcement_dict
-from db.database import SessionLocal
+from db.database import SessionLocal, engine
 from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit
 
 # Schema is owned by Alembic (`alembic upgrade head`, which the Procfile/Dockerfile run
@@ -80,10 +84,55 @@ class ETagMiddleware(BaseHTTPMiddleware):
             media_type=response.media_type
         )
 
+logger = logging.getLogger(__name__)
+
+# Opening a fresh connection to the remote database measures ~1.9s (TLS + auth), while a
+# pooled one costs ~0.2s. Supabase drops idle connections, so after a quiet spell the next
+# page load paid that 1.9s on every connection it needed at once. Touching the pool on a
+# timer keeps the connections alive so no user request ever pays for the handshake.
+_KEEPALIVE_SECONDS = 240
+_KEEPALIVE_CONNECTIONS = 6
+
+
+async def _keep_pool_warm():
+    while True:
+        await asyncio.sleep(_KEEPALIVE_SECONDS)
+        try:
+            await asyncio.to_thread(_ping_pool)
+        except Exception as exc:
+            # A failed ping is not fatal: the next real request opens a connection as
+            # before. Log it rather than killing the task, which would silently stop
+            # every future ping.
+            logger.warning("DB keepalive ping failed: %s", exc)
+
+
+def _ping_pool():
+    # Held open at the same time on purpose: one connection at a time would only ever
+    # refresh the same pooled connection, leaving the rest to go stale. The admin pages
+    # fan out ~6 parallel requests, so that many are kept live.
+    conns = [engine.connect() for _ in range(_KEEPALIVE_CONNECTIONS)]
+    try:
+        for conn in conns:
+            conn.execute(text("SELECT 1"))
+    finally:
+        for conn in conns:
+            conn.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_keep_pool_warm())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
 app = FastAPI(
     title="Smart Attendance API",
     version="1.0.0",
-    description="Backend API for Smart Attendance System"
+    description="Backend API for Smart Attendance System",
+    lifespan=lifespan,
 )
 
 # CORS middleware configuration

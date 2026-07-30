@@ -1,10 +1,12 @@
 import logging
+import threading
 from datetime import datetime, timedelta, time
 
 from sqlalchemy.exc import IntegrityError
 from utils.timeutil import utcnow
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from db.database import SessionLocal
 from db.models import Course, Enrolment, ClassSession, AttendanceRecord, Student, CourseStaffAssignment
 import time as time_module
 from domain.scheduler import calculate_schedule, meeting_key_for
@@ -20,17 +22,53 @@ _last_sync_time = 0.0
 _is_syncing = False
 _SYNC_THROTTLE_SECONDS = 60.0 # Only sync once per minute max to prevent query storms
 
-def sync_class_sessions(db: Session):
+
+def sync_class_sessions():
+    """Kick off a sync in the background and return immediately.
+
+    This used to run inline, so once a minute some unlucky request paid its ~18
+    queries (~2s against a remote database) before its own response was built --
+    which is what made page loads randomly slow. The work itself is only
+    opening/closing sessions and marking end-of-day absences, and no caller needs
+    the result, so the request no longer waits for it. The trade is that a session
+    opening this very second may not appear until the next poll.
+    """
+    global _last_sync_time, _is_syncing
+
+    if _is_syncing or (time_module.time() - _last_sync_time < _SYNC_THROTTLE_SECONDS):
+        return # Skip to avoid query storms and database locks
+
+    _is_syncing = True
+    threading.Thread(target=_sync_worker, daemon=True).start()
+
+
+def _sync_worker():
+    """Run one sync on its own DB session.
+
+    A Session is not thread-safe, so this cannot borrow the request's session --
+    it opens and closes its own.
+    """
+    global _last_sync_time, _is_syncing
+    db = None
+    try:
+        db = SessionLocal()
+        _sync_class_sessions_now(db)
+    except Exception as exc:
+        # Nothing above this frame can catch it -- an escaped exception here would print a
+        # bare thread traceback and, worse, skip the flag reset below, wedging _is_syncing
+        # True so no sync ever ran again.
+        logger.exception("Class session sync worker failed: %s", exc)
+    finally:
+        if db is not None:
+            db.close()
+        _last_sync_time = time_module.time()
+        _is_syncing = False
+
+
+def _sync_class_sessions_now(db: Session):
     """Automatically opens and closes class sessions based on the timetable schedule,
     and runs batch processing to mark absent students at the end of the day.
     """
-    global _last_sync_time, _is_syncing
-    
-    current_time = time_module.time()
-    if _is_syncing or (current_time - _last_sync_time < _SYNC_THROTTLE_SECONDS):
-        return # Skip to avoid query storms and database locks
-        
-    _is_syncing = True
     try:
         now_utc = utcnow()
         
@@ -167,7 +205,6 @@ def sync_class_sessions(db: Session):
                             if needs_commit:
                                 db.commit()
                                 
-        _last_sync_time = time_module.time()
     except IntegrityError:
         # Another request already wrote the row this one was about to insert — the unique
         # constraint on (student_id, session_id) doing its job. Expected under
@@ -175,10 +212,8 @@ def sync_class_sessions(db: Session):
         db.rollback()
     except Exception as e:
         # Everything else is a real fault: sessions did not open, or students were not
-        # marked absent, and the request that triggered this still returns 200. Say so
-        # with a traceback rather than one context-free line.
+        # marked absent. Nobody is waiting on this thread, so the traceback in the log is
+        # the ONLY sign it failed -- which is why it is logged rather than swallowed.
         db.rollback()
         logger.exception("Class session sync failed: %s", e)
-    finally:
-        _is_syncing = False
 

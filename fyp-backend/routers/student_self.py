@@ -62,7 +62,7 @@ def get_my_enrolments(
     current_user: User = Depends(require_student),
 ):
     """Return the authenticated student's course enrolments with dynamic attendance rate."""
-    sync_class_sessions(db)
+    sync_class_sessions()
     student = require_own_profile(db, Student, current_user.id, "Student")
 
     enrolments = (
