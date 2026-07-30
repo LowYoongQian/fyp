@@ -1,6 +1,25 @@
 from sqlalchemy.orm import Session
-from db.models import AuditLog
+from db.models import AuditLog, User
 from typing import Optional
+
+
+def log_admin_action(db: Session, current_user: User, action: str, details: str) -> Optional[AuditLog]:
+    """Record an admin action, deriving the actor fields from `current_user`.
+
+    Every admin endpoint passed the same four values (id, profile_name or email,
+    "admin", "admin") to log_audit_event, so they are stated once here instead of
+    at each call site.
+    """
+    return log_audit_event(
+        db,
+        user_id=str(current_user.id),
+        user_name=current_user.profile_name or current_user.email,
+        user_role="admin",
+        category="admin",
+        action=action,
+        details=details,
+    )
+
 
 def log_audit_event(
     db: Session,

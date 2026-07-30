@@ -6,6 +6,7 @@ from db.database import get_db
 from db.models import User, Lecturer, Course, Enrolment, ClassSession, AttendanceRecord, RiskScore, Alert
 from utils.security import require_admin, hash_password
 from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
+from domain.audit import log_admin_action
 from schemas import (
     AdminStaffCreate, AdminStaffUpdate,
     MessageResponse
@@ -74,7 +75,10 @@ def create_staff(
     lecturer = Lecturer(user_id=user.id, name=body.name, staff_id=body.staff_id, role=body.role)
     db.add(lecturer)
     db.commit()
-    
+
+    log_admin_action(db, current_user, "CREATE_STAFF",
+                     f"Created staff {body.name} ({body.staff_id}), role {body.role}")
+
     return {"message": "Staff registered successfully", "user_id": user.id}
 
 @router.put("/staff/{lecturer_id}", response_model=MessageResponse)
@@ -88,28 +92,43 @@ def update_staff(
     
     user = get_or_404(db, User, lecturer.user_id, detail="User account not found")
         
+    changed = []
+
     if body.email is not None and body.email != user.email:
         require_email_domain(body.email, "@staff.school.edu", "Staff")
         # Check uniqueness
         ensure_unique(db, User, User.email, body.email, detail="Email already registered")
+        changed.append(f"email {user.email} -> {body.email}")
         user.email = body.email
-        
+
     if body.password is not None and body.password.strip() != "":
         user.password_hash = hash_password(body.password)
-        
-    if body.name is not None:
+        changed.append("password reset")
+
+    if body.name is not None and body.name != lecturer.name:
+        changed.append(f"name {lecturer.name} -> {body.name}")
         lecturer.name = body.name
-        
+
     if body.staff_id is not None and body.staff_id != lecturer.staff_id:
         # Check uniqueness
         ensure_unique(db, Lecturer, Lecturer.staff_id, body.staff_id, detail="Staff ID already exists")
+        changed.append(f"staff_id {lecturer.staff_id} -> {body.staff_id}")
         lecturer.staff_id = body.staff_id
 
     if body.role is not None:
+        if body.role != lecturer.role:
+            changed.append(f"role {lecturer.role} -> {body.role}")
+        # Assigned unconditionally, as before: it also re-syncs user.role when that has
+        # drifted from lecturer.role.
         lecturer.role = body.role
         user.role = "admin" if body.role.lower() == "admin" else "lecturer"
-        
+
     db.commit()
+
+    log_admin_action(db, current_user, "UPDATE_STAFF",
+                     f"Updated staff {lecturer.name} ({lecturer.staff_id}): "
+                     f"{', '.join(changed) if changed else 'no changes'}")
+
     return {"message": "Staff updated successfully", "user_id": user.id}
 
 @router.delete("/staff/{lecturer_id}", response_model=MessageResponse)
@@ -119,9 +138,11 @@ def delete_staff(
     current_user: User = Depends(require_admin)
 ):
     lecturer = get_or_404(db, Lecturer, lecturer_id, detail="Lecturer profile not found")
-    
+
     user_id = lecturer.user_id
-    
+    # Read before the cascade deletes make them unavailable.
+    deleted_desc = f"{lecturer.name} ({lecturer.staff_id})"
+
     # Find all courses for this lecturer
     courses = db.query(Course).filter(Course.lecturer_id == lecturer.id).all()
     for course in courses:
@@ -151,4 +172,8 @@ def delete_staff(
             db.delete(user)
         
     db.commit()
+
+    log_admin_action(db, current_user, "DELETE_STAFF",
+                     f"Deleted staff {deleted_desc}, their courses and all related records")
+
     return {"message": "Lecturer and corresponding account deleted successfully"}

@@ -364,7 +364,7 @@ export const StaffManager: React.FC = () => {
                   >
                     <option value="Lecturer">Lecturer</option>
                     <option value="Tutor">Tutor</option>
-                    <option value="Lecturer, Tutor">Lecturer, Tutor</option>
+                    <option value="Practical">Practical</option>
                   </select>
                   <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                 </div>
@@ -491,7 +491,7 @@ export const StaffManager: React.FC = () => {
                   >
                     <option value="Lecturer">Lecturer</option>
                     <option value="Tutor">Tutor</option>
-                    <option value="Lecturer, Tutor">Lecturer, Tutor</option>
+                    <option value="Practical">Practical</option>
                   </select>
                   <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                 </div>

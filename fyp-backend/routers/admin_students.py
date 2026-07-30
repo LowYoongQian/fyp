@@ -6,6 +6,7 @@ from db.database import get_db
 from db.models import User, Student, Enrolment, FaceEmbedding, AttendanceRecord, RiskScore, Alert
 from utils.security import require_admin, require_lecturer, hash_password
 from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
+from domain.audit import log_admin_action
 from schemas import (
     AdminStudentCreate, AdminStudentUpdate,
     MessageResponse, StudentProgrammeAssign
@@ -86,7 +87,10 @@ def create_student(
     student = Student(user_id=user.id, name=body.name, student_code=body.student_code, is_face_registered=False)
     db.add(student)
     db.commit()
-    
+
+    log_admin_action(db, current_user, "CREATE_STUDENT",
+                     f"Created student {body.name} ({body.student_code})")
+
     return {"message": "Student registered successfully", "user_id": user.id}
 
 @router.put("/students/{student_id}", response_model=MessageResponse)
@@ -97,27 +101,38 @@ def update_student(
     current_user: User = Depends(require_admin)
 ):
     student = get_or_404(db, Student, student_id, detail="Student profile not found")
-    
+
     user = get_or_404(db, User, student.user_id, detail="User account not found")
-        
+
+    changed = []
+
     if body.email is not None and body.email != user.email:
         require_email_domain(body.email, "@student.school.edu", "Student")
         # Check uniqueness
         ensure_unique(db, User, User.email, body.email, detail="Email already registered")
+        changed.append(f"email {user.email} -> {body.email}")
         user.email = body.email
-        
+
     if body.password is not None and body.password.strip() != "":
         user.password_hash = hash_password(body.password)
-        
-    if body.name is not None:
+        changed.append("password reset")
+
+    if body.name is not None and body.name != student.name:
+        changed.append(f"name {student.name} -> {body.name}")
         student.name = body.name
-        
+
     if body.student_code is not None and body.student_code != student.student_code:
         # Check uniqueness
         ensure_unique(db, Student, Student.student_code, body.student_code, detail="Student code already exists")
+        changed.append(f"student_code {student.student_code} -> {body.student_code}")
         student.student_code = body.student_code
-        
+
     db.commit()
+
+    log_admin_action(db, current_user, "UPDATE_STUDENT",
+                     f"Updated student {student.name} ({student.student_code}): "
+                     f"{', '.join(changed) if changed else 'no changes'}")
+
     return {"message": "Student updated successfully", "user_id": user.id}
 
 @router.delete("/students/{student_id}", response_model=MessageResponse)
@@ -127,9 +142,11 @@ def delete_student(
     current_user: User = Depends(require_admin)
 ):
     student = get_or_404(db, Student, student_id, detail="Student profile not found")
-    
+
     user_id = student.user_id
-    
+    # Read before the cascade deletes make them unavailable.
+    deleted_desc = f"{student.name} ({student.student_code})"
+
     # 1. Delete enrolments
     db.query(Enrolment).filter(Enrolment.student_id == student.id).delete()
     # 2. Delete face embedding
@@ -151,4 +168,8 @@ def delete_student(
             db.delete(user)
         
     db.commit()
+
+    log_admin_action(db, current_user, "DELETE_STUDENT",
+                     f"Deleted student {deleted_desc} and all related records")
+
     return {"message": "Student and corresponding account deleted successfully"}
