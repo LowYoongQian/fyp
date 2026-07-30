@@ -51,6 +51,19 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    // FastAPI 422 returns detail as an array of error objects. Rendering that
+    // straight into JSX crashes React ("Objects are not valid as a React child"),
+    // so flatten it to a string before any caller touches it.
+    const detail = error.response?.data?.detail;
+    if (detail && typeof detail !== 'string') {
+      error.response.data.detail = (Array.isArray(detail) ? detail : [detail])
+        .map((d: any) => {
+          if (typeof d === 'string') return d;
+          const field = Array.isArray(d?.loc) ? d.loc.filter((p: any) => p !== 'body').join('.') : '';
+          return field ? `${field}: ${d?.msg ?? ''}` : (d?.msg ?? JSON.stringify(d));
+        })
+        .join('; ');
+    }
     return Promise.reject(error);
   }
 );
