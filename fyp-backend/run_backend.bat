@@ -24,14 +24,20 @@ if not exist "%TMP%" mkdir "%TMP%"
 
 set "PYTHON=%~dp0.venv\Scripts\python.exe"
 set "PAUSE_AFTER=1"
-set "FORWARD_ARGS="
+set "RELOAD=--reload"
 
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--no-pause" (
     set "PAUSE_AFTER="
+) else if /I "%~1"=="--no-reload" (
+    set "RELOAD="
+) else if /I "%~1"=="--reload" (
+    set "RELOAD=--reload"
 ) else (
-    set "FORWARD_ARGS=!FORWARD_ARGS! %~1"
+    echo Unknown option: %~1
+    echo Usage: run_backend.bat [--no-reload] [--no-pause]
+    exit /b 1
 )
 shift
 goto parse_args
@@ -49,6 +55,17 @@ if not exist "%PYTHON%" (
     exit /b 1
 )
 
+REM Port is defined once, in .env (see .env.example). stop_backend.bat reads the
+REM same key, so changing it there is enough.
+set "BACKEND_PORT="
+if exist ".env" (
+    for /f "usebackq tokens=1,* delims==" %%K in (".env") do (
+        if /I "%%K"=="BACKEND_PORT" set "BACKEND_PORT=%%L"
+    )
+)
+if not defined BACKEND_PORT set "BACKEND_PORT=8003"
+set "BACKEND_PORT=!BACKEND_PORT: =!"
+
 REM Schema is owned by Alembic. Procfile/Dockerfile run this before uvicorn; do the
 REM same locally so the app never starts against an un-migrated database.
 "%PYTHON%" -m alembic upgrade head
@@ -59,8 +76,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Use the project interpreter directly so PATH cannot hijack the launcher.
-"%PYTHON%" "%~dp0launch_backend.py" %FORWARD_ARGS%
+echo.
+echo Starting backend on http://127.0.0.1:!BACKEND_PORT!
+if defined RELOAD (echo Reload mode enabled.) else (echo Reload mode disabled.)
+echo Press Ctrl+C to stop. If the port stays busy afterwards, run stop_backend.bat.
+echo.
+
+REM Use the project interpreter directly so PATH cannot hijack it.
+"%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port !BACKEND_PORT! %RELOAD%
 set "APP_EXIT=%ERRORLEVEL%"
 
 echo.

@@ -10,8 +10,9 @@ This folder contains the FastAPI backend for the Smart Attendance System.
 - `requirements.txt` - Python dependencies
 - `setup_backend.bat` - creates/reuses `.venv` and installs requirements
 - `run_backend.bat` - starts the FastAPI server in reload mode by default
-- `stop_backend.bat` - force-stops anything still holding backend port 8000
-- `launch_backend.py` - helper that keeps backend shutdown clean on Windows
+- `stop_backend.bat` - force-stops anything still holding backend port 8003
+- `.env` / `.env.example` - config; `BACKEND_PORT` is the single source of truth
+  for the dev port, read by both `run_backend.bat` and `stop_backend.bat`
 
 ## Requirements
 
@@ -54,13 +55,13 @@ visible instead of closing immediately.
 The API starts on:
 
 ```txt
-http://127.0.0.1:8000
+http://127.0.0.1:8003
 ```
 
 Basic health check:
 
 ```txt
-http://127.0.0.1:8000/
+http://127.0.0.1:8003/
 ```
 
 `run_backend.bat` now starts in reload mode by default, so when you edit
@@ -84,13 +85,13 @@ run_backend.bat
 
 ## Stop the backend
 
-If `8000` gets stuck or you want to close the backend forcefully:
+If `8003` gets stuck or you want to close the backend forcefully:
 
 ```bat
 stop_backend.bat
 ```
 
-This kills the whole process tree that is listening on port `8000`.
+This kills the whole process tree that is listening on port `8003`.
 
 ## Optional no-pause mode
 
@@ -144,7 +145,7 @@ If `run_backend.bat` fails:
 - make sure `GEMINI_API_KEY` is set
 - make sure `JWT_SECRET_KEY` is set
 
-If the backend closes but port `8000` still stays busy:
+If the backend closes but port `8003` still stays busy:
 
 ```bat
 stop_backend.bat
