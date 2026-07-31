@@ -58,8 +58,15 @@ def assign_student_programme(
     current_user: User = Depends(require_admin)
 ):
     student = get_or_404(db, Student, student_id, "Student")
+
+    was = student.programme.code if student.programme else "none"
     student.programme_id = body.programme_id
     db.commit()
+
+    now = student.programme.code if student.programme else "none"
+    log_admin_action(db, current_user, "ASSIGN_STUDENT_PROGRAMME",
+                     f"Programme for {student.student_code}: {was} -> {now}")
+
     return {"message": "Programme assigned to student successfully"}
 
 @router.post("/students", response_model=MessageResponse, status_code=201)

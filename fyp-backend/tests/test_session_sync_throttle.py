@@ -4,9 +4,16 @@ Both properties are the point of the change: an inline sync made one request per
 minute pay ~2s of queries, and dropping the throttle would trade that for a query
 storm instead.
 """
+import os
+import sys
 import time
 
-import domain.session_sync as ss
+# Importable both as `pytest` (pytest.ini sets pythonpath) and as
+# `python tests/test_session_sync_throttle.py`, which gets no such help: the app is
+# laid out as top-level packages, so the backend root has to be on sys.path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import domain.session_sync as ss  # noqa: E402
 
 
 def _reset():

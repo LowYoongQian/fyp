@@ -13,6 +13,8 @@ pydantic==2.7.1
 pydantic-settings==2.2.1
 httpx==0.27.0
 bcrypt==4.1.3
+# Test runner for tests/ (see pytest.ini). Not imported by the app itself.
+pytest==9.1.1
 
 # Face recognition (real embedding extraction + cosine matching)
 # Versions below are the ones actually verified working on Python 3.11 - the

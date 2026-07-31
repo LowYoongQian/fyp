@@ -4,6 +4,7 @@ from typing import List
 from pydantic import BaseModel
 
 from db.database import get_db
+from domain.audit import log_admin_action
 from domain.scheduler import groups_for_course, lecture_meetings, meeting_key_for, pick_slot_for_new
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
@@ -33,6 +34,10 @@ def create_programme(body: ProgrammeCreate, db: Session = Depends(get_db), curre
     db.add(programme)
     db.commit()
     db.refresh(programme)
+
+    log_admin_action(db, current_user, "CREATE_PROGRAMME",
+                     f"Created programme {body.name} ({body.code})")
+
     return programme
 
 @router.put("/programmes/{programme_id}", response_model=ProgrammeResponse)
@@ -41,21 +46,40 @@ def update_programme(programme_id: str, body: ProgrammeCreate, db: Session = Dep
     
     ensure_unique(db, Programme, Programme.code, body.code, exclude_id=programme_id, detail="Programme code already exists")
         
+    changed = []
+    if body.name != programme.name:
+        changed.append(f"name {programme.name} -> {body.name}")
+    if body.code != programme.code:
+        changed.append(f"code {programme.code} -> {body.code}")
+
     programme.name = body.name
     programme.code = body.code
     db.commit()
     db.refresh(programme)
+
+    log_admin_action(db, current_user, "UPDATE_PROGRAMME",
+                     f"Updated programme {programme.code}: "
+                     f"{', '.join(changed) if changed else 'no changes'}")
+
     return programme
 
 @router.delete("/programmes/{programme_id}", response_model=MessageResponse)
 def delete_programme(programme_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     programme = get_or_404(db, Programme, programme_id, "Programme")
-        
-    db.query(Student).filter(Student.programme_id == programme_id).update({Student.programme_id: None})
-    db.query(Course).filter(Course.programme_id == programme_id).update({Course.programme_id: None})
-    
+
+    # Read before the delete makes them unavailable.
+    deleted_desc = f"{programme.name} ({programme.code})"
+
+    detached_students = db.query(Student).filter(Student.programme_id == programme_id).update({Student.programme_id: None})
+    detached_courses = db.query(Course).filter(Course.programme_id == programme_id).update({Course.programme_id: None})
+
     db.delete(programme)
     db.commit()
+
+    log_admin_action(db, current_user, "DELETE_PROGRAMME",
+                     f"Deleted programme {deleted_desc}; detached "
+                     f"{detached_students} student(s) and {detached_courses} course(s)")
+
     return {"message": "Programme deleted successfully"}
 
 
@@ -129,6 +153,11 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
 
     db.commit()
     db.refresh(course)
+
+    log_admin_action(db, current_user, "CREATE_COURSE",
+                     f"Created course {body.course_name} ({body.course_code}), "
+                     f"lecture {slot['day']} {slot['start']}-{slot['end']} in {slot['room']}")
+
     return course
 
 @router.put("/courses/{course_id}", response_model=CourseResponse)
@@ -144,6 +173,16 @@ def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_
     if body.programme_id is not None and \
        not db.query(Programme).filter(Programme.id == body.programme_id).first():
         raise HTTPException(status_code=400, detail="Selected programme does not exist")
+
+    changed = []
+    for field, new in (
+        ("course_name", body.course_name), ("course_code", body.course_code),
+        ("credit_hours", body.credit_hours), ("lecturer_id", body.lecturer_id),
+        ("programme_id", body.programme_id),
+    ):
+        old = getattr(course, field)
+        if old != new:
+            changed.append(f"{field} {old} -> {new}")
 
     course.course_name = body.course_name
     course.course_code = body.course_code
@@ -165,23 +204,36 @@ def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_
 
     db.commit()
     db.refresh(course)
+
+    log_admin_action(db, current_user, "UPDATE_COURSE",
+                     f"Updated course {course.course_code}: "
+                     f"{', '.join(changed) if changed else 'no changes'}")
+
     return course
 
 @router.delete("/courses/{course_id}", response_model=MessageResponse)
 def delete_course(course_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     course = get_or_404(db, Course, course_id, "Course")
-        
-    db.query(Enrolment).filter(Enrolment.course_id == course_id).delete()
+
+    # Read before the cascade deletes make them unavailable.
+    deleted_desc = f"{course.course_name} ({course.course_code})"
+
+    dropped_enrolments = db.query(Enrolment).filter(Enrolment.course_id == course_id).delete()
     db.query(RiskScore).filter(RiskScore.course_id == course_id).delete()
     db.query(Alert).filter(Alert.course_id == course_id).delete()
-    
+
     sessions = db.query(ClassSession).filter(ClassSession.course_id == course_id).all()
     for s in sessions:
         db.query(AttendanceRecord).filter(AttendanceRecord.session_id == s.id).delete()
         db.delete(s)
-        
+
     db.delete(course)
     db.commit()
+
+    log_admin_action(db, current_user, "DELETE_COURSE",
+                     f"Deleted course {deleted_desc}, {dropped_enrolments} enrolment(s), "
+                     f"{len(sessions)} session(s) and all related records")
+
     return {"message": "Course deleted successfully"}
 
 
@@ -250,13 +302,32 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
 
     db.commit()
     db.refresh(assignment)
+
+    # Names, not ids: an audit trail of raw UUIDs cannot be read back later.
+    course = db.query(Course).filter(Course.id == body.course_id).first()
+    lecturer = db.query(Lecturer).filter(Lecturer.id == body.lecturer_id).first()
+    log_admin_action(db, current_user, "CREATE_ASSIGNMENT",
+                     f"Assigned {lecturer.name if lecturer else body.lecturer_id} as {body.role} "
+                     f"for {course.course_code if course else body.course_id}")
+
     return assignment
 
 @router.delete("/assignments/{assignment_id}", response_model=MessageResponse)
 def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     assignment = get_or_404(db, CourseStaffAssignment, assignment_id, "Assignment")
+
+    # Read before the delete makes the relationships unavailable.
+    deleted_desc = (
+        f"{assignment.lecturer.name if assignment.lecturer else assignment.lecturer_id} as "
+        f"{assignment.role} for "
+        f"{assignment.course.course_code if assignment.course else assignment.course_id}"
+    )
+
     db.delete(assignment)
     db.commit()
+
+    log_admin_action(db, current_user, "DELETE_ASSIGNMENT", f"Unassigned {deleted_desc}")
+
     return {"message": "Assignment deleted successfully"}
 
 
@@ -338,8 +409,17 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
             raise HTTPException(status_code=400,
                 detail=f"{o.role} for {who} is already scheduled on {body.day} during {o.start}-{o.end}")
 
+    was = f"{meeting.day} {meeting.start}-{meeting.end} in {meeting.room}"
+    course_code = meeting.course.course_code if meeting.course else meeting.course_id
+
     meeting.day, meeting.start, meeting.end, meeting.room = body.day, body.start, body.end, body.room
     db.commit()
+
+    log_admin_action(db, current_user, "UPDATE_TIMETABLE",
+                     f"Moved {meeting.role} for {course_code}"
+                     f"{f' {meeting.class_group}' if meeting.class_group else ''}: "
+                     f"{was} -> {body.day} {body.start}-{body.end} in {body.room}")
+
     return {"message": "Timetable slot updated successfully"}
 
 
@@ -401,11 +481,30 @@ def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: Us
     )
     db.add(enrol)
     db.commit()
+
+    student = db.query(Student).filter(Student.id == student_id).first()
+    course = db.query(Course).filter(Course.id == course_id).first()
+    log_admin_action(db, current_user, "CREATE_ENROLMENT",
+                     f"Enrolled {student.student_code if student else student_id} in "
+                     f"{course.course_code if course else course_id} "
+                     f"({class_group}, {semester})")
+
     return {"message": "Student successfully enrolled"}
 
 @router.delete("/enrolments/{enrolment_id}", response_model=MessageResponse)
 def delete_enrolment(enrolment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     enrol = get_or_404(db, Enrolment, enrolment_id, "Enrolment")
+
+    # Read before the delete makes the relationships unavailable.
+    deleted_desc = (
+        f"{enrol.student.student_code if enrol.student else enrol.student_id} from "
+        f"{enrol.course.course_code if enrol.course else enrol.course_id} "
+        f"({enrol.class_group})"
+    )
+
     db.delete(enrol)
     db.commit()
+
+    log_admin_action(db, current_user, "DELETE_ENROLMENT", f"Unenrolled {deleted_desc}")
+
     return {"message": "Enrolment deleted successfully"}

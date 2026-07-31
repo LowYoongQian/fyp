@@ -1,15 +1,25 @@
 """Runnable regression checks for the 2026-07-29 backend fixes.
 
-Run:  python test_backend_fixes.py     (from fyp-backend/, with .venv active)
+Run:  python tests/test_backend_fixes.py   (from fyp-backend/, with .venv active)
 
 These are deliberately narrow. Each assert corresponds to a defect that was
 live in the working tree on 2026-07-29 and would silently come back if someone
 re-applied the change that caused it. No framework, no fixtures — the DB-backed
 checks are skipped automatically when no database is reachable.
+
+Deliberately NOT collected by pytest (pytest.ini restricts collection to test_*):
+the check_* functions below run against the real DATABASE_URL, and one probes a
+UNIQUE constraint with an INSERT inside a nested transaction it rolls back. Those
+belong behind an explicit invocation, not a bare `pytest`.
 """
+import os
 import sys
 
-from fastapi.testclient import TestClient
+# Also runnable directly from fyp-backend/, which puts tests/ on sys.path rather than
+# the backend root the app's top-level packages need.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from fastapi.testclient import TestClient  # noqa: E402
 
 
 def check_model_fields():
