@@ -9,12 +9,15 @@ use, never silently skipped: a check-in that quietly bypassed face matching woul
 attendance nobody verified.
 """
 import base64
+import logging
 import math
 import struct
 
 import cv2
 import numpy as np
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 
 # Try to import deepface; fall back gracefully so the app runs without it.
@@ -57,6 +60,16 @@ def _extract_face_embedding(image_base64: str, enforce_detection: bool = True) -
     except HTTPException:
         raise
     except Exception as e:
+        # This one except covers four unrelated failures - no face found by the
+        # detector, undecodable bytes, a TensorFlow/Keras error, and OOM - and
+        # collapses them into the same 400. Without this log the only copy of the
+        # reason is the response body, so a client that drops it (the Flutter
+        # registration screen did) leaves no record anywhere. Log before raising:
+        # a 400 whose cause is unknowable server-side is not a handled error.
+        logger.exception(
+            "Face embedding extraction failed (enforce_detection=%s, bytes=%d)",
+            enforce_detection, len(image_base64),
+        )
         raise HTTPException(
             status_code=400,
             detail=f"Face embedding extraction failed: {e}. Ensure a clear face is visible in the image."

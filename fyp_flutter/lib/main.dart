@@ -873,13 +873,23 @@ class _AppRootState extends State<AppRoot> {
   }
 
   // Register facial signature via the backend (no direct DB).
-  Future<void> registerFace(BuildContext context) async {
+  //
+  // The parameter is `_` on purpose: `context` below must resolve to the State's
+  // own (alive while mounted), and both the parameter and the MaterialPageRoute
+  // builder used to shadow it. FaceScannerScreen fires
+  // onScanComplete without awaiting it and pops itself immediately, so a builder
+  // context would already be deactivated by the time the ~2.5s POST returns:
+  // showDialog on it throws "deactivated widget's ancestor", and because that
+  // throw happens inside the catch block it surfaced nowhere. A backend 400 then
+  // looked to the student like the scan simply did nothing.
+  Future<void> registerFace(BuildContext _) async {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => FaceScannerScreen(
+        builder: (_) => FaceScannerScreen(
           title: "Face Registration",
           onScanComplete: (imageBase64, livenessPassed, {int? challengeMs}) async {
+            if (!mounted) return;
             if (imageBase64 == null || imageBase64.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
@@ -923,8 +933,8 @@ class _AppRootState extends State<AppRoot> {
                 throw Exception(_detailOf(response, 'Face registration failed (${response.statusCode}).'));
               }
 
-              setState(() => isFaceRegistered = true);
               if (!mounted) return;
+              setState(() => isFaceRegistered = true);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text("Face registration completed successfully!"),
@@ -932,7 +942,7 @@ class _AppRootState extends State<AppRoot> {
                 ),
               );
             } catch (e) {
-              showErrorDialog(_friendlyError(e), context);
+              if (mounted) showErrorDialog(_friendlyError(e), context);
             } finally {
               if (mounted) setState(() => isSyncing = false);
             }
