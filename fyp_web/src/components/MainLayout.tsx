@@ -97,6 +97,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         { id: 'admin_students', label: t('admin.studentsManager', 'en'), icon: Users },
         { id: 'admin_staff', label: t('admin.staffManager', 'en'), icon: Briefcase },
         { id: 'admin_academic', label: t('admin.academicManager', 'en'), icon: BookOpen },
+        { id: 'admin_timetable', label: t('common.timetable', 'en'), icon: Calendar },
         { id: 'admin_attendance', label: t('common.attendance', 'en'), icon: UserCheck },
         { id: 'admin_network', label: t('admin.networkSecurity', 'en'), icon: ShieldAlert },
         { id: 'admin_announcements', label: t('admin.announcements', 'en'), icon: Megaphone },

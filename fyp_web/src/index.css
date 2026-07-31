@@ -356,6 +356,89 @@ body.swal2-toast-shown .swal2-container {
   -webkit-backdrop-filter: none !important;
 }
 
+/* Toasts slide in from the edge they are anchored to. SweetAlert2's default is a
+   centre scale-up, which reads as a modal demanding attention rather than a
+   passive notification. */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(28px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(28px) scale(0.96);
+  }
+}
+.toast-in {
+  animation: toast-in 0.28s cubic-bezier(0.21, 1.02, 0.73, 1) both;
+}
+.toast-out {
+  animation: toast-out 0.18s ease-in both;
+}
+
+/* The default timer bar is a full-width block on the very edge. Inset it and
+   thin it down so it reads as progress, not as part of the border. */
+.swal2-toast .swal2-timer-progress-bar-container {
+  height: 2px !important;
+  inset: auto 10px 4px 10px !important;
+  width: auto !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  overflow: hidden;
+}
+.swal2-toast .swal2-timer-progress-bar {
+  border-radius: 999px !important;
+  background: var(--toast-accent, #94a3b8) !important;
+}
+
+/* The stock icon is a thick ring with a stroke-drawing animation inside it — the
+   single most dated part of the toast. swalSuccess/swalInfo replace the glyph via
+   iconHtml, so here the ring itself is removed and the box sized to the glyph. */
+.swal2-toast .swal2-icon {
+  width: 1.375rem !important;
+  min-width: 1.375rem !important;
+  height: 1.375rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  margin: 0 0.625rem 0 0 !important;
+  animation: none !important;
+}
+.swal2-toast .swal2-icon .swal2-icon-content {
+  font-size: 0 !important;
+  line-height: 0 !important;
+}
+/* The ring and the two stroke segments are separate children, so zeroing the
+   container's own border does not remove them. */
+.swal2-toast .swal2-success-ring,
+.swal2-toast .swal2-icon [class^='swal2-success-line'] {
+  display: none !important;
+}
+.toast-success {
+  --toast-accent: #059669;
+}
+.toast-info {
+  --toast-accent: #2563eb;
+}
+.swal2-toast .toast-glyph {
+  display: block;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 999px;
+  background: var(--toast-accent, #94a3b8);
+  color: #fff;
+  padding: 0.25rem;
+}
+
 /* Hide scrollbars */
 .no-scrollbar::-webkit-scrollbar {
   display: none;

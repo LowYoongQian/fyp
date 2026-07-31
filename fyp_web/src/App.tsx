@@ -124,6 +124,7 @@ const DashboardContent: React.FC = () => {
           return <ShimmerDashboard />;
         case 'timetable':
         case 'student_timetable':
+        case 'admin_timetable':
           return <ShimmerTimetable />;
         case 'attendance':
           return <ShimmerAttendance />;
@@ -169,6 +170,7 @@ const DashboardContent: React.FC = () => {
       case 'student_dashboard':
         return <StudentDashboard />;
       case 'student_timetable':
+      case 'admin_timetable':
         return <Timetable />;
       case 'student_mc':
         return <StudentMC />;

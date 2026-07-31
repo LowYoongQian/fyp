@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, MapPin, ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { useDialog } from '../../context/DialogContext';
+import { swalError, swalSuccess } from '../../utils/swal';
 import type { Course } from '../../services/api';
 
 const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) => {
@@ -67,8 +68,48 @@ interface TimetableEvent {
   type: 'normal' | 'replacement' | 'clashed';
 }
 
+const DAY_NAMES: TimetableEvent['day'][] =
+  ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+// GET /admin/timetable has no ORDER BY, and Postgres moves an updated row to the
+// end of the heap — so the edited row jumped to the bottom of the table and the
+// old position showed a DIFFERENT row, reading as "my edit did not apply".
+// Display order is a display concern, so it is decided here, not by the scan order.
+const byDayThenStart = (a: TimetableEvent, b: TimetableEvent) =>
+  DAY_NAMES.indexOf(a.day) - DAY_NAMES.indexOf(b.day) ||
+  a.startTime.localeCompare(b.startTime);
+
 const SEMESTER_START = new Date('2026-06-15T00:00:00');
 const SEMESTER_END = new Date('2026-09-20T23:59:59');
+
+// The grid only covers the teaching day, 08:00–22:00 (14 one-hour columns).
+const GRID_START_HOUR = 8;
+const GRID_END_HOUR = 22;
+const WINDOW_START = GRID_START_HOUR * 60;
+const WINDOW_END = GRID_END_HOUR * 60;
+
+const toMinutes = (t?: string | null): number => {
+  const [h, m] = (t || '').split(':').map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+};
+
+const TIME_SLOTS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => {
+  const h = GRID_START_HOUR + i;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return { start: `${pad(h)}:00`, end: `${pad(h + 1)}:00` };
+});
+
+// One shared column definition — the header and the day rows must not drift
+// apart. minmax(0,1fr) lets the 14 hours shrink to fit the viewport, so a
+// desktop needs no horizontal scrollbar. Narrower than GRID_MIN_W the shrinking
+// is capped instead (see GRID_MIN_W) and the wrapper scrolls.
+const GRID_COLS = 'grid grid-cols-[76px_repeat(14,_minmax(0,1fr))]';
+
+// 14 hours plus the day label cannot be legible on a phone: at 375px each hour
+// would get ~21px. Below lg the grid keeps this width and its wrapper scrolls;
+// from lg up the cap is released so the grid still fits the viewport exactly.
+const GRID_MIN_W = 'min-w-[1000px] lg:min-w-0';
 
 const formatDate = (date: Date): string => {
   const y = date.getFullYear();
@@ -112,9 +153,11 @@ export const Timetable: React.FC = () => {
       await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
       setEditing(null);
       await loadTimetable();
-      await customAlert('Timetable slot updated.', 'Saved');
+      // Toast, not a modal alert: the alert blocked the thread on a click before
+      // the user could see the table it was reporting on.
+      swalSuccess('Timetable slot updated', `${editForm.day} ${editForm.start}-${editForm.end}`);
     } catch (err: any) {
-      await customAlert(err.response?.data?.detail || 'Failed to update slot.', 'Error');
+      swalError('Failed to update slot', err.response?.data?.detail || 'Please try again.');
     } finally {
       setSaving(false);
     }
@@ -181,7 +224,7 @@ export const Timetable: React.FC = () => {
         }));
       }
 
-      setEvents(mappedEvents);
+      setEvents(mappedEvents.sort(byDayThenStart));
     } catch (err) {
       console.error("Failed to load timetable events:", err);
     } finally {
@@ -190,17 +233,14 @@ export const Timetable: React.FC = () => {
   };
 
   const getDaysForWeek = (weekNum: number) => {
-    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    
-    return dayNames.map((name, index) => {
+    return DAY_NAMES.map((name, index) => {
       const dateOfCurrentDay = new Date(SEMESTER_START);
       dateOfCurrentDay.setDate(SEMESTER_START.getDate() + (weekNum - 1) * 7 + index);
       const dateStr = formatDate(dateOfCurrentDay);
       
       const dayObj: { name: string; label: string; date: string; holiday?: string } = {
         name,
-        label: labels[index],
+        label: DAY_LABELS[index],
         date: dateStr
       };
       
@@ -287,40 +327,41 @@ export const Timetable: React.FC = () => {
     return Object.values(groups);
   }, [studentCourses, user]);
 
-  const timeSlots = [
-    { start: '08:00', end: '09:00', topLabel: '08:00', bottomLabel: '09:00' },
-    { start: '09:00', end: '10:00', topLabel: '09:00', bottomLabel: '10:00' },
-    { start: '10:00', end: '11:00', topLabel: '10:00', bottomLabel: '11:00' },
-    { start: '11:00', end: '12:00', topLabel: '11:00', bottomLabel: '12:00' },
-    { start: '12:00', end: '13:00', topLabel: '12:00', bottomLabel: '01:00' },
-    { start: '13:00', end: '14:00', topLabel: '01:00', bottomLabel: '02:00' },
-    { start: '14:00', end: '15:00', topLabel: '02:00', bottomLabel: '03:00' },
-    { start: '15:00', end: '16:00', topLabel: '03:00', bottomLabel: '04:00' },
-    { start: '16:00', end: '17:00', topLabel: '04:00', bottomLabel: '05:00' },
-    { start: '17:00', end: '18:00', topLabel: '05:00', bottomLabel: '06:00' },
-    { start: '18:00', end: '19:00', topLabel: '06:00', bottomLabel: '07:00' },
-    { start: '19:00', end: '20:00', topLabel: '07:00', bottomLabel: '08:00' },
-    { start: '20:00', end: '21:00', topLabel: '08:00', bottomLabel: '09:00' },
-    { start: '21:00', end: '22:00', topLabel: '09:00', bottomLabel: '10:00' }
-  ];
+  const timeSlots = TIME_SLOTS;
 
+  // Which columns this class occupies. Bounded to the grid it renders into: an
+  // unbounded value produced a NEGATIVE grid line, and CSS counts those back
+  // from the END of the row, so a 02:00 class landed on top of the 18:00 one.
+  // The 08:00–22:00 window itself is enforced on the write path
+  // (PUT /admin/timetable), so this bound only ever catches a violated invariant.
   const getGridPlacement = (startTime: string, endTime: string) => {
-    const startHour = parseInt(startTime.split(':')[0]);
-    const startMin = parseInt(startTime.split(':')[1]);
-    const endHour = parseInt(endTime.split(':')[0]);
-    const endMin = parseInt(endTime.split(':')[1]);
-
-    const startIndex = (startHour - 8) + (startMin / 60);
-    const endIndex = (endHour - 8) + (endMin / 60);
-
-    const gridStart = Math.round(startIndex) + 2;
-    const gridSpan = Math.round(endIndex - startIndex);
-
-    return { gridStart, gridSpan };
+    const start = Math.min(Math.max(toMinutes(startTime), WINDOW_START), WINDOW_END - 60);
+    const end = Math.min(Math.max(toMinutes(endTime), start + 60), WINDOW_END);
+    return {
+      gridStart: Math.round((start - WINDOW_START) / 60) + 2,
+      gridSpan: Math.max(1, Math.round((end - start) / 60))
+    };
   };
 
   const getEventsForDay = (dayName: string) => {
     return events.filter(e => e.day === dayName);
+  };
+
+  // Overlapping classes get their own lane (sub-row) so neither is hidden behind
+  // the other. Lanes are packed left to right: an event reuses the first lane
+  // whose previous event has already ended.
+  const layoutDayEvents = (dayEvents: TimetableEvent[]) => {
+    const lanes: number[] = [];
+    const placed = dayEvents
+      .map(ev => ({ ev, ...getGridPlacement(ev.startTime, ev.endTime) }))
+      .sort((a, b) => a.gridStart - b.gridStart || a.gridSpan - b.gridSpan)
+      .map(p => {
+        let lane = lanes.findIndex(freeFrom => freeFrom <= p.gridStart);
+        if (lane === -1) lane = lanes.length;
+        lanes[lane] = p.gridStart + p.gridSpan;
+        return { ...p, lane };
+      });
+    return { placed, laneCount: Math.max(1, lanes.length) };
   };
 
   const getEventStyles = (type: 'normal' | 'replacement' | 'clashed') => {
@@ -458,28 +499,28 @@ export const Timetable: React.FC = () => {
           </div>
         ) : (
           <div className="uipro-card bg-white/75 p-5 border border-slate-200 shadow-premium">
-            <div className="overflow-x-auto">
-              <div className="min-w-[1280px] rounded-xl border border-slate-150 overflow-hidden">
+            <div className="w-full overflow-x-auto">
+              <div className={`w-full ${GRID_MIN_W} rounded-xl border border-slate-150 overflow-hidden`}>
               {/* Swapped Timetable Grid Layout */}
-              <div className="grid grid-cols-[120px_repeat(14,_minmax(80px,_1fr))] border-b border-slate-200 bg-slate-50 text-center text-xs font-bold text-slate-600">
-                
+              <div className={`${GRID_COLS} border-b border-slate-200 bg-slate-50 text-center text-xs font-bold text-slate-600`}>
+
                 {/* Top Left Day/Time Cell */}
-                <div className="row-span-2 border-r border-b border-slate-200 flex flex-col items-center justify-center p-3 text-[11px] font-bold text-slate-450 uppercase tracking-wider leading-tight">
+                <div className="row-span-2 border-r border-b border-slate-200 flex flex-col items-center justify-center p-2 text-[10px] font-bold text-slate-450 uppercase tracking-wider leading-tight">
                   <div>Day /</div>
                   <div>Time</div>
                 </div>
 
-                {/* Top Row Time Slots */}
+                {/* Top Row Time Slots — 24-hour, so 12:00 is followed by 13:00 */}
                 {timeSlots.map((slot, idx) => (
-                  <div key={idx} className="py-2 border-r border-slate-200/70 border-b border-slate-100/50 flex items-center justify-center font-mono">
-                    {slot.topLabel}
+                  <div key={idx} className="py-1.5 border-r border-slate-200/70 border-b border-slate-100/50 flex items-center justify-center font-mono text-[10px]">
+                    {slot.start}
                   </div>
                 ))}
 
                 {/* Bottom Row Time Slots */}
                 {timeSlots.map((slot, idx) => (
-                  <div key={idx} className="py-2 border-r border-slate-200/70 border-b border-slate-200 flex items-center justify-center font-mono">
-                    {slot.bottomLabel}
+                  <div key={idx} className="py-1.5 border-r border-slate-200/70 border-b border-slate-200 flex items-center justify-center font-mono text-[10px] text-slate-400">
+                    {slot.end}
                   </div>
                 ))}
               </div>
@@ -487,36 +528,37 @@ export const Timetable: React.FC = () => {
               {/* Timetable Rows (Days of the week) */}
               <div className="divide-y divide-slate-200 bg-white">
                 {days.map((day) => {
-                  const dayEvents = getEventsForDay(day.name);
+                  const { placed, laneCount } = layoutDayEvents(getEventsForDay(day.name));
                   return (
                     <div
                       key={day.name}
-                      className="grid grid-cols-[120px_repeat(14,_minmax(80px,_1fr))] min-h-[110px] relative"
+                      className={`${GRID_COLS} relative`}
+                      style={{ gridAutoRows: 'minmax(132px, auto)' }}
                     >
                       {/* Left Column Day Label */}
-                      <div 
+                      <div
                         style={{
                           gridColumnStart: 1,
-                          gridRow: 1,
+                          gridRow: `1 / span ${laneCount}`,
                         }}
-                        className="border-r border-slate-200 bg-slate-50/50 px-3 py-4 flex flex-col items-center justify-center text-center"
+                        className="border-r border-slate-200 bg-slate-50/50 px-1.5 py-3 flex flex-col items-center justify-center text-center"
                       >
                         <span className="font-extrabold text-slate-800 text-sm leading-tight">{day.label}</span>
-                        <span className="text-[10px] text-slate-450 font-semibold font-sans tracking-wide mt-0.5">{day.date}</span>
+                        <span className="text-[9px] text-slate-450 font-semibold font-sans tracking-tight mt-0.5">{day.date}</span>
                         {day.holiday && (
-                          <span className="text-[9px] font-bold text-red-500 uppercase tracking-wide leading-tight mt-1 animate-pulse">
+                          <span className="text-[8px] font-bold text-red-500 uppercase tracking-tight leading-tight mt-1 animate-pulse">
                             {day.holiday}
                           </span>
                         )}
                       </div>
 
-                      {/* 14 Background Empty Slots */}
+                      {/* 14 Background Empty Slots, spanning every lane of the day */}
                       {timeSlots.map((_, i) => (
                         <div
                           key={i}
                           style={{
                             gridColumnStart: i + 2,
-                            gridRow: 1,
+                            gridRow: `1 / span ${laneCount}`,
                           }}
                           className={`border-r border-slate-150/45 ${
                             day.holiday ? 'bg-red-500/[0.015]' : ''
@@ -524,50 +566,43 @@ export const Timetable: React.FC = () => {
                         />
                       ))}
 
-                      {/* Rendered Events Overlaid on the grid row */}
-                      {dayEvents.map((event) => {
-                        const { gridStart, gridSpan } = getGridPlacement(event.startTime, event.endTime);
+                      {/* Events. Overlapping ones sit in separate lanes, so none is hidden. */}
+                      {placed.map(({ ev: event, gridStart, gridSpan, lane }) => {
                         return (
                           <div
                             key={event.id}
                             style={{
                               gridColumnStart: gridStart,
                               gridColumnEnd: `span ${gridSpan}`,
-                              gridRow: 1,
+                              gridRow: lane + 1,
                               zIndex: 10,
                             }}
-                            className="p-1.5 h-full"
+                            className="p-0.5 h-full"
                           >
                             <div
-                              className={`h-full rounded-lg border p-2.5 flex flex-col justify-between transition-all duration-200 cursor-pointer shadow-sm select-none ${getEventStyles(event.type)}`}
+                              className={`h-full rounded-md border px-1 py-1 flex flex-col justify-between gap-1 transition-all duration-200 cursor-pointer shadow-sm select-none ${getEventStyles(event.type)}`}
                             >
-                              <div className="space-y-1">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[9px] font-black font-mono tracking-wider opacity-90">
-                                    {event.courseCode} ({event.group === 'Replacement' ? 'R' : event.group.charAt(0)})
-                                  </span>
-                                  <span className="text-[8px] font-extrabold uppercase px-1.5 py-0.2 bg-white/25 border border-white/10 rounded-full scale-90">
-                                    {event.group}
-                                  </span>
+                              <div className="space-y-0.5">
+                                {/* The code already carries the type in "(P)", so a PRACTICAL
+                                    badge beside it spent half the line width on the same fact. */}
+                                <div className="text-[9px] font-black font-mono tracking-wider opacity-90">
+                                  {event.courseCode} ({event.group === 'Replacement' ? 'R' : event.group.charAt(0)})
                                 </div>
-                                <h4 className="text-[10.5px] font-extrabold line-clamp-2 leading-snug text-white">
+                                {/* No line-clamp: a clamp is an upper bound, so the row could
+                                    never grow to fit the name. gridAutoRows is minmax(_, auto),
+                                    so letting the name wrap makes the row taller instead. */}
+                                <h4 className="text-[10.5px] font-extrabold leading-snug text-white break-words">
                                   {event.courseName}
                                 </h4>
                               </div>
 
-                              <div className="space-y-0.5 mt-2">
-                                <div className="flex items-center gap-1 text-[8.5px] opacity-90 font-medium">
-                                  <Clock className="h-3 w-3 shrink-0" />
-                                  <span>{event.startTime} - {event.endTime}</span>
-                                </div>
-                                <div className="flex items-center justify-between text-[8.5px] opacity-90 font-medium pt-0.5 border-t border-white/10">
-                                  <span className="flex items-center gap-1 truncate">
-                                    <MapPin className="h-3 w-3 shrink-0" />
-                                    <span className="truncate">{event.room}</span>
-                                  </span>
-                                  <span className="truncate max-w-[85px] font-semibold text-[8px] tracking-wide text-right">
-                                    {event.lecturerName.split(' ').slice(1).join(' ')}
-                                  </span>
+                              {/* One field per line. Sharing a line halved an already ~60px
+                                  column, which is what cut "Theatre 2" down to "Theatr...". */}
+                              <div className="space-y-0.5 text-[8.5px] opacity-90 font-medium pt-0.5 border-t border-white/10">
+                                <div className="font-mono">{event.startTime} - {event.endTime}</div>
+                                <div className="truncate">{event.room}</div>
+                                <div className="truncate font-semibold">
+                                  {event.lecturerName.split(' ').slice(1).join(' ')}
                                 </div>
                               </div>
                             </div>
@@ -734,12 +769,14 @@ export const Timetable: React.FC = () => {
               <div className="flex gap-3">
                 <label className="flex-1">
                   <span className="text-xs font-bold text-slate-500 uppercase">Start</span>
-                  <input type="time" value={editForm.start} onChange={e => setEditForm({ ...editForm, start: e.target.value })}
+                  <input type="time" min="08:00" max="21:00" value={editForm.start}
+                    onChange={e => setEditForm({ ...editForm, start: e.target.value })}
                     className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
                 </label>
                 <label className="flex-1">
                   <span className="text-xs font-bold text-slate-500 uppercase">End</span>
-                  <input type="time" value={editForm.end} onChange={e => setEditForm({ ...editForm, end: e.target.value })}
+                  <input type="time" min="09:00" max="22:00" value={editForm.end}
+                    onChange={e => setEditForm({ ...editForm, end: e.target.value })}
                     className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
                 </label>
               </div>

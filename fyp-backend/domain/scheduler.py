@@ -26,6 +26,17 @@ TIMES = [
 ROOMS = ["Theatre 1", "Theatre 2", "Lab 1", "Lab 2", "Lab 3", "Seminar Room 1", "Seminar Room 2"]
 
 
+def _hhmm_to_min(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+# The teaching day, derived from TIMES so a manual edit cannot land outside the
+# range the generator uses and the timetable grid draws.
+DAY_START_MIN = _hhmm_to_min(TIMES[0][0])
+DAY_END_MIN = _hhmm_to_min(TIMES[-1][1])
+
+
 def meeting_key_for(role: str, course_id, assignment_id, class_group=None) -> str:
     """The lookup key callers build: "Lecture-<course_id>" for a course lecture,
     "<role>-<assignment_id>-<class_group>" for a Tutor/Practical staff assignment.

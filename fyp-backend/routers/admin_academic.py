@@ -5,7 +5,8 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from domain.audit import log_admin_action
-from domain.scheduler import groups_for_course, lecture_meetings, meeting_key_for, pick_slot_for_new
+from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, groups_for_course,
+                              lecture_meetings, meeting_key_for, pick_slot_for_new)
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
@@ -381,6 +382,14 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     new_start, new_end = _to_min(body.start), _to_min(body.end)
     if new_start >= new_end:
         raise HTTPException(status_code=400, detail="Start time must be before end time")
+
+    # The teaching day the generator allocates in, and the only range the
+    # timetable grid can draw. Accepting 02:00 here put a class where no UI can
+    # show it. Only the NEW values are checked — an already-stored out-of-range
+    # row must stay editable so an admin can move it back in.
+    if new_start < DAY_START_MIN or new_end > DAY_END_MIN:
+        raise HTTPException(status_code=400,
+            detail=f"Class times must fall within the {TIMES[0][0]}-{TIMES[-1][1]} teaching day")
 
     # Clash check against every OTHER meeting on the same day. Two classes clash
     # when their time ranges OVERLAP (not just when identical): [a,b) overlaps
