@@ -621,27 +621,28 @@ export const LecturerDashboard: React.FC = () => {
               Overall Class Performance
             </h4>
             <div className="flex flex-col items-center justify-center p-2 mt-4">
-              <div className="relative w-36 h-20 overflow-hidden">
-                <svg className="w-full h-full transform translate-y-2">
+              <div className="relative w-36 h-20">
+                {/* semicircle: chord 120 => radius 60, arc length = PI * 60 */}
+                <svg className="w-full h-full" viewBox="0 0 140 80">
                   <path
-                    d="M 10 70 A 35 35 0 0 1 130 70"
+                    d="M 10 72 A 60 60 0 0 1 130 72"
                     fill="none"
                     stroke="#E2E8F0"
                     strokeWidth={8}
                     strokeLinecap="round"
                   />
                   <path
-                    d="M 10 70 A 35 35 0 0 1 130 70"
+                    d="M 10 72 A 60 60 0 0 1 130 72"
                     fill="none"
                     stroke="#3B82F6"
                     strokeWidth={8}
-                    strokeDasharray={109.95}
-                    strokeDashoffset={109.95 - (displayRate / 100) * 109.95}
+                    strokeDasharray={188.5}
+                    strokeDashoffset={188.5 * (1 - displayRate / 100)}
                     strokeLinecap="round"
                     className="transition-all duration-500 ease-out"
                   />
                 </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
+                <div className="absolute inset-0 flex flex-col items-center justify-end pb-2">
                   <span className="text-xl font-display font-extrabold text-slate-800">
                     {(displayRate / 10).toFixed(1)}
                   </span>
