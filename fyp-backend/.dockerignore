@@ -1,24 +1,36 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# Context here is fyp-backend/ itself (see fyp-backend/Dockerfile). The root
+# .dockerignore covers the whole-repo context separately.
+#
+# `**/` prefixes are load-bearing: a bare `__pycache__/` or `*.pyc` only matches
+# the context root, so the nested ones shipped anyway.
+**/__pycache__
+**/*.py[cod]
 
 .venv
 venv
 env
+.cache
+.pytest_cache
 
 .git
 .gitignore
 
+# Secrets: .env is untracked and holds DATABASE_URL / JWT_SECRET_KEY / GEMINI_API_KEY.
+# .env.example does not match either pattern, so it still ships.
 .env
 *.env
 
 .idea
 .vscode
 
-*.db
-*.sqlite3
+**/*.db
+**/*.sqlite3
 
-node_modules
-dist
-build
+# Not needed at runtime.
+tests
+*.bat
+Dockerfile
+.dockerignore
+README.md
+
+# Kept on purpose: ml/risk_model.pkl (analytics.py loads it), languages.json, alembic/.

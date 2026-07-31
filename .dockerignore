@@ -1,24 +1,26 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# The root build context is the whole repo, but the image only ships fyp-backend
+# (see Dockerfile). Deny-by-default, because .dockerignore patterns are matched
+# against the path relative to the context root: a bare `.venv` / `.env` /
+# `node_modules` never matched fyp-backend/.venv (2 GB), fyp-backend/.env
+# (secrets, and COPY fyp-backend/ . baked them in), fyp_web/node_modules, or
+# fyp_flutter/build (1.2 GB). Listing what we want beats guessing prefixes.
+*
+!fyp-backend
 
-.venv
-venv
-env
+# ...now drop the parts of fyp-backend that are local-only, huge, or secret.
+fyp-backend/.venv
+fyp-backend/.env
+fyp-backend/.cache
+fyp-backend/.pytest_cache
+fyp-backend/**/__pycache__
+fyp-backend/**/*.py[cod]
+fyp-backend/tests
+fyp-backend/*.bat
+fyp-backend/*.db
+fyp-backend/*.sqlite3
+fyp-backend/Dockerfile
+fyp-backend/.dockerignore
+fyp-backend/README.md
 
-.git
-.gitignore
-
-.env
-*.env
-
-.idea
-.vscode
-
-*.db
-*.sqlite3
-
-node_modules
-dist
-build
+# Kept on purpose: fyp-backend/ml/risk_model.pkl (analytics.py loads it),
+# languages.json, alembic/, .env.example.

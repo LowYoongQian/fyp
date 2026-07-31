@@ -1,0 +1,9 @@
+# fyp_flutter/Dockerfile only needs build/web (36 MB) and nginx.conf, but build/
+# as a whole is 1.2 GB (build/app alone is ~1 GB of Android artifacts) and
+# .dart_tool another 88 MB. Deny-by-default, then allow the two things it copies.
+#
+# NOTE: build/web is committed to git on purpose — this image does not run
+# `flutter build web`. Do not add build/web to .gitignore.
+*
+!build/web
+!nginx.conf
