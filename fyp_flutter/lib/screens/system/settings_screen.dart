@@ -8,6 +8,20 @@ import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../../i18n/app_localizations.dart';
 
+// Inter/Space Grotesk carry no CJK, Tamil or Arabic glyphs, so the native
+// language names below render as tofu boxes without a fallback chain. These are
+// the platform-bundled fonts that do cover those scripts (iOS names first,
+// Android second); the engine picks the first one that has the glyph.
+const List<String> kScriptFontFallbacks = [
+  'PingFang SC', // zh — iOS
+  'Hiragino Sans', // ja — iOS
+  'Apple SD Gothic Neo', // ko — iOS
+  'Geeza Pro', // ar — iOS
+  'Noto Sans Tamil', // ta — both
+  'Noto Sans CJK SC', // zh/ja/ko — Android
+  'Noto Sans Arabic', // ar — Android
+];
+
 const List<Map<String, String>> kSupportedLanguages = [
   {'code': 'en', 'name': 'English (US)', 'native': 'English', 'flag': '🇺🇸'},
   {'code': 'ms', 'name': 'Bahasa Malaysia', 'native': 'Melayu', 'flag': '🇲🇾'},
@@ -332,7 +346,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         style: GoogleFonts.inter(
                                           fontSize: 11,
                                           color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                                        ),
+                                        ).copyWith(fontFamilyFallback: kScriptFontFallbacks),
                                       ),
                                     ],
                                   ),
@@ -547,7 +561,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           style: GoogleFonts.inter(
                                             fontSize: 10.5,
                                             color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                                          ),
+                                          ).copyWith(fontFamilyFallback: kScriptFontFallbacks),
                                         ),
                                       ],
                                     ),
