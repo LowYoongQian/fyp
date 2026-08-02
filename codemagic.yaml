@@ -1,0 +1,31 @@
+workflows:
+  ios-manual-signing:
+    name: iOS Development Signing (Free Apple ID, self-test only)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    working_directory: fyp_flutter
+    environment:
+      ios_signing:
+        provisioning_profiles:
+          - fyp_flutter_profile
+        certificates:
+          - fyp_flutter_cert
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Get Flutter packages
+        script: flutter pub get
+      - name: Set up code signing settings on Xcode project
+        script: xcode-project use-profiles --export-options-plist=$HOME/export_options.plist
+      - name: Build ipa
+        script: |
+          flutter build ipa --release \
+            --export-options-plist=$HOME/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      email:
+        recipients:
+          - your-email@example.com
