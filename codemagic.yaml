@@ -20,5 +20,6 @@ workflows:
           mkdir -p Payload
           cp -r Runner.app Payload/
           zip -r Runner.ipa Payload
+          cp Runner.ipa "$CM_BUILD_DIR/Runner.ipa"
     artifacts:
-      - fyp_flutter/build/ios/iphoneos/Runner.ipa
+      - Runner.ipa
