@@ -20,10 +20,6 @@ workflows:
           mkdir -p Payload
           cp -r Runner.app Payload/
           zip -r Runner.ipa Payload
-          echo "PWD is: $(pwd)"
-          echo "CM_EXPORT_DIR is: $CM_EXPORT_DIR"
-          ls -la Runner.ipa
           cp Runner.ipa "$CM_EXPORT_DIR/Runner.ipa"
-          ls -la "$CM_EXPORT_DIR"
     artifacts:
       - "**/*.ipa"
