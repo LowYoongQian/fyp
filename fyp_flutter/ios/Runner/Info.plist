@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>This app uses the camera for face recognition attendance.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app uses your location to verify you are on campus Wi-Fi.</string>
 </dict>
 </plist>
