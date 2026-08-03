@@ -2,6 +2,10 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import { apiService, clearApiCache } from '../services/api';
 import { applyThemePreference, getAccountThemePreference, isThemePreference, resetThemeOnLogout, saveThemePreference } from '../theme/themePreference';
 import { setActiveLanguage } from '../i18n/i18n';
+import { swalWarning } from '../utils/swal';
+
+// Hard Maximum Session Duration: 60 Minutes (1 Hour = 3,600,000 ms) for all roles (Student, Staff, Admin)
+const SESSION_MAX_AGE_MS = 60 * 60 * 1000;
 
 interface UserSession {
   user_id: number | string;
@@ -26,12 +30,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
+  const performLogoutStateCleanup = () => {
+    sessionStorage.removeItem('auth_token');
+    sessionStorage.removeItem('auth_user');
+    sessionStorage.removeItem('auth_session_expires_at');
+    clearApiCache();
+    setToken(null);
+    setUser(null);
+    resetThemeOnLogout();
+    setActiveLanguage('en');
+  };
+
+  const triggerSessionExpiredLogout = () => {
+    performLogoutStateCleanup();
+    swalWarning(
+      'Session Expired',
+      'Your 60-minute (1 hour) session limit has been reached. You have been automatically logged out for security.'
+    );
+    setTimeout(() => {
+      window.location.reload();
+    }, 600);
+  };
+
   useEffect(() => {
-    // Restore session on mount
+    // Restore session on mount & check 60-minute expiration limit
     const savedToken = sessionStorage.getItem('auth_token');
     const savedUser = sessionStorage.getItem('auth_user');
+    const sessionExpiresAtStr = sessionStorage.getItem('auth_session_expires_at');
+    const now = Date.now();
 
     if (savedToken && savedUser) {
+      if (sessionExpiresAtStr && now >= parseInt(sessionExpiresAtStr, 10)) {
+        // Exceeded 60-minute limit
+        triggerSessionExpiredLogout();
+        setLoading(false);
+        return;
+      }
+
+      // If timestamp is missing on an existing session, set it to now + 60 min
+      if (!sessionExpiresAtStr) {
+        sessionStorage.setItem('auth_session_expires_at', String(now + SESSION_MAX_AGE_MS));
+      }
+
       try {
         const parsedUser: UserSession = JSON.parse(savedUser);
         setToken(savedToken);
@@ -53,9 +93,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(false);
   }, []);
 
+  // Real-Time Interval checking 60-minute (1 hour) session expiration
+  useEffect(() => {
+    if (!token) return;
+
+    const interval = setInterval(() => {
+      const sessionExpiresAtStr = sessionStorage.getItem('auth_session_expires_at');
+      if (sessionExpiresAtStr && Date.now() >= parseInt(sessionExpiresAtStr, 10)) {
+        clearInterval(interval);
+        triggerSessionExpiredLogout();
+      }
+    }, 3000); // Check every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [token]);
+
   const syncAccountPreferences = async (userId: number | string) => {
-    // Capture the session that started this request. A response from an account
-    // that has since logged out must never update the currently visible theme.
     const requestToken = sessionStorage.getItem('auth_token');
     if (!requestToken) return;
 
@@ -93,8 +146,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         role: data.role as 'student' | 'lecturer' | 'admin',
       };
 
+      const expiresAt = Date.now() + SESSION_MAX_AGE_MS;
       sessionStorage.setItem('auth_token', data.access_token);
       sessionStorage.setItem('auth_user', JSON.stringify(sessionUser));
+      sessionStorage.setItem('auth_session_expires_at', String(expiresAt));
 
       setToken(data.access_token);
       setUser(sessionUser);
@@ -112,13 +167,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
-    sessionStorage.removeItem('auth_token');
-    sessionStorage.removeItem('auth_user');
-    clearApiCache();
-    setToken(null);
-    setUser(null);
-    resetThemeOnLogout();
-    setActiveLanguage('en');
+    performLogoutStateCleanup();
   };
 
   return (

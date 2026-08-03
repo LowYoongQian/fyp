@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { UserProfileModal } from './UserProfileModal';
 import { UserSettingsModal } from './UserSettingsModal';
+import sasLogo from '../assets/saslogo.png';
 import {
   LayoutDashboard,
   BarChart3,
@@ -29,7 +30,8 @@ import {
   ChevronDown,
   FileCheck
 } from 'lucide-react';
-import { closeSwal, swalSuccess } from '../utils/swal';
+import { closeSwal } from '../utils/swal';
+import { clearApiCache } from '../services/api';
 import { t } from '../i18n/i18n';
 
 interface MainLayoutProps {
@@ -64,16 +66,19 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const handleLogout = () => {
+    // Immediately destroy session tokens so refreshing the page (F5 / Ctrl+F5) CANNOT cancel logout
+    sessionStorage.removeItem('auth_token');
+    sessionStorage.removeItem('auth_user');
+    sessionStorage.removeItem('auth_session_expires_at');
+    clearApiCache();
     setIsLoggingOut(true);
     setIsProfileMenuOpen(false);
-    swalSuccess('Successfully Logged Out', 'Your session has ended. Redirecting to login portal...');
-    
-    setTimeout(() => {
-      // The toast was opened while the account theme was still active. Close it
-      // before logout resets the root to light mode, preventing a mixed-theme UI.
-      closeSwal();
-      logout();
-    }, 950);
+  };
+
+  const handleLogoutAnimationComplete = () => {
+    closeSwal();
+    logout();
+    window.location.reload();
   };
 
   // Close profile menu when clicking outside
@@ -161,22 +166,32 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         </button>
 
         {/* Branding */}
-        <div className={`flex h-20 shrink-0 items-center border-b border-slate-100 transition-all ${
-          collapsed ? 'justify-center px-0' : 'justify-between px-6'
+        <div className={`flex h-24 shrink-0 items-center border-b border-slate-100 transition-all ${
+          collapsed ? 'justify-center px-0' : 'justify-between px-5'
         }`}>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-brand-blue-light rounded-xl text-brand-blue shadow-sm shrink-0">
-              <ShieldAlert className="h-5 w-5" />
-            </div>
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentTab(user?.role === 'admin' ? 'admin_dashboard' : user?.role === 'student' ? 'student_dashboard' : 'dashboard');
+              setSidebarOpen(false);
+            }}
+            title="Go to Home Dashboard"
+            className="flex items-center gap-3 cursor-pointer group text-left focus:outline-none"
+          >
+            <img
+              src={sasLogo}
+              alt="SmartAttendance Logo"
+              className={`${collapsed ? 'h-12 w-12' : 'h-16 w-16'} object-contain drop-shadow-md shrink-0 group-hover:scale-108 active:scale-95 transition-transform duration-200`}
+            />
             {!collapsed && (
               <div className="animate-in fade-in duration-200">
-                <h1 className="font-display font-bold text-sm tracking-tight text-slate-800 uppercase leading-none">SmartAttendance</h1>
-                <span className="text-[9px] font-sans font-semibold text-brand-blue uppercase tracking-wider block mt-1">
+                <h1 className="font-display font-bold text-sm tracking-tight text-slate-800 dark:text-slate-100 uppercase leading-none group-hover:text-brand-blue transition-colors">SmartAttendance</h1>
+                <span className="text-[9.5px] font-sans font-bold text-brand-blue dark:text-blue-400 uppercase tracking-wider block mt-1.5">
                   {portalName}
                 </span>
               </div>
             )}
-          </div>
+          </button>
           {!collapsed && (
             <button
               onClick={() => setSidebarOpen(false)}
@@ -448,10 +463,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-[9px] font-sans font-bold bg-success-green-light border border-success-green/10 py-1.5 px-3 rounded-full text-success-green uppercase tracking-wider shadow-xs">
-              <span className="w-1.5 h-1.5 bg-success-green rounded-full animate-ping" />
-              <span>Network Active</span>
-            </div>
+            {/* Network Active badge removed */}
           </div>
         </header>
 
@@ -474,22 +486,81 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         onClose={() => setIsSettingsModalOpen(false)}
       />
 
-      {/* Full-Screen Logout Shimmer Overlay */}
+      {/* Full-Screen Logout Transition Overlay */}
       {isLoggingOut && (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white/90 backdrop-blur-md animate-in fade-in duration-200 space-y-4">
-          <div className="p-4 bg-brand-blue-light rounded-2xl text-brand-blue animate-bounce shadow-md">
-            <ShieldAlert className="h-9 w-9" />
-          </div>
-          <div className="text-center space-y-1">
-            <h3 className="font-display font-bold text-sm text-slate-900">Successfully Logged Out</h3>
-            <p className="text-xs text-slate-500 font-sans">Clearing session credentials and redirecting to portal...</p>
-          </div>
-          {/* Animated Shimmer Bar */}
-          <div className="w-56 h-1.5 bg-slate-100 rounded-full overflow-hidden relative border border-slate-200/60">
-            <div className="h-full bg-brand-blue rounded-full animate-pulse w-full shimmer-placeholder" />
-          </div>
-        </div>
+        <LogoutTransitionOverlay onComplete={handleLogoutAnimationComplete} />
       )}
+    </div>
+  );
+};
+
+interface LogoutTransitionOverlayProps {
+  onComplete: () => void;
+}
+
+const LogoutTransitionOverlay: React.FC<LogoutTransitionOverlayProps> = ({ onComplete }) => {
+  // Use lazy useState initialization so startTime is created ONCE on mount and preserved across re-renders
+  const [startTime] = useState<number>(() => Date.now());
+  const [progress, setProgress] = useState<number>(0);
+  const [remainingSec, setRemainingSec] = useState<number>(3);
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useEffect(() => {
+    const DURATION_MS = 3000;
+
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const pct = Math.min(100, Math.floor((elapsed / DURATION_MS) * 100));
+      const sec = Math.max(0, Math.ceil((DURATION_MS - elapsed) / 1000));
+
+      setProgress(pct);
+      setRemainingSec(sec);
+
+      if (elapsed >= DURATION_MS) {
+        clearInterval(timer);
+        onCompleteRef.current();
+      }
+    }, 40);
+
+    return () => clearInterval(timer);
+  }, [startTime]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl animate-in fade-in duration-200 space-y-6">
+      <img
+        src={sasLogo}
+        alt="SmartAttendance Logo"
+        className="h-36 w-36 sm:h-44 sm:w-44 md:h-48 md:w-48 object-contain drop-shadow-2xl animate-bounce"
+      />
+      <div className="text-center space-y-1.5">
+        <h3 className="font-display font-bold text-xl text-slate-900 dark:text-slate-100">Successfully Logged Out</h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400 font-sans font-medium">Clearing session credentials and redirecting to portal...</p>
+      </div>
+
+      {/* Real-time Dynamic Progress Bar (Left to Right 0% to 100%) */}
+      <div className="w-72 sm:w-80 space-y-2.5">
+        <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative border border-slate-200 dark:border-slate-700 shadow-inner">
+          <div
+            className="h-full bg-gradient-to-r from-brand-blue via-sky-400 to-emerald-400 rounded-full transition-all duration-75 ease-out shadow-sm"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+
+        {/* Percentage & Remaining Time */}
+        <div className="flex justify-between items-center text-xs font-mono font-bold text-slate-600 dark:text-slate-300 px-0.5">
+          <span className="flex items-center gap-1 text-brand-blue dark:text-blue-400">
+            <span>Progress:</span>
+            <span>{progress}%</span>
+          </span>
+          <span className="text-slate-500 dark:text-slate-400 font-medium">
+            {remainingSec} sec remaining
+          </span>
+        </div>
+      </div>
     </div>
   );
 };

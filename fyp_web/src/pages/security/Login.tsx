@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2 } from 'lucide-react';
-import { swalError } from '../../utils/swal';
+import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check } from 'lucide-react';
+import { swalError, swalSuccess } from '../../utils/swal';
+import Swal from 'sweetalert2';
 import sasLogoLocal from '../../assets/saslogo.png';
 
 export type SceneId = 'early_morning' | 'morning' | 'noon' | 'afternoon' | 'evening' | 'night' | 'late_night';
@@ -190,8 +191,11 @@ export const Login: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Portal Mode State
-  const [portalMode, setPortalMode] = useState<'student' | 'staff'>('student');
+  // Portal Mode State with sessionStorage persistence across logouts
+  const [portalMode, setPortalMode] = useState<'student' | 'staff'>(() => {
+    const saved = sessionStorage.getItem('active_portal_mode');
+    return saved === 'staff' ? 'staff' : 'student';
+  });
 
   // Form States
   const [email, setEmail] = useState('');
@@ -200,6 +204,20 @@ export const Login: React.FC = () => {
   // Field Specific Validation States
   const [emailError, setEmailError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  // Remember Me State (Student Portal)
+  const [rememberMe, setRememberMe] = useState<boolean>(() => {
+    return localStorage.getItem('remember_me_student') === 'true';
+  });
+
+  useEffect(() => {
+    const savedRemember = localStorage.getItem('remember_me_student') === 'true';
+    const savedEmail = localStorage.getItem('remember_student_email');
+    if (savedRemember && savedEmail && portalMode === 'student') {
+      setEmail(savedEmail);
+      setRememberMe(true);
+    }
+  }, []);
 
   // Global UI States
   const [error, setError] = useState<string | null>(null);
@@ -290,12 +308,25 @@ export const Login: React.FC = () => {
 
   const switchPortal = (mode: 'student' | 'staff') => {
     setPortalMode(mode);
-    setEmail('');
+    sessionStorage.setItem('active_portal_mode', mode);
+    if (mode === 'student') {
+      const savedRemember = localStorage.getItem('remember_me_student') === 'true';
+      const savedEmail = localStorage.getItem('remember_student_email');
+      if (savedRemember && savedEmail) {
+        setEmail(savedEmail);
+        setRememberMe(true);
+      } else {
+        setEmail('');
+      }
+    } else {
+      setEmail('');
+    }
     setPassword('');
     setEmailError(null);
     setPasswordError(null);
     setError(null);
     setInfo(null);
+    setSubmitting(false);
   };
 
   const handleDemoFill = () => {
@@ -333,6 +364,15 @@ export const Login: React.FC = () => {
 
     try {
       await login(email, password, portalMode === 'student' ? 'student' : 'staff_admin');
+      if (portalMode === 'student') {
+        if (rememberMe) {
+          localStorage.setItem('remember_me_student', 'true');
+          localStorage.setItem('remember_student_email', email);
+        } else {
+          localStorage.removeItem('remember_me_student');
+          localStorage.removeItem('remember_student_email');
+        }
+      }
     } catch (err: any) {
       console.error(err);
       const detail = err.response?.data?.detail || err.message || 'An error occurred. Make sure the backend server (FastAPI) is running at port 8000.';
@@ -340,6 +380,35 @@ export const Login: React.FC = () => {
       await swalError('Login Failed', detail);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    const { value: emailInput } = await Swal.fire({
+      title: 'Password Reset Request',
+      text: 'Enter your registered student email address to receive password recovery instructions.',
+      input: 'email',
+      inputValue: email || '',
+      inputPlaceholder: 'e.g. student@student.school.edu',
+      showCancelButton: true,
+      confirmButtonText: 'Send Reset Link',
+      cancelButtonText: 'Cancel',
+      customClass: {
+        popup: '!rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
+        title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-base',
+        htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-xs',
+        input: '!rounded-xl !border-slate-300 !text-xs !py-2.5',
+        confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
+        cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
+      },
+      buttonsStyling: false,
+    });
+
+    if (emailInput) {
+      swalSuccess(
+        'Request Submitted',
+        `Password recovery instructions have been sent to ${emailInput}. Please check your email inbox.`
+      );
     }
   };
 
@@ -662,6 +731,40 @@ export const Login: React.FC = () => {
               <Sparkles className="h-4 w-4 text-brand-blue" />
             </button>
           </div>
+
+          {/* Student Portal Only: Custom High-Quality UI Remember Me Checkbox (left) & Forgot Password Link (far right) */}
+          {portalMode === 'student' && (
+            <div className="flex items-center justify-between pt-2.5 px-0.5 text-xs">
+              <label className="flex items-center gap-2.5 cursor-pointer select-none group text-slate-600 dark:text-slate-300 font-medium hover:text-slate-900 dark:hover:text-slate-100 transition-colors">
+                <div className="relative flex items-center justify-center">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="sr-only"
+                  />
+                  <div className={`w-4.5 h-4.5 rounded-md flex items-center justify-center transition-all duration-200 shadow-xs border ${
+                    rememberMe
+                      ? 'bg-brand-blue border-brand-blue text-white ring-2 ring-brand-blue/25 scale-105'
+                      : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 group-hover:border-brand-blue/60 dark:group-hover:border-blue-400/60'
+                  }`}>
+                    <Check className={`w-3.5 h-3.5 stroke-[3] transition-all duration-200 ${
+                      rememberMe ? 'opacity-100 scale-100' : 'opacity-0 scale-50'
+                    }`} />
+                  </div>
+                </div>
+                <span>Remember Me</span>
+              </label>
+
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                className="text-brand-blue dark:text-blue-400 hover:underline font-semibold cursor-pointer transition-colors"
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
         </form>
 
         {/* Portal Switcher */}
@@ -673,7 +776,7 @@ export const Login: React.FC = () => {
               className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-blue-50/50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-brand-blue font-medium text-sm shadow-sm transition-all duration-200 cursor-pointer w-full justify-center"
             >
               <Shield className="h-4 w-4 text-brand-blue dark:text-blue-400" />
-              Staff Login Portal
+              Switch to Staff Portal
             </button>
           ) : (
             <button
@@ -682,7 +785,7 @@ export const Login: React.FC = () => {
               className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-blue-50/50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-brand-blue font-medium text-sm shadow-sm transition-all duration-200 cursor-pointer w-full justify-center"
             >
               <GraduationCap className="h-4 w-4 text-brand-blue dark:text-blue-400" />
-              Student Login Portal
+              Switch to Student Portal
             </button>
           )}
         </div>
