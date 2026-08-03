@@ -1,6 +1,27 @@
 import Swal from 'sweetalert2';
 
-const base = Swal.mixin({
+// Custom SVG glyph generators for Dribbble-style Toast status icons
+const glyphSuccess = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+const glyphWarning = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+const glyphError = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+const glyphInfo = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+
+const toastBase = Swal.mixin({
+  toast: true,
+  position: 'top-end',
+  showConfirmButton: false,
+  showCloseButton: true,
+  timer: 4000,
+  timerProgressBar: true,
+  showClass: { popup: 'toast-in', backdrop: '', icon: '' },
+  hideClass: { popup: 'toast-out', backdrop: '', icon: '' },
+  didOpen: (toast) => {
+    toast.addEventListener('mouseenter', Swal.stopTimer);
+    toast.addEventListener('mouseleave', Swal.resumeTimer);
+  }
+});
+
+const baseModal = Swal.mixin({
   customClass: {
     popup: '!rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
     title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-base',
@@ -15,82 +36,54 @@ const base = Swal.mixin({
   allowEscapeKey: true,
 });
 
-// Composed with a per-state class below, so the state can set --toast-accent
-// without each caller restating the shared look.
-const TOAST_POPUP =
-  '!rounded-2xl !shadow-xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card !p-3.5 !pb-4';
-
-// A filled dot with a thin white glyph, replacing the stock ring-plus-stroke-
-// animation icon. Sized by .toast-glyph so it stays aligned with the title.
-const glyph = (path: string) =>
-  `<span class="toast-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"/></svg></span>`;
-
-const toastBase = Swal.mixin({
-  toast: true,
-  position: 'top-end',
-  showConfirmButton: false,
-  timer: 3000,
-  timerProgressBar: true,
-  showClass: { popup: 'toast-in', backdrop: '', icon: '' },
-  hideClass: { popup: 'toast-out', backdrop: '', icon: '' },
-  didOpen: (toast) => {
-    toast.addEventListener('mouseenter', Swal.stopTimer);
-    toast.addEventListener('mouseleave', Swal.resumeTimer);
-  }
-});
-
-// SweetAlert2 merges a mixin's customClass by replacing it, not deep-merging, so
-// the shared parts live here and each state only appends its own popup class.
-const toastClasses = (state: string) => ({
-  popup: `${TOAST_POPUP} ${state}`,
-  title: '!text-slate-900 dark:!text-slate-100 !font-bold !text-xs !text-left !m-0 !pl-1',
-  htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-[11px] !text-left !m-0 !mt-1 !pl-1',
-});
-
 export const swalSuccess = (title: string, text?: string) =>
   toastBase.fire({
-    iconHtml: glyph('M20 6 9 17l-5-5'),
+    iconHtml: glyphSuccess,
     icon: 'success',
     title,
     text,
-    customClass: toastClasses('toast-success'),
-  });
-
-// Used before a theme or route transition so an open toast cannot inherit
-// styles from both the old and new screen.
-export const closeSwal = () => Swal.close();
-
-export const swalError = (title: string, text?: string) =>
-  base.fire({
-    icon: 'error',
-    title,
-    text,
-    confirmButtonText: 'Close',
-    confirmButtonColor: '#ef4444',
+    customClass: {
+      popup: 'toast-success',
+    },
   });
 
 export const swalWarning = (title: string, text?: string) =>
-  base.fire({
+  toastBase.fire({
+    iconHtml: glyphWarning,
     icon: 'warning',
     title,
     text,
-    confirmButtonText: 'OK',
-    confirmButtonColor: '#f97316',
-    timer: 3500,
-    timerProgressBar: true,
+    customClass: {
+      popup: 'toast-warning',
+    },
+  });
+
+export const swalError = (title: string, text?: string) =>
+  toastBase.fire({
+    iconHtml: glyphError,
+    icon: 'error',
+    title,
+    text,
+    customClass: {
+      popup: 'toast-error',
+    },
   });
 
 export const swalInfo = (title: string, text?: string) =>
   toastBase.fire({
-    iconHtml: glyph('M12 16v-5M12 8h.01'),
+    iconHtml: glyphInfo,
     icon: 'info',
     title,
     text,
-    customClass: toastClasses('toast-info'),
+    customClass: {
+      popup: 'toast-info',
+    },
   });
 
+export const closeSwal = () => Swal.close();
+
 export const swalConfirm = async (title: string, text: string, confirmText: string = 'Yes, proceed'): Promise<boolean> => {
-  const result = await base.fire({
+  const result = await baseModal.fire({
     title,
     text,
     icon: 'warning',
@@ -104,7 +97,7 @@ export const swalConfirm = async (title: string, text: string, confirmText: stri
 };
 
 export const swalConfirmDelete = async (itemName: string, detailText?: string): Promise<boolean> => {
-  const result = await base.fire({
+  const result = await baseModal.fire({
     title: `Delete ${itemName}?`,
     text: detailText || 'This action cannot be undone.',
     icon: 'warning',

@@ -623,3 +623,240 @@ html.dark .shimmer-placeholder-dark {
 .animate-shooting-star {
   animation: shootingStarStreak 180s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
 }
+
+/* ==========================================================================
+   Dribbble Reference Toast Notifications & Dark/Light Mode Theme Sync
+   ========================================================================== */
+
+/* Toast Container positioning */
+.swal2-container.swal2-top-end {
+  padding: 0.85rem !important;
+  z-index: 99999 !important;
+}
+
+/* Toast Card Base Container */
+.swal2-popup.swal2-toast {
+  width: 310px !important;
+  max-width: 90vw !important;
+  padding: 0.75rem 0.85rem 0.65rem 0.85rem !important;
+  border-radius: 16px !important;
+  font-family: inherit !important;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  overflow: hidden !important;
+  position: relative !important;
+}
+
+/* Toast Keyframe Animations */
+.swal2-toast.toast-in {
+  animation: toastSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+}
+
+.swal2-toast.toast-out {
+  animation: toastSlideOut 0.25s ease-in forwards !important;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toastSlideOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.96);
+  }
+}
+
+/* Light Mode Toast Card Sync */
+html:not(.dark) .swal2-popup.swal2-toast {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid rgba(226, 232, 240, 0.9) !important;
+  box-shadow: 0 12px 32px -6px rgba(0, 0, 0, 0.1), 0 4px 10px -2px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Dark Mode Toast Card Sync (Matching Dribbble Dark UI) */
+html.dark .swal2-popup.swal2-toast {
+  background-color: #18181b !important;
+  color: #f8fafc !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Icon Container (Circular Glyph Badge) */
+.swal2-toast .swal2-icon {
+  margin: 0 0.65rem 0 0 !important;
+  min-width: 1.85rem !important;
+  width: 1.85rem !important;
+  height: 1.85rem !important;
+  border-radius: 9999px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: none !important;
+  flex-shrink: 0 !important;
+}
+
+.swal2-toast .swal2-icon svg {
+  width: 1rem !important;
+  height: 1rem !important;
+}
+
+/* Hide default SweetAlert ring elements */
+.swal2-toast .swal2-icon .swal2-success-circular-line-left,
+.swal2-toast .swal2-icon .swal2-success-circular-line-right,
+.swal2-toast .swal2-icon .swal2-success-fix,
+.swal2-toast .swal2-icon .swal2-success-ring {
+  display: none !important;
+}
+
+/* Success State Colors */
+html:not(.dark) .swal2-toast.toast-success .swal2-icon {
+  background-color: rgba(16, 185, 129, 0.12) !important;
+  color: #10b981 !important;
+  border: 1px solid rgba(16, 185, 129, 0.25) !important;
+}
+html.dark .swal2-toast.toast-success .swal2-icon {
+  background-color: rgba(16, 185, 129, 0.18) !important;
+  color: #34d399 !important;
+  border: 1px solid rgba(52, 211, 153, 0.3) !important;
+}
+
+/* Info State Colors */
+html:not(.dark) .swal2-toast.toast-info .swal2-icon {
+  background-color: rgba(2, 132, 199, 0.12) !important;
+  color: #0284c7 !important;
+  border: 1px solid rgba(2, 132, 199, 0.25) !important;
+}
+html.dark .swal2-toast.toast-info .swal2-icon {
+  background-color: rgba(56, 189, 248, 0.18) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+}
+
+/* Warning State Colors */
+html:not(.dark) .swal2-toast.toast-warning .swal2-icon {
+  background-color: rgba(245, 158, 11, 0.12) !important;
+  color: #f59e0b !important;
+  border: 1px solid rgba(245, 158, 11, 0.25) !important;
+}
+html.dark .swal2-toast.toast-warning .swal2-icon {
+  background-color: rgba(245, 158, 11, 0.18) !important;
+  color: #fbbf24 !important;
+  border: 1px solid rgba(251, 191, 36, 0.3) !important;
+}
+
+/* Error State Colors */
+html:not(.dark) .swal2-toast.toast-error .swal2-icon {
+  background-color: rgba(244, 63, 94, 0.12) !important;
+  color: #f43f5e !important;
+  border: 1px solid rgba(244, 63, 94, 0.25) !important;
+}
+html.dark .swal2-toast.toast-error .swal2-icon {
+  background-color: rgba(244, 63, 94, 0.18) !important;
+  color: #fb7185 !important;
+  border: 1px solid rgba(251, 113, 133, 0.3) !important;
+}
+
+/* Title Text */
+.swal2-toast .swal2-title {
+  font-size: 0.825rem !important;
+  font-weight: 700 !important;
+  line-height: 1.15rem !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: left !important;
+}
+html:not(.dark) .swal2-toast .swal2-title {
+  color: #0f172a !important;
+}
+html.dark .swal2-toast .swal2-title {
+  color: #f8fafc !important;
+}
+
+/* Subtitle / HTML Container */
+.swal2-toast .swal2-html-container {
+  font-size: 0.725rem !important;
+  line-height: 1.05rem !important;
+  margin-top: 0.15rem !important;
+  padding: 0 !important;
+  text-align: left !important;
+}
+html:not(.dark) .swal2-toast .swal2-html-container {
+  color: #64748b !important;
+}
+html.dark .swal2-toast .swal2-html-container {
+  color: #a1a1aa !important;
+}
+
+/* Close Button (X) */
+.swal2-toast .swal2-close {
+  font-size: 0.95rem !important;
+  height: 1.25rem !important;
+  width: 1.25rem !important;
+  line-height: 1.25rem !important;
+  border-radius: 9999px !important;
+  opacity: 0.6 !important;
+  transition: all 0.15s ease !important;
+  position: absolute !important;
+  top: 0.65rem !important;
+  right: 0.65rem !important;
+}
+.swal2-toast .swal2-close:hover {
+  opacity: 1 !important;
+}
+html:not(.dark) .swal2-toast .swal2-close {
+  color: #64748b !important;
+}
+html:not(.dark) .swal2-toast .swal2-close:hover {
+  background-color: rgba(241, 245, 249, 0.8) !important;
+  color: #0f172a !important;
+}
+html.dark .swal2-toast .swal2-close {
+  color: #94a3b8 !important;
+}
+html.dark .swal2-toast .swal2-close:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+/* Bottom Progress Bar */
+.swal2-toast .swal2-timer-progress-bar-container {
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 3px !important;
+  background: transparent !important;
+  border-bottom-left-radius: 16px !important;
+  border-bottom-right-radius: 16px !important;
+  overflow: hidden !important;
+}
+
+.swal2-toast .swal2-timer-progress-bar {
+  height: 100% !important;
+  border-radius: 9999px !important;
+}
+
+.swal2-toast.toast-success .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #10b981, #34d399) !important;
+}
+.swal2-toast.toast-info .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #0284c7, #38bdf8) !important;
+}
+.swal2-toast.toast-warning .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24) !important;
+}
+.swal2-toast.toast-error .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #f43f5e, #fb7185) !important;
+}
