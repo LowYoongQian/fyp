@@ -15,7 +15,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from db.models import Announcement
-from utils.timeutil import utcnow
+from utils.timeutil import iso_utc, utcnow
 
 # High first. Anything unrecognised sorts as Medium so a typo cannot bury a notice.
 _PRIORITY_WEIGHT = {"High": 3, "Medium": 2, "Low": 1}
@@ -74,12 +74,12 @@ def announcement_dict(a) -> dict:
         "content": a.content,
         "faculty": a.faculty,
         "department": a.department,
-        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "created_at": iso_utc(a.created_at),
         "priority": a.priority,
         "publisher": a.publisher,
         "image_base64": a.image_base64,
-        "publish_start": a.publish_start.isoformat() if a.publish_start else None,
-        "publish_end": a.publish_end.isoformat() if a.publish_end else None,
+        "publish_start": iso_utc(a.publish_start),
+        "publish_end": iso_utc(a.publish_end),
         "target_scope": a.target_scope,
         "target_role": a.target_role,
         "target_programme_code": a.target_programme_code,

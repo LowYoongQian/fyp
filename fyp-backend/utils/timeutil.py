@@ -30,3 +30,33 @@ def local_offset() -> timedelta:
     place computes this so a DST or policy change lands everywhere at once.
     """
     return datetime.now(CAMPUS_TZ).utcoffset() or timedelta(0)
+
+
+def campus_now() -> datetime:
+    """Current campus-local wall clock, naive.
+
+    For comparing against timetable strings ("14:00"), which are campus local. Use this
+    rather than `datetime.now()`: a container has no TZ set, so that returns UTC and any
+    window check drifts by the whole offset.
+    """
+    return utcnow() + local_offset()
+
+
+def iso_utc(dt: datetime | None) -> str | None:
+    """Render a stored (naive UTC) datetime as an ISO string that says so.
+
+    `datetime.isoformat()` on a naive value emits "2026-08-03T02:26:56" with no zone
+    marker, and both clients then read it as *their own* local time: Dart's
+    DateTime.parse and JS's new Date() both treat an unmarked string as local, so
+    `.toLocal()` afterwards is a no-op. On a UTC host (Railway sets no TZ) that
+    displayed every timestamp 8 hours behind Malaysia.
+
+    Appending the offset is what makes the round trip correct — the client converts
+    to the device's zone instead of guessing. Storage stays naive UTC; only the
+    published representation changes.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

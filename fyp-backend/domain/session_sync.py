@@ -3,7 +3,7 @@ import threading
 from datetime import datetime, timedelta, time
 
 from sqlalchemy.exc import IntegrityError
-from utils.timeutil import utcnow
+from utils.timeutil import local_offset, utcnow
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from db.database import SessionLocal
@@ -71,12 +71,13 @@ def _sync_class_sessions_now(db: Session):
     """
     try:
         now_utc = utcnow()
-        
-        # Calculate local timezone offset dynamically
-        local_now = datetime.now()
-        utc_now = utcnow()
-        tz_offset = local_now - utc_now
-        
+
+        # Campus offset from the named zone, NOT `datetime.now() - utcnow()`. The host
+        # clock is whatever the container says: Railway sets no TZ, so that subtraction
+        # yielded zero and every timetable time was treated as UTC — sessions opened and
+        # auto-closed 8 hours off, and end-of-day absences fired at 07:59 local.
+        tz_offset = local_offset()
+
         now_local = now_utc + tz_offset
         schedule_map = calculate_schedule(db)
         

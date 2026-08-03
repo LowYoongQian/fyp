@@ -14,6 +14,11 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# Campus timezone. The app derives offsets from the named zone (utils/timeutil.py), so
+# this is a safety net, not the mechanism: it keeps log lines and any stray host-clock
+# read in campus time instead of UTC, which is what a container defaults to.
+ENV TZ=Asia/Kuala_Lumpur
+
 # Install Linux system libraries required by OpenCV & TensorFlow
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \

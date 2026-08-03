@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from db.models import User, AuditLog
+from schemas import UtcDateTime
 from utils.security import require_admin
 
 router = APIRouter(prefix="/admin/audit", tags=["Admin Audit"])
@@ -19,7 +20,7 @@ class AuditLogResponse(BaseModel):
     action: str
     details: Optional[str] = None
     ip_address: Optional[str] = "127.0.0.1"
-    created_at: datetime
+    created_at: UtcDateTime
 
     class Config:
         from_attributes = True

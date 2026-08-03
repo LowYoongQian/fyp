@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from utils.timeutil import utcnow
+from utils.timeutil import campus_now, utcnow
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
@@ -144,8 +144,10 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
     # Verify the course exists AND that this lecturer teaches it
     course = require_course_access(db, current_user, body.course_id, "open a session")
 
-    # Enforce session open window
-    validate_session_opening(db, body.course_id, body.class_group, datetime.now())
+    # Enforce session open window. Campus local time, not datetime.now(): the validator
+    # compares against timetable strings ("14:00") that are campus local, and the host
+    # clock is UTC on Railway — so this rejected every on-time open by 8 hours.
+    validate_session_opening(db, body.course_id, body.class_group, campus_now())
 
     # Check if there is already an active session for this course and group
     active_session = db.query(ClassSession).filter(
@@ -229,8 +231,8 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
         raise HTTPException(status_code=400, detail="You have already registered attendance for this session")
 
     cfg = get_settings(db)
-    # Enforce student check-in start time limit
-    validate_student_checkin(db, session.course_id, session.class_group, datetime.now())
+    # Enforce student check-in start time limit — campus local, same reason as /open.
+    validate_student_checkin(db, session.course_id, session.class_group, campus_now())
 
     # 1. Liveness & Face Verification
     liveness_passed = body.liveness_passed

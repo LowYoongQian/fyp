@@ -3,7 +3,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
-from utils.timeutil import utcnow
+from utils.timeutil import iso_utc, utcnow
 from typing import List
 
 from domain.announcements import announcement_dict, visible_announcements
@@ -89,8 +89,8 @@ def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depe
             "alert_type": a.alert_type,
             "email_body": a.email_body,
             "triggered_by": a.triggered_by,
-            "triggered_at": a.triggered_at.isoformat() if a.triggered_at else None,
-            "sent_at": a.sent_at.isoformat() if a.sent_at else None,
+            "triggered_at": iso_utc(a.triggered_at),
+            "sent_at": iso_utc(a.sent_at),
         })
     return result
 

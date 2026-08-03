@@ -31,7 +31,7 @@ GET  /analytics/risk-scores returns the latest snapshot, optionally filtered.
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from utils.timeutil import utcnow
+from utils.timeutil import iso_utc, utcnow
 
 from db.database import get_db
 import math
@@ -287,7 +287,7 @@ def get_risk_scores(
             "risk_score":      rs.risk_score,
             "risk_label":      rs.risk_label,
             "risk_factors":    rs.risk_factors,
-            "updated_at":      rs.updated_at.isoformat() if rs.updated_at else None,
+            "updated_at":      iso_utc(rs.updated_at),
         }
         for rs, s, c in rows
     ]

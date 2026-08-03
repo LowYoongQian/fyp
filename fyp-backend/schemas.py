@@ -91,6 +91,17 @@ class MessageResponse(BaseModel):
 # Session & Attendance Schemas
 from datetime import datetime
 
+from pydantic import PlainSerializer
+
+from utils.timeutil import iso_utc
+
+# Every datetime we publish goes out as UTC with an explicit "Z". Annotate the field
+# with this instead of bare `datetime`: Pydantic renders a naive value as
+# "2026-08-03T02:26" with no zone, and Dart's DateTime.parse / JS's new Date() then
+# read it as *device* local time, so .toLocal() does nothing. On Railway (no TZ set,
+# so the host is UTC) that showed every time 8 hours behind Malaysia.
+UtcDateTime = Annotated[datetime, PlainSerializer(iso_utc, return_type=Optional[str])]
+
 class SessionCreate(BaseModel):
     course_id: Any
     class_group: str = "All"
@@ -98,8 +109,8 @@ class SessionCreate(BaseModel):
 class SessionResponse(BaseModel):
     id: Any
     course_id: Any
-    opened_at: Optional[datetime] = None
-    closed_at: Optional[datetime] = None
+    opened_at: Optional[UtcDateTime] = None
+    closed_at: Optional[UtcDateTime] = None
     is_open: bool
     class_group: str
 
@@ -127,7 +138,7 @@ class AttendanceResponse(BaseModel):
     # published contract stays unchanged.
     wifi_verified: bool = Field(validation_alias=AliasChoices("wifi_verified", "network_verified"))
     liveness_passed: Optional[bool] = None
-    marked_at: datetime
+    marked_at: UtcDateTime
     network_verified: Optional[bool] = None
     verify_detail: Optional[str] = None
     liveness_challenge_ms: Optional[int] = None
@@ -141,7 +152,7 @@ class StudentAttendanceStatus(BaseModel):
     student_name: str
     student_code: str
     status: str
-    marked_at: Optional[datetime] = None
+    marked_at: Optional[UtcDateTime] = None
     confidence_score: Optional[float] = None
     network_verified: Optional[bool] = None
     source_ip: Optional[str] = None
@@ -165,8 +176,8 @@ class AnnouncementCreate(BaseModel):
     priority: Optional[str] = "Medium"
     publisher: Optional[str] = "ADMIN"
     image_base64: Optional[str] = None
-    publish_start: Optional[datetime] = None
-    publish_end: Optional[datetime] = None
+    publish_start: Optional[UtcDateTime] = None
+    publish_end: Optional[UtcDateTime] = None
     target_scope: Optional[str] = "all"        # 'all' | 'programme' | 'course'
     target_role: Optional[str] = "all"         # 'all' | 'students' | 'staff'
     target_programme_code: Optional[str] = None
@@ -178,13 +189,13 @@ class AnnouncementResponse(BaseModel):
     content: str
     faculty: Optional[str] = "All"
     department: Optional[str] = "All"
-    created_at: datetime
+    created_at: UtcDateTime
     is_draft: bool = False
     priority: Optional[str] = "Medium"
     publisher: Optional[str] = "ADMIN"
     image_base64: Optional[str] = None
-    publish_start: Optional[datetime] = None
-    publish_end: Optional[datetime] = None
+    publish_start: Optional[UtcDateTime] = None
+    publish_end: Optional[UtcDateTime] = None
     target_scope: Optional[str] = "all"
     target_role: Optional[str] = "all"
     target_programme_code: Optional[str] = None

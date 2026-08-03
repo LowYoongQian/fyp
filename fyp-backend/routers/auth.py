@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from utils.timeutil import utcnow
+from utils.timeutil import iso_utc, utcnow
 from db.database import get_db
 from datetime import datetime
 from db.models import User, Student, Lecturer
@@ -113,7 +113,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         "email": user.email,
         "avatar_url": user.avatar_url,
         "status": user.status or "Active",
-        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "last_login_at": iso_utc(user.last_login_at),
     }
     if student is not None:
         resp.update({
@@ -139,7 +139,11 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
 @router.get("/server-time")
 def get_server_time():
-    return {"server_time": datetime.now().isoformat()}
+    # utcnow() + an explicit "Z", not datetime.now().isoformat(). The old version read
+    # the host clock and emitted no zone marker, so the client parsed it as its own
+    # local time: on Railway (no TZ, i.e. UTC) every device ran 8 hours behind campus
+    # and ApiConfig.serverOffset baked that error into the whole app's clock.
+    return {"server_time": iso_utc(utcnow())}
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
@@ -189,7 +193,7 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "code": code,
         "avatar_url": user.avatar_url,
         "status": user.status or "Active",
-        "last_login_at": (user.last_login_at.isoformat() + "Z") if user.last_login_at else (utcnow().isoformat() + "Z"),
+        "last_login_at": iso_utc(user.last_login_at or utcnow()),
         "two_factor_enabled": user.two_factor_enabled,
         "theme_preference": user.theme_preference or "light",
         "font_size_preference": user.font_size_preference or "medium",

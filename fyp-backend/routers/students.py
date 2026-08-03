@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from db.database import get_db
-from utils.timeutil import utcnow
+from utils.timeutil import iso_utc, utcnow
 from db.models import (
     User, Student, FaceEmbedding, Enrolment, Course,
     ClassSession, AttendanceRecord, CourseStaffAssignment,
@@ -261,7 +261,7 @@ def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depend
             "course_name": c.course_name,
             "class_group": s.class_group,
             "status": ar.status,
-            "marked_at": ar.marked_at.isoformat() if ar.marked_at else None,
+            "marked_at": iso_utc(ar.marked_at),
             "network_verified": ar.network_verified,
             "liveness_passed": ar.liveness_passed,
             "verify_detail": ar.verify_detail,
