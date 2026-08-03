@@ -92,11 +92,11 @@ class LocalCacheService {
 
   // ── Pending check-in queue ────────────────────────────────────────────────
 
-  static Future<void> enqueueCheckIn(int sessionId, Map<String, dynamic> payload) async {
+  static Future<void> enqueueCheckIn(dynamic sessionId, Map<String, dynamic> payload) async {
     if (kIsWeb) return;
     final db = await _open();
     await db.insert('pending_checkins', {
-      'session_id':   sessionId,
+      'session_id':   sessionId.toString(),
       'payload_json': jsonEncode(payload),
       'queued_at':    DateTime.now().toIso8601String(),
     });
@@ -107,14 +107,14 @@ class LocalCacheService {
   /// Successfully submitted items are removed; failed ones stay for the next
   /// sync attempt.
   static Future<int> syncPendingCheckIns(
-    Future<bool> Function(int sessionId, Map<String, dynamic> payload) submitFn,
+    Future<bool> Function(dynamic sessionId, Map<String, dynamic> payload) submitFn,
   ) async {
     if (kIsWeb) return 0;
     final db = await _open();
     final pending = await db.query('pending_checkins', orderBy: 'queued_at ASC');
     int synced = 0;
     for (final row in pending) {
-      final sessionId = row['session_id'] as int;
+      final sessionId = row['session_id'];
       final payload   = jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
       final ok = await submitFn(sessionId, payload);
       if (ok) {
@@ -129,7 +129,7 @@ class LocalCacheService {
     if (kIsWeb) return 0;
     final db = await _open();
     final result = await db.rawQuery('SELECT COUNT(*) as c FROM pending_checkins');
-    return (result.first['c'] as int?) ?? 0;
+    return (result.first['c'] is num) ? (result.first['c'] as num).toInt() : (int.tryParse(result.first['c'].toString()) ?? 0);
   }
 
   // ── Device identity ───────────────────────────────────────────────────────

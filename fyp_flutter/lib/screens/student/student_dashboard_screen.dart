@@ -16,7 +16,7 @@ import '../system/profile_screen.dart';
 // SCREEN 2: Student Main Dashboard Shell (Tab Layout)
 // -----------------------------------------------------------------
 class MainScreen extends StatefulWidget {
-  final int studentId;
+  final dynamic studentId;
   final String studentName;
   final String studentCode;
   final String studentEmail;
@@ -31,7 +31,7 @@ class MainScreen extends StatefulWidget {
 
   final VoidCallback onLogout;
   final Future<void> Function() onSyncRequested;
-  final Function(int, String, String, String, String, bool, {int? challengeMs}) onCheckInComplete;
+  final Function(dynamic, String, String, String, String, bool, {int? challengeMs, Map<String, dynamic>? extraDetails}) onCheckInComplete;
   final VoidCallback onRegisterFace;
 
   const MainScreen({
@@ -946,7 +946,7 @@ class _MainScreenState extends State<MainScreen> {
                 );
 
                 final bool isSessionOpen = activeSess.isNotEmpty && activeSess['isOpen'] == true;
-                final int? sessionId = activeSess.isNotEmpty ? activeSess['sessionId'] as int? : null;
+                final dynamic sessionId = activeSess.isNotEmpty ? (activeSess['sessionId'] ?? activeSess['id']) : null;
 
                 final isThisSessionCheckedIn = widget.isCheckedInToday &&
                     widget.attendanceHistory.any((record) =>
@@ -1132,6 +1132,13 @@ class _MainScreenState extends State<MainScreen> {
                                                     imageBase64,
                                                     livenessPassed,
                                                     challengeMs: challengeMs,
+                                                    extraDetails: {
+                                                      'timeSlot': "$startTimeStr - $endTimeStr",
+                                                      'room': room,
+                                                      'classGroup': classGroup,
+                                                      'lecturerName': activeSess['createdByName'] ?? activeSess['lecturerName'] ?? cls['lecturerName'] ?? 'Dr. Low',
+                                                      'lecturerRole': activeSess['createdRole'] ?? activeSess['lecturerRole'] ?? cls['lecturerRole'] ?? 'Lecturer',
+                                                    },
                                                   );
                                                 },
                                               ),
@@ -1810,7 +1817,7 @@ class _MainScreenState extends State<MainScreen> {
     for (final course in widget.studentSchedule) {
       final code = course['courseCode'].toString().toUpperCase();
       final name = course['courseName'].toString().toUpperCase();
-      final rate = course['attendanceRate'] as double? ?? 100.0;
+      final rate = (course['attendanceRate'] is num) ? (course['attendanceRate'] as num).toDouble() : (double.tryParse(course['attendanceRate']?.toString() ?? '') ?? 100.0);
 
       if (!seenCodes.contains(code)) {
         seenCodes.add(code);
@@ -1911,7 +1918,7 @@ class _MainScreenState extends State<MainScreen> {
         final course = overallStats[index];
         final courseCode = course['courseCode'].toString().toUpperCase();
         final courseName = course['courseName'].toString().toUpperCase();
-        final percentage = course['percentage'] as double;
+        final percentage = (course['percentage'] is num) ? (course['percentage'] as num).toDouble() : (double.tryParse(course['percentage']?.toString() ?? '') ?? 100.0);
 
         return GlassCard(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),

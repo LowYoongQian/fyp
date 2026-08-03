@@ -768,7 +768,17 @@ class _AppRootState extends State<AppRoot> {
   // The previous direct-to-Supabase write was removed because a decompiled APK
   // could otherwise bypass every verification layer using the embedded DB
   // credentials.
-  Future<void> submitAttendance(int sessionId, String ssid, String courseCode, String courseName, String imageBase64, bool livenessPassed, BuildContext context, {int? challengeMs}) async {
+  Future<void> submitAttendance(
+    dynamic sessionId,
+    String ssid,
+    String courseCode,
+    String courseName,
+    String imageBase64,
+    bool livenessPassed,
+    BuildContext context, {
+    int? challengeMs,
+    Map<String, dynamic>? extraDetails,
+  }) async {
     setState(() => isSyncing = true);
     try {
       // 1. Collect live network facts for location corroboration.
@@ -783,7 +793,6 @@ class _AppRootState extends State<AppRoot> {
       // 2. Submit to the backend (authoritative path — no direct DB write).
       final apiUrl = ApiConfig.getEffectiveUrl();
       final http.Response response;
-      // Device fingerprint of this phone, recorded per check-in for audit.
       final deviceId = await LocalCacheService.getOrCreateDeviceId();
       Map<String, dynamic> checkInPayload = {
         'wifi_ssid': effectiveSsid,
@@ -805,7 +814,6 @@ class _AppRootState extends State<AppRoot> {
           body: jsonEncode(checkInPayload),
         ).timeout(const Duration(seconds: 15));
       } on TimeoutException {
-        // Server unreachable — queue for later sync.
         await LocalCacheService.enqueueCheckIn(sessionId, checkInPayload);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -817,7 +825,6 @@ class _AppRootState extends State<AppRoot> {
         }
         return;
       } catch (_) {
-        // Also queue on any other connection failure.
         await LocalCacheService.enqueueCheckIn(sessionId, checkInPayload);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -837,9 +844,6 @@ class _AppRootState extends State<AppRoot> {
         } catch (_) {
           error = 'Server error ${response.statusCode}.';
         }
-        // "Already checked in" is not a failure — the student is already marked
-        // present for this session (e.g. a double-tap). Show a friendly notice
-        // instead of a red error dialog, and refresh so their status reflects it.
         if (response.statusCode == 400 && error.toLowerCase().contains('already registered')) {
           await syncData(context);
           if (!mounted) return;
@@ -854,15 +858,30 @@ class _AppRootState extends State<AppRoot> {
         throw Exception(error);
       }
 
+      Map<String, dynamic> resJson = {};
+      try {
+        resJson = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (_) {}
+
       setState(() => isFaceRegistered = true);
       await syncData(context);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Attendance recorded and verified successfully!"),
-          backgroundColor: Color(0xFF10B981),
-        ),
+
+      final bool wifiVerified = resJson['wifi_verified'] == true || (resJson['attendance_record']?['wifi_verified'] == true);
+      final bool liveVerified = resJson['liveness_passed'] == true || livenessPassed;
+
+      _showCheckInSuccessModalDialog(
+        context,
+        courseCode: courseCode,
+        courseName: courseName,
+        timeSlot: extraDetails?['timeSlot']?.toString() ?? 'Active Class Session',
+        room: extraDetails?['room']?.toString() ?? 'Main Hall A',
+        classGroup: extraDetails?['classGroup']?.toString() ?? 'Tut Group G2',
+        lecturerName: extraDetails?['lecturerName']?.toString() ?? 'Dr. Low',
+        lecturerRole: extraDetails?['lecturerRole']?.toString() ?? 'Lecturer',
+        wifiVerified: wifiVerified,
+        livenessPassed: liveVerified,
       );
 
     } catch (e) {
@@ -870,6 +889,298 @@ class _AppRootState extends State<AppRoot> {
     } finally {
       if (mounted) setState(() => isSyncing = false);
     }
+  }
+
+  void _showCheckInSuccessModalDialog(
+    BuildContext context, {
+    required String courseCode,
+    required String courseName,
+    required String timeSlot,
+    required String room,
+    required String classGroup,
+    required String lecturerName,
+    required String lecturerRole,
+    required bool wifiVerified,
+    required bool livenessPassed,
+  }) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final now = DateTime.now();
+        final daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        final dayName = daysOrder[now.weekday - 1];
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        final formattedDate = "$dayName, ${now.day.toString().padLeft(2, '0')} ${months[now.month - 1]} ${now.year}";
+
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          elevation: 12,
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Top Success Icon
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withOpacity(0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.check_circle_rounded,
+                    color: Color(0xFF10B981),
+                    size: 40,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  "Attendance Verified!",
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF10B981),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Your check-in has been successfully recorded.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Card Box for Details
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Course Code & Name
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2563EB).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.school_rounded, color: Color(0xFF2563EB), size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "$courseCode - $courseName",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                                  ),
+                                ),
+                                if (classGroup.isNotEmpty || room.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    "$classGroup • $room",
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12.0),
+                        child: Divider(height: 1),
+                      ),
+
+                      // Time & Date
+                      _buildDetailRow(
+                        isDark: isDark,
+                        icon: Icons.calendar_today_rounded,
+                        iconColor: const Color(0xFF0284C7),
+                        title: "Date & Time",
+                        value: "$timeSlot\n$formattedDate",
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Teacher / Lecturer & Role
+                      _buildDetailRow(
+                        isDark: isDark,
+                        icon: Icons.person_outline_rounded,
+                        iconColor: const Color(0xFF7C3AED),
+                        title: "Lecturer / Instructor",
+                        value: "$lecturerName ($lecturerRole)",
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Verification Badges Row
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                        decoration: BoxDecoration(
+                          color: wifiVerified
+                              ? const Color(0xFF10B981).withOpacity(0.1)
+                              : const Color(0xFFF59E0B).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: wifiVerified
+                                ? const Color(0xFF10B981).withOpacity(0.3)
+                                : const Color(0xFFF59E0B).withOpacity(0.3),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.wifi_rounded,
+                              size: 14,
+                              color: wifiVerified ? const Color(0xFF10B981) : const Color(0xFFD97706),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              wifiVerified ? "WiFi Verified" : "WiFi Bypassed",
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: wifiVerified ? const Color(0xFF059669) : const Color(0xFFD97706),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                        decoration: BoxDecoration(
+                          color: livenessPassed
+                              ? const Color(0xFF10B981).withOpacity(0.1)
+                              : const Color(0xFFF59E0B).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: livenessPassed
+                                ? const Color(0xFF10B981).withOpacity(0.3)
+                                : const Color(0xFFF59E0B).withOpacity(0.3),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.face_rounded,
+                              size: 14,
+                              color: livenessPassed ? const Color(0xFF10B981) : const Color(0xFFD97706),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              livenessPassed ? "Liveness Passed" : "Liveness Alert",
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: livenessPassed ? const Color(0xFF059669) : const Color(0xFFD97706),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+
+                // Close Button
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF10B981),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text(
+                      "Done",
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDetailRow({
+    required bool isDark,
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String value,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: iconColor),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   // Register facial signature via the backend (no direct DB).
@@ -1060,19 +1371,70 @@ class _AppRootState extends State<AppRoot> {
     });
   }
 
+  String _friendlyStudentError(String rawMsg) {
+    final lower = rawMsg.toLowerCase();
+
+    if (lower.contains('face') && (lower.contains('not match') || lower.contains('mismatch') || lower.contains('no match') || lower.contains('failed'))) {
+      return "Face Match Failed: Your face does not match your registered profile. Please make sure your face is clearly visible and try again.";
+    }
+    if (lower.contains('liveness') || lower.contains('blink') || lower.contains('nod') || lower.contains('suspicious')) {
+      return "Liveness Verification Failed: We couldn't detect your blink or head movement. Please look directly at the camera and perform the prompt.";
+    }
+    if (lower.contains('not registered') || lower.contains('register face')) {
+      return "Face Registration Required: Please complete your one-time selfie profile registration first.";
+    }
+    if (lower.contains('wifi') || lower.contains('network') || lower.contains('bssid') || lower.contains('subnet')) {
+      return "Off-Campus Network: You are not connected to the approved campus Wi-Fi network.";
+    }
+    if (lower.contains('already registered') || lower.contains('already checked in')) {
+      return "Already Checked In: Your attendance for this class session is already verified today.";
+    }
+    if (lower.contains('closed') || lower.contains('expired')) {
+      return "Session Closed: This attendance window has expired or has been closed by your lecturer.";
+    }
+    if (lower.contains('socketexception') || lower.contains('connection') || lower.contains('timeout')) {
+      return "Connection Error: Cannot reach the server. Please check your internet connection.";
+    }
+    return rawMsg.replaceAll("Exception: ", "").trim();
+  }
+
   void showErrorDialog(String message, BuildContext context) {
+    final friendlyMsg = _friendlyStudentError(message);
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text("Sync Error", style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold)),
-        content: Text(message, style: const TextStyle(fontSize: 13)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("OK"),
-          )
-        ],
-      ),
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          title: const Row(
+            children: [
+              Icon(Icons.error_outline_rounded, color: Color(0xFFEF4444), size: 26),
+              SizedBox(width: 10),
+              Text("Verification Failed", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: Text(
+            friendlyMsg,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.4,
+              color: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF334155),
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Got It", style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1110,7 +1472,7 @@ class _AppRootState extends State<AppRoot> {
                 isSyncing: isSyncing,
                 onLogout: handleStudentLogout,
                 onSyncRequested: () => syncData(context),
-                onCheckInComplete: (sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, {int? challengeMs}) => submitAttendance(sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, context, challengeMs: challengeMs),
+                onCheckInComplete: (sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, {int? challengeMs, Map<String, dynamic>? extraDetails}) => submitAttendance(sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, context, challengeMs: challengeMs, extraDetails: extraDetails),
                 onRegisterFace: () => registerFace(context),
               )
             : LoginScreen(

@@ -382,87 +382,91 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
 
                                       // Class card details
                                       Expanded(
-                                        child: GlassCard(
-                                          padding: const EdgeInsets.all(12),
-                                          color: Theme.of(context).brightness == Brightness.dark
-                                              ? const Color(0xFF1E293B).withValues(alpha: 0.9)
-                                              : Colors.white.withValues(alpha: 0.9),
-                                          borderColor: themeColor.withValues(alpha: 0.15),
-                                          child: Row(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              // Round Letter Badge
-                                              CircleAvatar(
-                                                radius: 15,
-                                                backgroundColor: themeColor.withValues(alpha: 0.15),
-                                                child: Text(
-                                                  badgeLetter,
-                                                  style: GoogleFonts.spaceGrotesk(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: themeColor,
+                                        child: InkWell(
+                                          onTap: () => _showClassDetailsModal(context, item, start, end),
+                                          borderRadius: BorderRadius.circular(16),
+                                          child: GlassCard(
+                                            padding: const EdgeInsets.all(12),
+                                            color: Theme.of(context).brightness == Brightness.dark
+                                                ? const Color(0xFF1E293B).withValues(alpha: 0.9)
+                                                : Colors.white.withValues(alpha: 0.9),
+                                            borderColor: themeColor.withValues(alpha: 0.15),
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                // Round Letter Badge
+                                                CircleAvatar(
+                                                  radius: 15,
+                                                  backgroundColor: themeColor.withValues(alpha: 0.15),
+                                                  child: Text(
+                                                    badgeLetter,
+                                                    style: GoogleFonts.spaceGrotesk(
+                                                      fontSize: 12,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: themeColor,
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
-                                              const SizedBox(width: 10),
+                                                const SizedBox(width: 10),
 
-                                              // Details
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  children: [
-                                                    // Room Name / Info
-                                                    Row(
-                                                      children: [
-                                                        const Icon(Icons.home_outlined, size: 13, color: Color(0xFF2563EB)),
-                                                        const SizedBox(width: 4),
-                                                        Expanded(
-                                                          child: Text(
-                                                            item['room'] ?? 'TBA',
-                                                            style: GoogleFonts.inter(
-                                                              fontSize: 10.5,
-                                                              fontWeight: FontWeight.w700,
-                                                              color: const Color(0xFF2563EB),
+                                                // Details
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      // Room Name / Info
+                                                      Row(
+                                                        children: [
+                                                          const Icon(Icons.home_outlined, size: 13, color: Color(0xFF2563EB)),
+                                                          const SizedBox(width: 4),
+                                                          Expanded(
+                                                            child: Text(
+                                                              item['room'] ?? 'TBA',
+                                                              style: GoogleFonts.inter(
+                                                                fontSize: 10.5,
+                                                                fontWeight: FontWeight.w700,
+                                                                color: const Color(0xFF2563EB),
+                                                              ),
                                                             ),
                                                           ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                    const SizedBox(height: 5),
-
-                                                    // Course Title and Code
-                                                    Text(
-                                                      "${item['courseName'].toString().toUpperCase()} (${item['courseCode']})",
-                                                      style: GoogleFonts.spaceGrotesk(
-                                                        fontSize: 11.5,
-                                                        fontWeight: FontWeight.bold,
-                                                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
-                                                        height: 1.25,
+                                                        ],
                                                       ),
-                                                    ),
-                                                    const SizedBox(height: 8),
+                                                      const SizedBox(height: 5),
 
-                                                    // Lecturer details
-                                                    Row(
-                                                      children: [
-                                                        const Icon(Icons.person_outline, size: 12, color: Color(0xFF64748B)),
-                                                        const SizedBox(width: 4),
-                                                        Expanded(
-                                                          child: Text(
-                                                            item['lecturerName'] ?? 'TBA',
-                                                            style: GoogleFonts.inter(
-                                                              fontSize: 9.5,
-                                                              fontWeight: FontWeight.w600,
-                                                              color: const Color(0xFF64748B),
+                                                      // Course Title and Code
+                                                      Text(
+                                                        "${item['courseName'].toString().toUpperCase()} (${item['courseCode']})",
+                                                        style: GoogleFonts.spaceGrotesk(
+                                                          fontSize: 11.5,
+                                                          fontWeight: FontWeight.bold,
+                                                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                                                          height: 1.25,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 8),
+
+                                                      // Lecturer details
+                                                      Row(
+                                                        children: [
+                                                          const Icon(Icons.person_outline, size: 12, color: Color(0xFF64748B)),
+                                                          const SizedBox(width: 4),
+                                                          Expanded(
+                                                            child: Text(
+                                                              item['lecturerName'] ?? 'TBA',
+                                                              style: GoogleFonts.inter(
+                                                                fontSize: 9.5,
+                                                                fontWeight: FontWeight.w600,
+                                                                color: const Color(0xFF64748B),
+                                                              ),
                                                             ),
                                                           ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ],
+                                                        ],
+                                                      ),
+                                                    ],
+                                                  ),
                                                 ),
-                                              ),
-                                            ],
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -566,6 +570,156 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showClassDetailsModal(BuildContext context, Map<String, dynamic> item, String start, String end) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          elevation: 10,
+          child: Padding(
+            padding: const EdgeInsets.all(22.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        "${item['courseCode']} (${item['group'] ?? 'Lecture'})",
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF2563EB),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 20),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+
+                Text(
+                  item['courseName'].toString().toUpperCase(),
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 14.0),
+                  child: Divider(height: 1),
+                ),
+
+                _buildModalRow(
+                  context: context,
+                  icon: Icons.access_time_filled_rounded,
+                  iconColor: const Color(0xFFD97706),
+                  title: "Class Time",
+                  value: "${_formatTimeWithAmPm(start)} - ${_formatTimeWithAmPm(end)}",
+                ),
+                const SizedBox(height: 12),
+
+                _buildModalRow(
+                  context: context,
+                  icon: Icons.location_on_rounded,
+                  iconColor: const Color(0xFF059669),
+                  title: "Class Location / Room",
+                  value: item['room'] ?? 'Main Hall A',
+                ),
+                const SizedBox(height: 12),
+
+                _buildModalRow(
+                  context: context,
+                  icon: Icons.person_rounded,
+                  iconColor: const Color(0xFF7C3AED),
+                  title: "Teacher / Lecturer in Charge",
+                  value: "${item['lecturerName'] ?? 'TBA'} (${item['group'] ?? 'Instructor'})",
+                ),
+                const SizedBox(height: 20),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0F172A),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text("Close Details", style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildModalRow({
+    required BuildContext context,
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String value,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 18, color: iconColor),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: GoogleFonts.inter(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                value,
+                style: GoogleFonts.spaceGrotesk(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : const Color(0xFF0F172A),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

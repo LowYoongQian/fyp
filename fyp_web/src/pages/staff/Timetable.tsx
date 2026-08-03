@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { useDialog } from '../../context/DialogContext';
@@ -7,15 +7,14 @@ import { swalError, swalSuccess } from '../../utils/swal';
 import type { Course } from '../../services/api';
 
 const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) => {
-  // Under 80% is red, under 90% is yellow, 90% and above is green
-  let strokeColor = 'stroke-emerald-500'; // Green
+  let strokeColor = 'stroke-emerald-500';
   let textColorClass = 'text-emerald-600';
 
   if (percentage < 80) {
-    strokeColor = 'stroke-rose-500'; // Red
+    strokeColor = 'stroke-rose-500';
     textColorClass = 'text-rose-600';
   } else if (percentage < 90) {
-    strokeColor = 'stroke-amber-500'; // Yellow
+    strokeColor = 'stroke-amber-500';
     textColorClass = 'text-amber-500';
   }
 
@@ -26,15 +25,7 @@ const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) =>
   return (
     <div className="relative inline-flex items-center justify-center font-bold font-sans select-none shrink-0">
       <svg className="w-11 h-11 -rotate-90" viewBox="0 0 40 40">
-        {/* Background circle */}
-        <circle
-          cx="20"
-          cy="20"
-          r={radius}
-          className="stroke-slate-100 fill-none"
-          strokeWidth="3.5"
-        />
-        {/* Foreground progress circle */}
+        <circle cx="20" cy="20" r={radius} className="stroke-slate-100 fill-none" strokeWidth="3.5" />
         <circle
           cx="20"
           cy="20"
@@ -46,7 +37,6 @@ const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) =>
           strokeLinecap="round"
         />
       </svg>
-      {/* Centered text in the middle of the pie chart */}
       <span className={`absolute text-[9px] font-black tracking-tighter ${textColorClass}`}>
         {Math.round(percentage)}%
       </span>
@@ -56,13 +46,13 @@ const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) =>
 
 interface TimetableEvent {
   id: number | string;
-  meetingId?: number | string;   // class_meetings row id — present for admin, enables editing
+  meetingId?: number | string;
   courseCode: string;
   courseName: string;
   group: string;
   day: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
-  startTime: string; // "08:00"
-  endTime: string;   // "10:00"
+  startTime: string;
+  endTime: string;
   room: string;
   lecturerName: string;
   type: 'normal' | 'replacement' | 'clashed';
@@ -72,10 +62,6 @@ const DAY_NAMES: TimetableEvent['day'][] =
   ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-// GET /admin/timetable has no ORDER BY, and Postgres moves an updated row to the
-// end of the heap — so the edited row jumped to the bottom of the table and the
-// old position showed a DIFFERENT row, reading as "my edit did not apply".
-// Display order is a display concern, so it is decided here, not by the scan order.
 const byDayThenStart = (a: TimetableEvent, b: TimetableEvent) =>
   DAY_NAMES.indexOf(a.day) - DAY_NAMES.indexOf(b.day) ||
   a.startTime.localeCompare(b.startTime);
@@ -83,33 +69,10 @@ const byDayThenStart = (a: TimetableEvent, b: TimetableEvent) =>
 const SEMESTER_START = new Date('2026-06-15T00:00:00');
 const SEMESTER_END = new Date('2026-09-20T23:59:59');
 
-// The grid only covers the teaching day, 08:00–22:00 (14 one-hour columns).
-const GRID_START_HOUR = 8;
-const GRID_END_HOUR = 22;
-const WINDOW_START = GRID_START_HOUR * 60;
-const WINDOW_END = GRID_END_HOUR * 60;
-
 const toMinutes = (t?: string | null): number => {
   const [h, m] = (t || '').split(':').map(Number);
   return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
 };
-
-const TIME_SLOTS = Array.from({ length: GRID_END_HOUR - GRID_START_HOUR }, (_, i) => {
-  const h = GRID_START_HOUR + i;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return { start: `${pad(h)}:00`, end: `${pad(h + 1)}:00` };
-});
-
-// One shared column definition — the header and the day rows must not drift
-// apart. minmax(0,1fr) lets the 14 hours shrink to fit the viewport, so a
-// desktop needs no horizontal scrollbar. Narrower than GRID_MIN_W the shrinking
-// is capped instead (see GRID_MIN_W) and the wrapper scrolls.
-const GRID_COLS = 'grid grid-cols-[76px_repeat(14,_minmax(0,1fr))]';
-
-// 14 hours plus the day label cannot be legible on a phone: at 375px each hour
-// would get ~21px. Below lg the grid keeps this width and its wrapper scrolls;
-// from lg up the cap is released so the grid still fits the viewport exactly.
-const GRID_MIN_W = 'min-w-[1000px] lg:min-w-0';
 
 const formatDate = (date: Date): string => {
   const y = date.getFullYear();
@@ -118,8 +81,20 @@ const formatDate = (date: Date): string => {
   return `${y}-${m}-${d}`;
 };
 
+const getMalaysiaDate = (): Date => {
+  try {
+    const now = new Date();
+    const msiaStr = now.toLocaleString("en-US", { timeZone: "Asia/Kuala_Lumpur" });
+    return new Date(msiaStr);
+  } catch (e) {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    return new Date(utc + (3600000 * 8)); // UTC+8 fallback for Malaysia
+  }
+};
+
 const getCurrentWeekNumber = (): number => {
-  const today = new Date();
+  const today = getMalaysiaDate();
   today.setHours(0, 0, 0, 0);
   if (today < SEMESTER_START) return 1;
   if (today > SEMESTER_END) return 14;
@@ -129,10 +104,56 @@ const getCurrentWeekNumber = (): number => {
   return Math.min(14, Math.max(1, weekNum));
 };
 
+const getClassPalette = (group: string) => {
+  const g = (group || '').trim().toLowerCase();
+  if (g.startsWith('l') || g.includes('lecture')) {
+    // Lecture: Light Blue with dark mode support
+    return {
+      bg: 'bg-sky-100/90 hover:bg-sky-200/95 dark:bg-sky-950/80 dark:hover:bg-sky-900/90 backdrop-blur-xs',
+      border: 'border-sky-300 dark:border-sky-700',
+      text: 'text-sky-950 dark:text-sky-100 font-bold',
+      title: 'text-sky-950 dark:text-white font-black',
+      badge: 'bg-sky-200/90 dark:bg-sky-900 text-sky-950 dark:text-sky-100 font-bold',
+      dot: 'bg-sky-600 dark:bg-sky-400',
+    };
+  } else if (g.startsWith('t') || g.includes('tutor')) {
+    // Tutorial: Light Dark Green / Soft Emerald with dark mode support
+    return {
+      bg: 'bg-emerald-100/90 hover:bg-emerald-200/95 dark:bg-emerald-950/80 dark:hover:bg-emerald-900/90 backdrop-blur-xs',
+      border: 'border-emerald-300 dark:border-emerald-700',
+      text: 'text-emerald-950 dark:text-emerald-100 font-bold',
+      title: 'text-emerald-950 dark:text-white font-black',
+      badge: 'bg-emerald-200/90 dark:bg-emerald-900 text-emerald-950 dark:text-emerald-100 font-bold',
+      dot: 'bg-emerald-600 dark:bg-emerald-400',
+    };
+  } else if (g.startsWith('p') || g.includes('practic') || g.includes('lab')) {
+    // Practical: Purple with dark mode support
+    return {
+      bg: 'bg-purple-100/90 hover:bg-purple-200/95 dark:bg-purple-950/80 dark:hover:bg-purple-900/90 backdrop-blur-xs',
+      border: 'border-purple-300 dark:border-purple-700',
+      text: 'text-purple-950 dark:text-purple-100 font-bold',
+      title: 'text-purple-950 dark:text-white font-black',
+      badge: 'bg-purple-200/90 dark:bg-purple-900 text-purple-950 dark:text-purple-100 font-bold',
+      dot: 'bg-purple-600 dark:bg-purple-400',
+    };
+  }
+  // Default: Light Blue
+  return {
+    bg: 'bg-sky-100/90 hover:bg-sky-200/95 dark:bg-sky-950/80 dark:hover:bg-sky-900/90 backdrop-blur-xs',
+    border: 'border-sky-300 dark:border-sky-700',
+    text: 'text-sky-950 dark:text-sky-100 font-bold',
+    title: 'text-sky-950 dark:text-white font-black',
+    badge: 'bg-sky-200/90 dark:bg-sky-900 text-sky-950 dark:text-sky-100 font-bold',
+    dot: 'bg-sky-600 dark:bg-sky-400',
+  };
+};
+
+const HOURLY_ROW_HEIGHT = 72; // px height per hour slot
+
 export const Timetable: React.FC = () => {
   const { user } = useAuth();
   const { alert: customAlert } = useDialog();
-  const [selectedWeekNum, setSelectedWeekNum] = useState<number>(1);
+  const [selectedWeekNum, setSelectedWeekNum] = useState<number>(() => getCurrentWeekNumber());
   const [isWeekDropdownOpen, setIsWeekDropdownOpen] = useState(false);
   const [events, setEvents] = useState<TimetableEvent[]>([]);
   const [studentCourses, setStudentCourses] = useState<Course[]>([]);
@@ -140,6 +161,20 @@ export const Timetable: React.FC = () => {
   const [editing, setEditing] = useState<TimetableEvent | null>(null);
   const [editForm, setEditForm] = useState({ day: 'Monday', start: '08:00', end: '10:00', room: '' });
   const [saving, setSaving] = useState(false);
+  const [hoveredEventId, setHoveredEventId] = useState<number | string | null>(null);
+  const [isLineHovered, setIsLineHovered] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  const [currentTimeState, setCurrentTimeState] = useState<Date>(getMalaysiaDate());
+
+  useEffect(() => {
+    // Update live Malaysia time every 5 seconds for smooth real-time tracking
+    const timer = setInterval(() => {
+      setCurrentTimeState(getMalaysiaDate());
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
   const openEdit = (ev: TimetableEvent) => {
     setEditForm({ day: ev.day, start: ev.startTime, end: ev.endTime, room: ev.room });
@@ -153,8 +188,6 @@ export const Timetable: React.FC = () => {
       await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
       setEditing(null);
       await loadTimetable();
-      // Toast, not a modal alert: the alert blocked the thread on a click before
-      // the user could see the table it was reporting on.
       swalSuccess('Timetable slot updated', `${editForm.day} ${editForm.start}-${editForm.end}`);
     } catch (err: any) {
       swalError('Failed to update slot', err.response?.data?.detail || 'Please try again.');
@@ -233,15 +266,31 @@ export const Timetable: React.FC = () => {
   };
 
   const getDaysForWeek = (weekNum: number) => {
+    const now = getMalaysiaDate();
+    const todayStr = formatDate(now);
+
     return DAY_NAMES.map((name, index) => {
       const dateOfCurrentDay = new Date(SEMESTER_START);
       dateOfCurrentDay.setDate(SEMESTER_START.getDate() + (weekNum - 1) * 7 + index);
       const dateStr = formatDate(dateOfCurrentDay);
+      const dayNum = dateOfCurrentDay.getDate();
+      const isToday = dateStr === todayStr;
       
-      const dayObj: { name: string; label: string; date: string; holiday?: string } = {
+      const dayObj: { 
+        name: TimetableEvent['day']; 
+        label: string; 
+        date: string; 
+        dayNum: number; 
+        isToday: boolean; 
+        fullDateObj: Date;
+        holiday?: string 
+      } = {
         name,
         label: DAY_LABELS[index],
-        date: dateStr
+        date: dateStr,
+        dayNum,
+        isToday,
+        fullDateObj: dateOfCurrentDay,
       };
       
       if (dateStr === '2026-06-17') {
@@ -327,53 +376,44 @@ export const Timetable: React.FC = () => {
     return Object.values(groups);
   }, [studentCourses, user]);
 
-  const timeSlots = TIME_SLOTS;
+  const hoursList = Array.from({ length: 14 }, (_, i) => 8 + i); // 8 AM to 9 PM
 
-  // Which columns this class occupies. Bounded to the grid it renders into: an
-  // unbounded value produced a NEGATIVE grid line, and CSS counts those back
-  // from the END of the row, so a 02:00 class landed on top of the 18:00 one.
-  // The 08:00–22:00 window itself is enforced on the write path
-  // (PUT /admin/timetable), so this bound only ever catches a violated invariant.
-  const getGridPlacement = (startTime: string, endTime: string) => {
-    const start = Math.min(Math.max(toMinutes(startTime), WINDOW_START), WINDOW_END - 60);
-    const end = Math.min(Math.max(toMinutes(endTime), start + 60), WINDOW_END);
-    return {
-      gridStart: Math.round((start - WINDOW_START) / 60) + 2,
-      gridSpan: Math.max(1, Math.round((end - start) / 60))
-    };
-  };
+  // Calculate current time line offset strictly in Malaysia Time (Asia/Kuala_Lumpur, UTC+8)
+  const currentMinutes = currentTimeState.getHours() * 60 + currentTimeState.getMinutes() + currentTimeState.getSeconds() / 60;
+  const currentMinutesInGrid = currentMinutes - 8 * 60; // relative to 8 AM
+  const currentLineTop = (currentMinutesInGrid / 60) * HOURLY_ROW_HEIGHT;
+  const hStr = String(currentTimeState.getHours()).padStart(2, '0');
+  const mStr = String(currentTimeState.getMinutes()).padStart(2, '0');
+  const currentFormattedTime = format12Hour(`${hStr}:${mStr}`);
+  const showCurrentTimeLine = currentMinutesInGrid >= 0 && currentMinutesInGrid <= 14 * 60;
 
-  const getEventsForDay = (dayName: string) => {
-    return events.filter(e => e.day === dayName);
-  };
+  // Dynamic header date calculations based on current local Malaysia time
+  const currentWeekNumber = getCurrentWeekNumber();
+  
+  // Top Date Badge & Month Title: Uses live local date (currentTimeState) for current week, or selected week's Monday
+  const activeDateObj = (selectedWeekNum === currentWeekNumber)
+    ? currentTimeState
+    : (days[0]?.fullDateObj || currentTimeState);
 
-  // Overlapping classes get their own lane (sub-row) so neither is hidden behind
-  // the other. Lanes are packed left to right: an event reuses the first lane
-  // whose previous event has already ended.
-  const layoutDayEvents = (dayEvents: TimetableEvent[]) => {
-    const lanes: number[] = [];
-    const placed = dayEvents
-      .map(ev => ({ ev, ...getGridPlacement(ev.startTime, ev.endTime) }))
-      .sort((a, b) => a.gridStart - b.gridStart || a.gridSpan - b.gridSpan)
-      .map(p => {
-        let lane = lanes.findIndex(freeFrom => freeFrom <= p.gridStart);
-        if (lane === -1) lane = lanes.length;
-        lanes[lane] = p.gridStart + p.gridSpan;
-        return { ...p, lane };
-      });
-    return { placed, laneCount: Math.max(1, lanes.length) };
-  };
+  const activeMonthAbbrev = activeDateObj.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+  const activeDayNum = activeDateObj.getDate();
+  const activeMonthYearStr = activeDateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
-  const getEventStyles = (type: 'normal' | 'replacement' | 'clashed') => {
-    switch (type) {
-      case 'clashed':
-        return 'bg-red-800 text-white border-red-950 hover:bg-red-900 focus:ring-red-700/50';
-      case 'replacement':
-        return 'bg-amber-700 text-white border-amber-850 hover:bg-amber-800 focus:ring-amber-600/50';
-      case 'normal':
-      default:
-        return 'bg-emerald-700 text-white border-emerald-900 hover:bg-emerald-800 focus:ring-emerald-600/50';
-    }
+  // Subtitle active week date range string (e.g. "Aug 3, 2026 – Aug 9, 2026")
+  const weekStartObj = days[0]?.fullDateObj || currentTimeState;
+  const weekEndObj = days[6]?.fullDateObj || currentTimeState;
+  const activeWeekRangeStr = `${weekStartObj.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${weekEndObj.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+
+  const matchesSearch = (ev: TimetableEvent) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      ev.courseCode.toLowerCase().includes(q) ||
+      ev.courseName.toLowerCase().includes(q) ||
+      ev.room.toLowerCase().includes(q) ||
+      ev.lecturerName.toLowerCase().includes(q) ||
+      ev.group.toLowerCase().includes(q)
+    );
   };
 
   return (
@@ -387,255 +427,499 @@ export const Timetable: React.FC = () => {
         </div>
       </div>
 
-      {/* Week & Campus Banner */}
-      <div className={`uipro-card bg-white/75 relative flex flex-col md:flex-row md:items-center justify-between gap-4 ${isWeekDropdownOpen ? 'z-50' : 'z-10'}`}>
-        <div className="space-y-2">
-          <h2 className="text-xl font-display font-bold text-slate-800 flex items-center gap-2">
-            Kuala Lumpur Campus
-          </h2>
-          <p className="text-xs text-slate-400 font-medium">
-            202605 Semester (Monday, 2026-06-15 – Sunday, 2026-09-20)
-          </p>
+      {/* Main Timetable Card Container */}
+      <div className="uipro-card bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl">
+        
+        {/* Integrated Header Bar (Matching Reference Layout) */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 mb-5 border-b border-slate-200 dark:border-slate-800">
           
-          {/* Week Selector Dropdown */}
-          <div className="pt-2">
-            {isWeekDropdownOpen && (
-              <div 
-                className="fixed inset-0 z-30" 
-                onClick={() => setIsWeekDropdownOpen(false)} 
-              />
-            )}
-            
-            <div className={`relative inline-block ${isWeekDropdownOpen ? 'z-50' : 'z-45'}`}>
-              <button
-                type="button"
-                onClick={() => setIsWeekDropdownOpen(!isWeekDropdownOpen)}
-                className="min-w-[220px] py-1.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
-              >
-                <span className="truncate">
-                  Week {selectedWeekNum} : {(() => {
-                    const monday = new Date(SEMESTER_START);
-                    monday.setDate(SEMESTER_START.getDate() + (selectedWeekNum - 1) * 7);
-                    const sunday = new Date(monday);
-                    sunday.setDate(monday.getDate() + 6);
-                    return `${formatDate(monday)} ~ ${formatDate(sunday)}`;
-                  })()}
+          {/* Left Section: Calendar Date Badge (AUG 3) + Month Title & Semester Subtitle */}
+          <div className="flex items-center gap-3.5">
+            {/* Calendar Date Badge */}
+            <div className="w-14 h-14 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/90 flex flex-col items-center justify-center shadow-2xs shrink-0 overflow-hidden">
+              <div className="w-full bg-slate-200/80 dark:bg-slate-700 text-[10px] font-black font-mono text-slate-600 dark:text-slate-300 text-center py-0.5 uppercase tracking-wider">
+                {activeMonthAbbrev}
+              </div>
+              <div className="text-lg font-black font-display text-slate-900 dark:text-white leading-tight">
+                {activeDayNum}
+              </div>
+            </div>
+
+            {/* Month Year Title & Semester Range Subtitle */}
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg font-extrabold text-slate-900 dark:text-white leading-snug">
+                  {activeMonthYearStr}
+                </h2>
+                {/* System Theme Blue Badge for Week */}
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-sky-600 dark:bg-sky-500 text-white shadow-2xs">
+                  Week {selectedWeekNum}
                 </span>
-                <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
-              </button>
+              </div>
               
-              {isWeekDropdownOpen && (
-                <div className="absolute left-0 mt-1.5 w-64 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-lg shadow-lg z-50 animate-in fade-in duration-100">
-                  {Array.from({ length: 14 }, (_, i) => {
-                    const w = i + 1;
-                    const monday = new Date(SEMESTER_START);
-                    monday.setDate(SEMESTER_START.getDate() + (w - 1) * 7);
-                    const sunday = new Date(monday);
-                    sunday.setDate(monday.getDate() + 6);
-                    return (
-                      <button
-                        key={w}
-                        type="button"
-                        onClick={() => {
-                          setSelectedWeekNum(w);
-                          setIsWeekDropdownOpen(false);
-                        }}
-                        className={`group w-full text-left px-4 py-2 text-xs text-slate-750 hover:bg-brand-blue hover:text-white transition-all flex flex-col gap-0.5 border-b border-slate-100 last:border-b-0 cursor-pointer ${
-                          selectedWeekNum === w ? 'bg-slate-50 font-bold' : ''
-                        }`}
-                      >
-                        <span className="font-semibold group-hover:text-white/90 transition-colors">Week {w}</span>
-                        <span className="text-[10px] text-slate-500 group-hover:text-white/80 transition-colors truncate">
-                          {formatDate(monday)} ~ {formatDate(sunday)}
-                        </span>
-                      </button>
-                    );
-                  })}
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                {activeWeekRangeStr}
+              </p>
+            </div>
+          </div>
+
+          {/* Right Section: Search with Auto Suggestions + Navigation (Today) + Week Dropdown */}
+          <div className="flex items-center gap-3 flex-wrap">
+            
+            {/* Search Input with Auto Suggestions */}
+            <div className="relative">
+              <div className="relative flex items-center">
+                <Search className="absolute left-3 h-4 w-4 text-slate-400 dark:text-slate-500" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onFocus={() => setIsSearchFocused(true)}
+                  onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                  placeholder="Search course, teacher, room..."
+                  className="w-48 sm:w-60 pl-9 pr-8 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-all"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs font-bold"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Auto Suggestions Dropdown Menu */}
+              {isSearchFocused && (
+                <div className="absolute right-0 mt-1.5 w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 p-2.5 space-y-2 animate-in fade-in duration-150">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 px-2 pb-1 border-b border-slate-100 dark:border-slate-700">
+                    Suggested Searches:
+                  </div>
+
+                  <div className="space-y-1">
+                    <button
+                      type="button"
+                      onMouseDown={() => setSearchQuery('BMCS2073')}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-slate-700/60 flex items-center justify-between cursor-pointer"
+                    >
+                      <span>📘 <strong className="text-sky-600 dark:text-sky-400">BMCS2073</strong> - Security</span>
+                      <span className="text-[9px] text-slate-400">Course</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onMouseDown={() => setSearchQuery('Dr. Low')}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-slate-700/60 flex items-center justify-between cursor-pointer"
+                    >
+                      <span>👨‍🏫 <strong className="text-emerald-600 dark:text-emerald-400">Dr. Low</strong></span>
+                      <span className="text-[9px] text-slate-400">Teacher</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onMouseDown={() => setSearchQuery('Lab 2')}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-purple-50 dark:hover:bg-slate-700/60 flex items-center justify-between cursor-pointer"
+                    >
+                      <span>📍 <strong className="text-purple-600 dark:text-purple-400">Lab 2</strong> / Room</span>
+                      <span className="text-[9px] text-slate-400">Venue</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onMouseDown={() => setSearchQuery('Lecture')}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-slate-700/60 flex items-center justify-between cursor-pointer"
+                    >
+                      <span>🏷️ <strong className="text-amber-600 dark:text-amber-400">Lecture</strong> / Group</span>
+                      <span className="text-[9px] text-slate-400">Group</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
+
+            {/* Navigation Control: [ ← ] [ Today ] [ → ] */}
+            <div className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-0.5 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setSelectedWeekNum((prev) => Math.max(1, prev - 1))}
+                disabled={selectedWeekNum <= 1}
+                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg disabled:opacity-40 cursor-pointer transition-all"
+                title="Previous Week"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedWeekNum(getCurrentWeekNumber());
+                }}
+                className="px-3 py-1 text-xs font-bold text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all border-x border-slate-200 dark:border-slate-700"
+              >
+                Today
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedWeekNum((prev) => Math.min(14, prev + 1))}
+                disabled={selectedWeekNum >= 14}
+                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg disabled:opacity-40 cursor-pointer transition-all"
+                title="Next Week"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Week Dropdown View Button with System Theme Blue Active Style */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsWeekDropdownOpen(!isWeekDropdownOpen)}
+                className="flex items-center gap-2 px-3.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs"
+              >
+                <span>Week {selectedWeekNum} View</span>
+                <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isWeekDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isWeekDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsWeekDropdownOpen(false)} />
+                  {/* Outer Frame with Rounded Corners */}
+                  <div className="absolute right-0 mt-1.5 w-64 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
+                    {/* Inner Scroll Container keeps scrollbar cleanly inside the frame */}
+                    <div className="max-h-60 overflow-y-auto pr-1 space-y-1">
+                      {Array.from({ length: 14 }, (_, i) => {
+                        const w = i + 1;
+                        const monday = new Date(SEMESTER_START);
+                        monday.setDate(SEMESTER_START.getDate() + (w - 1) * 7);
+                        const sunday = new Date(monday);
+                        sunday.setDate(monday.getDate() + 6);
+                        const isSelected = selectedWeekNum === w;
+
+                        return (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => {
+                              setSelectedWeekNum(w);
+                              setIsWeekDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                              isSelected
+                                ? 'bg-sky-600 text-white font-extrabold shadow-sm'
+                                : 'text-slate-700 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                            }`}
+                          >
+                            <span className="font-semibold">Week {w}</span>
+                            <span className={`text-[10px] ${isSelected ? 'text-white/90' : 'text-slate-400 dark:text-slate-400'}`}>
+                              {formatDate(monday).substring(5)} ~ {formatDate(sunday).substring(5)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Print Button */}
+            <button 
+              type="button"
+              onClick={() => customAlert('Preparing print layout... (Simulated PDF download)', 'Print Timetable')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/80 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer transition-all shadow-2xs"
+            >
+              <Printer className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+              <span>Print</span>
+            </button>
+
           </div>
         </div>
 
-        {/* Buttons on Right */}
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => customAlert('Preparing print layout... (Simulated PDF download)', 'Print Timetable')}
-            className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 hover:bg-slate-200/50 rounded-lg px-3.5 py-2 text-xs font-semibold text-slate-650 cursor-pointer transition-all"
-          >
-            <Printer className="h-4 w-4" />
-            Print
-          </button>
-          
-          <div className="flex items-center gap-1 bg-white border border-slate-200 shadow-2xs p-1 rounded-lg">
-            <button 
-              onClick={() => setSelectedWeekNum(prev => Math.max(1, prev - 1))}
-              disabled={selectedWeekNum <= 1}
-              className="p-1 hover:bg-slate-50 text-slate-400 hover:text-slate-650 rounded cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="text-[11px] font-bold text-slate-600 px-2.5 shrink-0">Prev / Next</span>
-            <button 
-              onClick={() => setSelectedWeekNum(prev => Math.min(14, prev + 1))}
-              disabled={selectedWeekNum >= 14}
-              className="p-1 hover:bg-slate-50 text-slate-400 hover:text-slate-650 rounded cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Grid Container */}
-      <div className="space-y-4">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider pl-1">
-          Semester Timetable By Week & Date :
-        </h3>
+        {/* Timetable Grid Schedule */}
         {loading ? (
-          <div className="uipro-card bg-white/75 p-20 flex flex-col justify-center items-center gap-3 text-slate-400 font-sans text-xs border border-slate-200">
+          <div className="p-20 flex flex-col justify-center items-center gap-3 text-slate-400 font-sans text-xs">
             <Loader2 className="h-8 w-8 text-brand-blue animate-spin" />
             <span>Synchronizing academic schedules...</span>
           </div>
         ) : (
-          <div className="uipro-card bg-white/75 p-5 border border-slate-200 shadow-premium">
-            <div className="w-full overflow-x-auto">
-              <div className={`w-full ${GRID_MIN_W} rounded-xl border border-slate-150 overflow-hidden`}>
-              {/* Swapped Timetable Grid Layout */}
-              <div className={`${GRID_COLS} border-b border-slate-200 bg-slate-50 text-center text-xs font-bold text-slate-600`}>
+          <div className="w-full overflow-x-auto">
+              <div className="min-w-[860px]">
 
-                {/* Top Left Day/Time Cell */}
-                <div className="row-span-2 border-r border-b border-slate-200 flex flex-col items-center justify-center p-2 text-[10px] font-bold text-slate-450 uppercase tracking-wider leading-tight">
-                  <div>Day /</div>
-                  <div>Time</div>
+                {/* Top Day Headers (7 Columns: Mon - Sun) */}
+                <div className="grid grid-cols-[80px_repeat(7,_minmax(0,1fr))] border-b border-slate-200 pb-3">
+                  <div className="text-xs font-bold text-slate-400 flex items-center justify-center">
+                    GMT+8
+                  </div>
+                  {days.map((day) => (
+                    <div 
+                      key={day.name} 
+                      className={`flex items-center justify-center gap-1.5 text-xs font-semibold py-1.5 rounded-xl transition-all ${
+                        day.isToday 
+                          ? 'bg-sky-100/90 dark:bg-sky-900/50 text-sky-950 dark:text-sky-100 font-extrabold shadow-2xs ring-1 ring-sky-300/70 dark:ring-sky-700/70' 
+                          : 'text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      <span>{day.label}</span>
+                      <span className={`font-extrabold ${day.isToday ? 'text-sky-950 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>
+                        {day.dayNum}
+                      </span>
+                    </div>
+                  ))}
                 </div>
 
-                {/* Top Row Time Slots — 24-hour, so 12:00 is followed by 13:00 */}
-                {timeSlots.map((slot, idx) => (
-                  <div key={idx} className="py-1.5 border-r border-slate-200/70 border-b border-slate-100/50 flex items-center justify-center font-mono text-[10px]">
-                    {slot.start}
-                  </div>
-                ))}
+                {/* Weekly Grid Area with Time Rows */}
+                <div className="relative grid grid-cols-[80px_repeat(7,_minmax(0,1fr))] divide-x divide-slate-100 dark:divide-slate-800">
 
-                {/* Bottom Row Time Slots */}
-                {timeSlots.map((slot, idx) => (
-                  <div key={idx} className="py-1.5 border-r border-slate-200/70 border-b border-slate-200 flex items-center justify-center font-mono text-[10px] text-slate-400">
-                    {slot.end}
-                  </div>
-                ))}
-              </div>
-
-              {/* Timetable Rows (Days of the week) */}
-              <div className="divide-y divide-slate-200 bg-white">
-                {days.map((day) => {
-                  const { placed, laneCount } = layoutDayEvents(getEventsForDay(day.name));
-                  return (
-                    <div
-                      key={day.name}
-                      className={`${GRID_COLS} relative`}
-                      style={{ gridAutoRows: 'minmax(132px, auto)' }}
+                  {/* Current Time Indicator Line with Continuous Dashed Line and Dark Mode Sync */}
+                  {showCurrentTimeLine && (
+                    <div 
+                      className="absolute left-[80px] right-0 z-30 flex items-center transition-all duration-700 ease-in-out group cursor-pointer"
+                      style={{ top: `${currentLineTop}px` }}
+                      onMouseEnter={() => setIsLineHovered(true)}
+                      onMouseLeave={() => setIsLineHovered(false)}
                     >
-                      {/* Left Column Day Label */}
-                      <div
-                        style={{
-                          gridColumnStart: 1,
-                          gridRow: `1 / span ${laneCount}`,
-                        }}
-                        className="border-r border-slate-200 bg-slate-50/50 px-1.5 py-3 flex flex-col items-center justify-center text-center"
-                      >
-                        <span className="font-extrabold text-slate-800 text-sm leading-tight">{day.label}</span>
-                        <span className="text-[9px] text-slate-450 font-semibold font-sans tracking-tight mt-0.5">{day.date}</span>
-                        {day.holiday && (
-                          <span className="text-[8px] font-bold text-red-500 uppercase tracking-tight leading-tight mt-1 animate-pulse">
-                            {day.holiday}
-                          </span>
-                        )}
-                      </div>
+                      {/* Continuous Dashed Line running across, passing directly through the dot/badge */}
+                      <div className="absolute inset-x-0 border-b-2 border-dashed border-slate-900/80 dark:border-slate-100/90 group-hover:border-slate-900 dark:group-hover:border-white transition-colors pointer-events-none" />
 
-                      {/* 14 Background Empty Slots, spanning every lane of the day */}
-                      {timeSlots.map((_, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            gridColumnStart: i + 2,
-                            gridRow: `1 / span ${laneCount}`,
-                          }}
-                          className={`border-r border-slate-150/45 ${
-                            day.holiday ? 'bg-red-500/[0.015]' : ''
+                      {/* Live Dot & Smooth Animated Time Badge */}
+                      <div className="relative flex items-center -ml-1.5 z-40">
+                        {/* Default dot indicator when NOT hovered */}
+                        <div 
+                          className={`w-3.5 h-3.5 rounded-full bg-slate-900 dark:bg-slate-100 border-2 border-white dark:border-slate-900 shadow-md transition-all duration-300 ease-out flex items-center justify-center ${
+                            isLineHovered ? 'scale-0 opacity-0' : 'scale-100 opacity-100'
                           }`}
-                        />
-                      ))}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 dark:bg-emerald-500 animate-pulse" />
+                        </div>
 
-                      {/* Events. Overlapping ones sit in separate lanes, so none is hidden. */}
-                      {placed.map(({ ev: event, gridStart, gridSpan, lane }) => {
-                        return (
-                          <div
-                            key={event.id}
-                            style={{
-                              gridColumnStart: gridStart,
-                              gridColumnEnd: `span ${gridSpan}`,
-                              gridRow: lane + 1,
-                              zIndex: 10,
-                            }}
-                            className="p-0.5 h-full"
-                          >
+                        {/* Animated Time Badge showing up smoothly on hover */}
+                        <span 
+                          className={`absolute left-0 inline-flex items-center gap-1.5 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-mono text-[9.5px] font-extrabold px-2.5 py-1 rounded-full shadow-xl transition-all duration-300 ease-out origin-left whitespace-nowrap ${
+                            isLineHovered 
+                              ? 'scale-100 opacity-100 translate-x-0' 
+                              : 'scale-75 opacity-0 -translate-x-2 pointer-events-none'
+                          }`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 dark:bg-emerald-600 animate-pulse" />
+                          {currentFormattedTime}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Left Time Column (8 AM to 9 PM) */}
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 bg-slate-50/40 dark:bg-slate-900/40">
+                    {hoursList.map((hour) => {
+                      const ampm = hour >= 12 ? 'PM' : 'AM';
+                      const displayH = hour % 12 === 0 ? 12 : hour % 12;
+                      return (
+                        <div 
+                          key={hour} 
+                          style={{ height: `${HOURLY_ROW_HEIGHT}px` }}
+                          className="pr-3 pt-1.5 text-right font-mono text-[11px] font-medium text-slate-400 dark:text-slate-500"
+                        >
+                          {displayH} {ampm}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 7 Day Columns (Mon - Sun) */}
+                  {days.map((day) => {
+                    const dayEvents = events.filter(e => e.day === day.name);
+
+                    return (
+                      <div 
+                        key={day.name} 
+                        className={`relative divide-y divide-slate-100 dark:divide-slate-800 transition-colors ${
+                          day.isToday 
+                            ? 'bg-sky-50/60 dark:bg-sky-950/20' 
+                            : 'bg-white dark:bg-slate-900'
+                        }`}
+                      >
+                        {/* Background Hour Lines */}
+                        {hoursList.map((hour) => (
+                          <div key={hour} style={{ height: `${HOURLY_ROW_HEIGHT}px` }} className="w-full" />
+                        ))}
+
+                        {/* Events overlay inside Day column */}
+                        {dayEvents.map((ev) => {
+                          const palette = getClassPalette(ev.group);
+                          const startMin = toMinutes(ev.startTime);
+                          const endMin = toMinutes(ev.endTime);
+                          const topPx = ((startMin - 8 * 60) / 60) * HOURLY_ROW_HEIGHT;
+                          const durMin = Math.max(30, endMin - startMin);
+                          const heightPx = (durMin / 60) * HOURLY_ROW_HEIGHT;
+                          const isHovered = hoveredEventId === ev.id;
+
+                          // Smart popover position to prevent clipping at top/left/right boundaries
+                          const isTopSlot = startMin < 11 * 60; // 8 AM, 9 AM, 10 AM slots
+                          const isFirstDay = day.name === 'Monday' || day.name === 'Tuesday';
+                          const isLastDay = day.name === 'Sunday' || day.name === 'Saturday';
+
+                          let alignClass = 'left-1/2 -translate-x-1/2';
+                          let arrowAlignClass = 'left-1/2 -translate-x-1/2';
+
+                          if (isFirstDay) {
+                            alignClass = 'left-0 translate-x-0';
+                            arrowAlignClass = 'left-6';
+                          } else if (isLastDay) {
+                            alignClass = 'right-0 translate-x-0 left-auto';
+                            arrowAlignClass = 'right-6';
+                          }
+
+                          let positionClass = 'bottom-full mb-2.5';
+                          let arrowClass = 'top-full border-t-white/60 dark:border-t-slate-900/70 border-t-8 border-x-8 border-x-transparent';
+
+                          if (isTopSlot) {
+                            positionClass = 'top-full mt-2.5';
+                            arrowClass = 'bottom-full border-b-white/60 dark:border-b-slate-900/70 border-b-8 border-x-8 border-x-transparent';
+                          }
+
+                          const isSearchActive = searchQuery.trim() !== '';
+                          const isMatched = !isSearchActive || matchesSearch(ev);
+
+                          return (
                             <div
-                              className={`h-full rounded-md border px-1 py-1 flex flex-col justify-between gap-1 transition-all duration-200 cursor-pointer shadow-sm select-none ${getEventStyles(event.type)}`}
+                              key={ev.id}
+                              style={{
+                                top: `${topPx}px`,
+                                height: `${heightPx}px`,
+                                left: '3px',
+                                right: '3px',
+                              }}
+                              className={`absolute p-0.5 transition-all ${isHovered ? 'z-[100]' : 'z-10'}`}
+                              onMouseEnter={() => setHoveredEventId(ev.id)}
+                              onMouseLeave={() => setHoveredEventId(null)}
+                              onClick={() => {
+                                if (user?.role === 'admin' && ev.meetingId) openEdit(ev);
+                              }}
                             >
-                              <div className="space-y-0.5">
-                                {/* The code already carries the type in "(P)", so a PRACTICAL
-                                    badge beside it spent half the line width on the same fact. */}
-                                <div className="text-[9px] font-black font-mono tracking-wider opacity-90">
-                                  {event.courseCode} ({event.group === 'Replacement' ? 'R' : event.group.charAt(0)})
+                              {/* Simple Pastel Container Card */}
+                              <div
+                                className={`w-full h-full rounded-xl border p-2 flex flex-col justify-between transition-all duration-300 cursor-pointer shadow-2xs group relative ${palette.bg} ${palette.border} ${
+                                  isSearchActive
+                                    ? isMatched
+                                      ? 'opacity-100 ring-2 ring-sky-500 scale-[1.01]'
+                                      : 'opacity-30 grayscale-[30%]'
+                                    : 'opacity-100'
+                                }`}
+                              >
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className={`text-[10.5px] tracking-wide ${palette.title}`}>
+                                      {ev.courseCode}
+                                    </span>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${palette.dot}`} />
+                                  </div>
+                                  <h4 className={`text-[10px] leading-tight truncate ${palette.text}`}>
+                                    {ev.courseName}
+                                  </h4>
                                 </div>
-                                {/* No line-clamp: a clamp is an upper bound, so the row could
-                                    never grow to fit the name. gridAutoRows is minmax(_, auto),
-                                    so letting the name wrap makes the row taller instead. */}
-                                <h4 className="text-[10.5px] font-extrabold leading-snug text-white break-words">
-                                  {event.courseName}
-                                </h4>
-                              </div>
 
-                              {/* One field per line. Sharing a line halved an already ~60px
-                                  column, which is what cut "Theatre 2" down to "Theatr...". */}
-                              <div className="space-y-0.5 text-[8.5px] opacity-90 font-medium pt-0.5 border-t border-white/10">
-                                <div className="font-mono">{event.startTime} - {event.endTime}</div>
-                                <div className="truncate">{event.room}</div>
-                                <div className="truncate font-semibold">
-                                  {event.lecturerName.split(' ').slice(1).join(' ')}
+                                <div className="flex items-center justify-between text-[9.5px] font-medium opacity-95">
+                                  <span className={`px-1.5 py-0.5 rounded-md font-mono ${palette.badge}`}>
+                                    {format12Hour(ev.startTime)}
+                                  </span>
                                 </div>
+
+                                {/* Floating Hover Popover / Tooltip with Authentic Frosted Glassmorphism Effect */}
+                                {isHovered && (
+                                  <div 
+                                    className={`absolute w-80 bg-white/55 dark:bg-slate-900/65 text-slate-900 dark:text-white rounded-2xl p-4 shadow-[0_16px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.5)] border border-white/80 dark:border-white/20 backdrop-blur-xl z-[100] animate-in fade-in zoom-in-95 duration-150 pointer-events-none ${positionClass} ${alignClass}`}
+                                  >
+                                    <div className="space-y-3">
+                                      {/* Top Row: Course Code & Role Tag */}
+                                      <div className="flex items-center justify-between border-b border-slate-900/10 dark:border-white/10 pb-2">
+                                        <span className="font-extrabold text-xs text-sky-700 dark:text-sky-300 font-mono tracking-tight">
+                                          {ev.courseCode} ({ev.group})
+                                        </span>
+                                        <span className="text-[9.5px] font-bold uppercase tracking-wider bg-white/70 dark:bg-white/10 text-slate-800 dark:text-slate-200 px-2.5 py-0.5 rounded-md border border-white/90 dark:border-white/10 shadow-2xs backdrop-blur-xs">
+                                          {ev.type}
+                                        </span>
+                                      </div>
+                                      
+                                      {/* Course Full Name */}
+                                      <h5 className="font-extrabold text-xs text-slate-900 dark:text-white leading-snug">
+                                        {ev.courseName}
+                                      </h5>
+
+                                      {/* Details List with Spacious Single-Line Alignment */}
+                                      <div className="space-y-2 text-xs pt-1">
+                                        <div className="flex items-center gap-2.5 whitespace-nowrap">
+                                          <div className="flex items-center gap-1.5 min-w-[95px] shrink-0 text-slate-700 dark:text-slate-200 font-semibold text-[11px]">
+                                            <span className="text-xs">🕒</span>
+                                            <span>Time:</span>
+                                          </div>
+                                          <span className="font-bold font-mono text-amber-700 dark:text-amber-300 text-[11.5px]">
+                                            {format12Hour(ev.startTime)} – {format12Hour(ev.endTime)}
+                                          </span>
+                                        </div>
+
+                                        <div className="flex items-center gap-2.5 whitespace-nowrap">
+                                          <div className="flex items-center gap-1.5 min-w-[95px] shrink-0 text-slate-700 dark:text-slate-200 font-semibold text-[11px]">
+                                            <span className="text-xs">📍</span>
+                                            <span>Location:</span>
+                                          </div>
+                                          <span className="font-extrabold text-emerald-700 dark:text-emerald-300 text-xs">
+                                            {ev.room}
+                                          </span>
+                                        </div>
+
+                                        <div className="flex items-center gap-2.5 whitespace-nowrap">
+                                          <div className="flex items-center gap-1.5 min-w-[95px] shrink-0 text-slate-700 dark:text-slate-200 font-semibold text-[11px]">
+                                            <span className="text-xs">👨‍🏫</span>
+                                            <span>Lecturer:</span>
+                                          </div>
+                                          <span className="font-extrabold text-purple-700 dark:text-purple-300 text-xs truncate">
+                                            {ev.lecturerName}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className={`absolute w-0 h-0 ${arrowClass} ${arrowAlignClass}`} />
+                                  </div>
+                                )}
                               </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
-      )}
-      </div>
 
       {/* Timetable Colors Legend */}
-      <div className="uipro-card bg-white/75 p-5">
+      <div className="uipro-card bg-white/75 p-5 border border-slate-200">
         <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pb-2 border-b border-slate-150">
-          Timetable Classification Legend
+          Class Type & Interactive Color Legend
         </h4>
-        <div className="flex flex-wrap items-center gap-6 pt-3 text-xs font-semibold text-slate-650">
+        <div className="flex flex-wrap items-center gap-6 pt-3 text-xs font-semibold text-slate-700">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-emerald-700 border border-emerald-900" />
-            <span>Normal Class</span>
+            <div className="w-4 h-4 rounded-md bg-sky-100 border border-sky-400 shadow-2xs" />
+            <span className="font-bold text-sky-950">Lecture Class (Light Blue)</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-amber-700 border border-amber-800" />
-            <span>Replacement Class</span>
+            <div className="w-4 h-4 rounded-md bg-emerald-100 border border-emerald-400 shadow-2xs" />
+            <span className="font-bold text-emerald-950">Tutorial Class (Soft Green)</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-red-800 border border-red-900" />
-            <span>Clashed Class / Class on Public Holiday</span>
+            <div className="w-4 h-4 rounded-md bg-purple-100 border border-purple-400 shadow-2xs" />
+            <span className="font-bold text-purple-950">Practical / Lab (Purple)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 rounded-full bg-slate-900 text-white text-[9px] flex items-center justify-center font-bold">10</div>
+            <span className="font-semibold text-slate-600">Today's Date Indicator</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-8 border-b-2 border-dotted border-slate-800" />
+            <span className="font-semibold text-slate-600">Live Time Marker</span>
           </div>
         </div>
       </div>

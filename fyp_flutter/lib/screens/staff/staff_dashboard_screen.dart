@@ -189,7 +189,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
-  Future<void> handleCloseSession(int sessionId) async {
+  Future<void> handleCloseSession(dynamic sessionId) async {
     try {
       final uri = Uri.parse("${widget.apiBaseUrl}/attendance/close-session/$sessionId");
       final res = await http.post(uri, headers: {
@@ -287,7 +287,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
-  void _showAttendeesModal(BuildContext context, int sessionId, String courseCode) async {
+  void _showAttendeesModal(BuildContext context, dynamic sessionId, String courseCode) async {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
 
