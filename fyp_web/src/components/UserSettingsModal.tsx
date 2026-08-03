@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { apiService, clearApiCache } from '../services/api';
 import { swalSuccess, swalError } from '../utils/swal';
 import {
@@ -456,8 +457,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
       {/* Modal Shell Container */}
       <div
         style={{ backgroundColor: THEME_TOKENS.bg, color: THEME_TOKENS.textPrimary, borderColor: THEME_TOKENS.border }}
@@ -848,6 +849,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 };

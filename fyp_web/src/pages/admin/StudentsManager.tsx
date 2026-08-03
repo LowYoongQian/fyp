@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
 import type { AdminStudent } from '../../services/api';
 import { swalSuccess, swalError, swalConfirmDelete } from '../../utils/swal';
@@ -308,9 +309,9 @@ export const StudentsManager: React.FC = () => {
       </div>
 
       {/* Modal Dialog: CREATE STUDENT */}
-      {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setIsCreateOpen(false)} />
+      {isCreateOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md" onClick={() => setIsCreateOpen(false)} />
           
           <div className="max-w-md w-full uipro-card bg-white relative z-10 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -414,13 +415,14 @@ export const StudentsManager: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Modal Dialog: EDIT STUDENT */}
-      {isEditOpen && selectedStudent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setIsEditOpen(false)} />
+      {isEditOpen && selectedStudent && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md" onClick={() => setIsEditOpen(false)} />
           
           <div className="max-w-md w-full uipro-card bg-white relative z-10 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -523,7 +525,8 @@ export const StudentsManager: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

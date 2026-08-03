@@ -677,20 +677,17 @@ html.dark .shimmer-placeholder-dark {
   }
 }
 
-/* Light Mode Toast Card Sync */
-html:not(.dark) .swal2-popup.swal2-toast {
-  background-color: #ffffff !important;
-  color: #0f172a !important;
-  border: 1px solid rgba(226, 232, 240, 0.9) !important;
-  box-shadow: 0 12px 32px -6px rgba(0, 0, 0, 0.1), 0 4px 10px -2px rgba(0, 0, 0, 0.04) !important;
+/* Success State Left-to-Right Soft & Subtle Gradient Card Tint */
+html:not(.dark) .swal2-popup.swal2-toast.toast-success {
+  background: linear-gradient(90deg, rgba(209, 250, 229, 0.35) 0%, rgba(255, 255, 255, 0.98) 28%, #ffffff 100%) !important;
+  border: 1px solid rgba(16, 185, 129, 0.22) !important;
+  box-shadow: 0 12px 32px -6px rgba(16, 185, 129, 0.08), 0 4px 10px -2px rgba(0, 0, 0, 0.04) !important;
 }
 
-/* Dark Mode Toast Card Sync (Matching Dribbble Dark UI) */
-html.dark .swal2-popup.swal2-toast {
-  background-color: #18181b !important;
-  color: #f8fafc !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.5) !important;
+html.dark .swal2-popup.swal2-toast.toast-success {
+  background: linear-gradient(90deg, rgba(6, 78, 59, 0.22) 0%, rgba(24, 24, 27, 0.98) 30%, #18181b 100%) !important;
+  border: 1px solid rgba(52, 211, 153, 0.25) !important;
+  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.5), 0 0 16px -4px rgba(16, 185, 129, 0.12) !important;
 }
 
 /* Icon Container (Circular Glyph Badge) */
@@ -720,16 +717,70 @@ html.dark .swal2-popup.swal2-toast {
   display: none !important;
 }
 
-/* Success State Colors */
+/* Success Logo Icon Appear/Disappear Animation Effects & Gradient Badge */
+.swal2-toast.toast-in.toast-success .swal2-icon {
+  animation: iconPopIn 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.25) forwards !important;
+}
+
+.swal2-toast.toast-out.toast-success .swal2-icon {
+  animation: iconPopOut 0.25s ease-in forwards !important;
+}
+
+.swal2-toast.toast-success .toast-check-path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: checkmarkDraw 0.4s cubic-bezier(0.65, 0, 0.45, 1) 0.12s forwards;
+}
+
+@keyframes iconPopIn {
+  0% {
+    transform: scale(0) rotate(-45deg);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.2) rotate(6deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes iconPopOut {
+  0% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0) rotate(30deg);
+    opacity: 0;
+  }
+}
+
+@keyframes checkmarkDraw {
+  0% {
+    stroke-dashoffset: 24;
+    opacity: 0;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+/* Success State Colors & Left-to-Right Icon Gradient */
 html:not(.dark) .swal2-toast.toast-success .swal2-icon {
-  background-color: rgba(16, 185, 129, 0.12) !important;
-  color: #10b981 !important;
-  border: 1px solid rgba(16, 185, 129, 0.25) !important;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(52, 211, 153, 0.1) 100%) !important;
+  color: #059669 !important;
+  border: 1px solid rgba(16, 185, 129, 0.35) !important;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2) !important;
 }
 html.dark .swal2-toast.toast-success .swal2-icon {
-  background-color: rgba(16, 185, 129, 0.18) !important;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.3) 0%, rgba(52, 211, 153, 0.12) 100%) !important;
   color: #34d399 !important;
-  border: 1px solid rgba(52, 211, 153, 0.3) !important;
+  border: 1px solid rgba(52, 211, 153, 0.45) !important;
+  box-shadow: 0 2px 10px rgba(52, 211, 153, 0.25) !important;
 }
 
 /* Info State Colors */
@@ -859,4 +910,19 @@ html.dark .swal2-toast .swal2-close:hover {
 }
 .swal2-toast.toast-error .swal2-timer-progress-bar {
   background: linear-gradient(90deg, #f43f5e, #fb7185) !important;
+}
+
+/* ==========================================================================
+   Full-Screen Viewport Backdrop Focus Coverage (Fix Top & Side Gaps)
+   ========================================================================== */
+
+div[class*="fixed inset-0"][class*="backdrop-blur"],
+div[class*="fixed inset-0"][class*="bg-black"],
+div[class*="fixed inset-0"][class*="bg-slate"] {
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  min-height: 100vh !important;
 }
