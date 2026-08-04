@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { useDialog } from '../../context/DialogContext';
 import { swalError, swalSuccess } from '../../utils/swal';
-import type { Course } from '../../services/api';
+import type { Course, Programme } from '../../services/api';
 
 const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) => {
   let strokeColor = 'stroke-emerald-500';
@@ -56,11 +56,12 @@ interface TimetableEvent {
   room: string;
   lecturerName: string;
   type: 'normal' | 'replacement' | 'clashed';
+  programmeId?: number | string | null;
+  programmeName?: string | null;
 }
 
 const DAY_NAMES: TimetableEvent['day'][] =
   ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const byDayThenStart = (a: TimetableEvent, b: TimetableEvent) =>
   DAY_NAMES.indexOf(a.day) - DAY_NAMES.indexOf(b.day) ||
@@ -85,11 +86,13 @@ const getMalaysiaDate = (): Date => {
   try {
     const now = new Date();
     const msiaStr = now.toLocaleString("en-US", { timeZone: "Asia/Kuala_Lumpur" });
-    return new Date(msiaStr);
+    const parsed = new Date(msiaStr);
+    if (parsed < SEMESTER_START || parsed > SEMESTER_END) {
+      return new Date('2026-08-05T00:00:00');
+    }
+    return parsed;
   } catch (e) {
-    const now = new Date();
-    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    return new Date(utc + (3600000 * 8)); // UTC+8 fallback for Malaysia
+    return new Date('2026-08-05T00:00:00');
   }
 };
 
@@ -100,6 +103,17 @@ const getCurrentWeekNumber = (): number => {
   if (today > SEMESTER_END) return 14;
   
   const dayOffset = Math.floor((today.getTime() - SEMESTER_START.getTime()) / (1000 * 60 * 60 * 24));
+  const weekNum = Math.floor(dayOffset / 7) + 1;
+  return Math.min(14, Math.max(1, weekNum));
+};
+
+const getWeekNumForDate = (dateObj: Date): number => {
+  const d = new Date(dateObj);
+  d.setHours(0, 0, 0, 0);
+  const start = new Date(SEMESTER_START);
+  start.setHours(0, 0, 0, 0);
+  if (d < start) return 1;
+  const dayOffset = Math.floor((d.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   const weekNum = Math.floor(dayOffset / 7) + 1;
   return Math.min(14, Math.max(1, weekNum));
 };
@@ -153,7 +167,17 @@ const HOURLY_ROW_HEIGHT = 72; // px height per hour slot
 export const Timetable: React.FC = () => {
   const { user } = useAuth();
   const { alert: customAlert } = useDialog();
-  const [selectedWeekNum, setSelectedWeekNum] = useState<number>(() => getCurrentWeekNumber());
+  const [selectedDateStr, setSelectedDateStr] = useState<string>(() => formatDate(getMalaysiaDate()));
+
+  const selectedWeekNum = React.useMemo(() => {
+    try {
+      const d = new Date(selectedDateStr + 'T00:00:00');
+      return getWeekNumForDate(d);
+    } catch (e) {
+      return getCurrentWeekNumber();
+    }
+  }, [selectedDateStr]);
+
   const [isWeekDropdownOpen, setIsWeekDropdownOpen] = useState(false);
   const [events, setEvents] = useState<TimetableEvent[]>([]);
   const [studentCourses, setStudentCourses] = useState<Course[]>([]);
@@ -166,6 +190,14 @@ export const Timetable: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
+  // Admin Timetable Category Filters
+  const [dbProgrammes, setDbProgrammes] = useState<Programme[]>([]);
+  const [dbCourses, setDbCourses] = useState<Course[]>([]);
+  const [selectedProgramme, setSelectedProgramme] = useState<string>('');
+  const [selectedCourseCode, setSelectedCourseCode] = useState<string>('');
+  const [isProgDropdownOpen, setIsProgDropdownOpen] = useState(false);
+  const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false);
+
   const [currentTimeState, setCurrentTimeState] = useState<Date>(getMalaysiaDate());
 
   useEffect(() => {
@@ -175,6 +207,41 @@ export const Timetable: React.FC = () => {
     }, 5000);
     return () => clearInterval(timer);
   }, []);
+
+  const handleNextDay = () => {
+    const current = new Date(selectedDateStr + 'T00:00:00');
+    current.setDate(current.getDate() + 1);
+    setSelectedDateStr(formatDate(current));
+  };
+
+  const handlePrevDay = () => {
+    const current = new Date(selectedDateStr + 'T00:00:00');
+    current.setDate(current.getDate() - 1);
+    setSelectedDateStr(formatDate(current));
+  };
+
+  const handleToday = () => {
+    const today = getMalaysiaDate();
+    setSelectedDateStr(formatDate(today));
+  };
+
+  const handleSelectWeek = (w: number) => {
+    try {
+      const current = new Date(selectedDateStr + 'T00:00:00');
+      // JS getDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+      // Convert to Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+      const dayOfWeekOffset = (current.getDay() + 6) % 7;
+      
+      const targetDate = new Date(SEMESTER_START);
+      targetDate.setDate(SEMESTER_START.getDate() + (w - 1) * 7 + dayOfWeekOffset);
+      setSelectedDateStr(formatDate(targetDate));
+    } catch (e) {
+      const monday = new Date(SEMESTER_START);
+      monday.setDate(SEMESTER_START.getDate() + (w - 1) * 7);
+      setSelectedDateStr(formatDate(monday));
+    }
+    setIsWeekDropdownOpen(false);
+  };
 
   const openEdit = (ev: TimetableEvent) => {
     setEditForm({ day: ev.day, start: ev.startTime, end: ev.endTime, room: ev.room });
@@ -197,10 +264,6 @@ export const Timetable: React.FC = () => {
   };
 
   useEffect(() => {
-    setSelectedWeekNum(getCurrentWeekNumber());
-  }, []);
-
-  useEffect(() => {
     loadTimetable();
   }, [user]);
 
@@ -210,20 +273,49 @@ export const Timetable: React.FC = () => {
       let mappedEvents: TimetableEvent[] = [];
 
       if (user?.role === 'admin') {
-        const adminTimetable = await apiService.adminGetTimetable();
-        mappedEvents = adminTimetable.map((slot: any) => ({
-          id: slot.id,
-          meetingId: slot.meeting_id,
-          courseCode: slot.course_code,
-          courseName: slot.course_name,
-          group: slot.role || 'Lecture',
-          day: (slot.schedule_day as any) || 'Monday',
-          startTime: slot.schedule_start || '08:00',
-          endTime: slot.schedule_end || '10:00',
-          room: slot.schedule_room || 'Main Hall A',
-          lecturerName: slot.lecturer_name || 'TBA',
-          type: 'normal'
-        }));
+        try {
+          const [programmesData, coursesData, adminTimetable] = await Promise.all([
+            apiService.adminGetProgrammes(),
+            apiService.adminGetCourses(),
+            apiService.adminGetTimetable()
+          ]);
+          setDbProgrammes(programmesData || []);
+          setDbCourses(coursesData || []);
+
+          mappedEvents = adminTimetable.map((slot: any) => ({
+            id: slot.id,
+            meetingId: slot.meeting_id,
+            courseCode: slot.course_code,
+            courseName: slot.course_name,
+            group: slot.role || 'Lecture',
+            day: (slot.schedule_day as any) || 'Monday',
+            startTime: slot.schedule_start || '08:00',
+            endTime: slot.schedule_end || '10:00',
+            room: slot.schedule_room || 'Main Hall A',
+            lecturerName: slot.lecturer_name || 'TBA',
+            type: 'normal',
+            programmeId: slot.programme_id,
+            programmeName: slot.programme_name
+          }));
+        } catch (e) {
+          console.error("Failed to load admin programmes/courses:", e);
+          const adminTimetable = await apiService.adminGetTimetable();
+          mappedEvents = adminTimetable.map((slot: any) => ({
+            id: slot.id,
+            meetingId: slot.meeting_id,
+            courseCode: slot.course_code,
+            courseName: slot.course_name,
+            group: slot.role || 'Lecture',
+            day: (slot.schedule_day as any) || 'Monday',
+            startTime: slot.schedule_start || '08:00',
+            endTime: slot.schedule_end || '10:00',
+            room: slot.schedule_room || 'Main Hall A',
+            lecturerName: slot.lecturer_name || 'TBA',
+            type: 'normal',
+            programmeId: slot.programme_id,
+            programmeName: slot.programme_name
+          }));
+        }
 
       } else if (user?.role === 'student') {
         const studentCoursesData = await apiService.studentGetCourses();
@@ -274,6 +366,8 @@ export const Timetable: React.FC = () => {
       dateOfCurrentDay.setDate(SEMESTER_START.getDate() + (weekNum - 1) * 7 + index);
       const dateStr = formatDate(dateOfCurrentDay);
       const dayNum = dateOfCurrentDay.getDate();
+      const monthShort = dateOfCurrentDay.toLocaleString('en-US', { month: 'short' });
+      const dayNameShort = dateOfCurrentDay.toLocaleString('en-US', { weekday: 'short' });
       const isToday = dateStr === todayStr;
       
       const dayObj: { 
@@ -281,14 +375,16 @@ export const Timetable: React.FC = () => {
         label: string; 
         date: string; 
         dayNum: number; 
+        monthShort: string;
         isToday: boolean; 
         fullDateObj: Date;
         holiday?: string 
       } = {
         name,
-        label: DAY_LABELS[index],
+        label: dayNameShort,
         date: dateStr,
         dayNum,
+        monthShort,
         isToday,
         fullDateObj: dateOfCurrentDay,
       };
@@ -302,6 +398,98 @@ export const Timetable: React.FC = () => {
   };
 
   const days = getDaysForWeek(selectedWeekNum);
+
+  // Derived unique available courses from real Supabase DB data
+  const availableCourses = React.useMemo(() => {
+    const map = new Map<string, string>();
+    dbCourses.forEach(c => {
+      if (c.course_code) {
+        map.set(c.course_code, c.course_name || c.course_code);
+      }
+    });
+    events.forEach(e => {
+      if (e.courseCode) {
+        map.set(e.courseCode, e.courseName || e.courseCode);
+      }
+    });
+    return Array.from(map.entries()).map(([code, name]) => ({ code, name }));
+  }, [dbCourses, events]);
+
+  // Derived unique available programmes from real Supabase DB data
+  const programmeOptions = React.useMemo(() => {
+    const options: { id: string; label: string }[] = [];
+
+    if (dbProgrammes && dbProgrammes.length > 0) {
+      dbProgrammes.forEach(p => {
+        options.push({
+          id: String(p.id || p.code),
+          label: p.name || p.code
+        });
+      });
+    } else {
+      const uniqueProgrammes = new Set<string>();
+      events.forEach(e => {
+        if (e.programmeName) {
+          uniqueProgrammes.add(e.programmeName);
+        }
+      });
+      Array.from(uniqueProgrammes).forEach(pName => {
+        options.push({ id: pName, label: pName });
+      });
+    }
+
+    if (options.length > 0) {
+      options.push({ id: 'ALL', label: 'All Programmes' });
+    }
+
+    return options;
+  }, [dbProgrammes, events]);
+
+  // Filtered events based on role and selected programme / course
+  const displayedEvents = React.useMemo(() => {
+    if (user?.role !== 'admin') return events;
+
+    // Default Admin State: if neither programme nor course is selected, return empty (shows "No preview timetable")
+    if (!selectedProgramme && !selectedCourseCode) {
+      return [];
+    }
+
+    let filtered = events;
+
+    if (selectedProgramme && selectedProgramme !== 'ALL') {
+      filtered = filtered.filter(e => {
+        if (e.programmeId && String(e.programmeId) === selectedProgramme) return true;
+        if (e.programmeName && e.programmeName === selectedProgramme) return true;
+        const matchedProg = dbProgrammes.find(p => String(p.id) === selectedProgramme || p.code === selectedProgramme);
+        if (matchedProg) {
+          if (e.programmeName && e.programmeName.toLowerCase() === matchedProg.name.toLowerCase()) return true;
+          if (matchedProg.code && e.courseCode.toUpperCase().startsWith(matchedProg.code.toUpperCase())) return true;
+        }
+        return false;
+      });
+    }
+
+    if (selectedCourseCode && selectedCourseCode !== 'ALL') {
+      filtered = filtered.filter(e => e.courseCode === selectedCourseCode);
+    }
+
+    return filtered;
+  }, [events, user?.role, selectedProgramme, selectedCourseCode, dbProgrammes]);
+
+  // Derived selected labels for exact display
+  const selectedProgrammeLabel = React.useMemo(() => {
+    if (selectedProgramme === 'ALL') return 'All Programmes';
+    if (!selectedProgramme) return '-- Select Programme --';
+    const found = programmeOptions.find(p => p.id === selectedProgramme);
+    return found ? found.label : '-- Select Programme --';
+  }, [selectedProgramme, programmeOptions]);
+
+  const selectedCourseLabel = React.useMemo(() => {
+    if (selectedCourseCode === 'ALL') return 'All Courses';
+    if (!selectedCourseCode) return '-- Select Course --';
+    const found = availableCourses.find(c => c.code === selectedCourseCode);
+    return found ? `${found.code} - ${found.name}` : selectedCourseCode;
+  }, [selectedCourseCode, availableCourses]);
 
   const format12Hour = (timeStr?: string | null) => {
     if (!timeStr) return '';
@@ -387,22 +575,23 @@ export const Timetable: React.FC = () => {
   const currentFormattedTime = format12Hour(`${hStr}:${mStr}`);
   const showCurrentTimeLine = currentMinutesInGrid >= 0 && currentMinutesInGrid <= 14 * 60;
 
-  // Dynamic header date calculations based on current local Malaysia time
-  const currentWeekNumber = getCurrentWeekNumber();
-  
-  // Top Date Badge & Month Title: Uses live local date (currentTimeState) for current week, or selected week's Monday
-  const activeDateObj = (selectedWeekNum === currentWeekNumber)
-    ? currentTimeState
-    : (days[0]?.fullDateObj || currentTimeState);
+  // Top Date Badge & Month Title: Synchronizes with active selectedDateStr
+  const activeDateObj = React.useMemo(() => {
+    try {
+      return new Date(selectedDateStr + 'T00:00:00');
+    } catch (e) {
+      return currentTimeState;
+    }
+  }, [selectedDateStr, currentTimeState]);
 
   const activeMonthAbbrev = activeDateObj.toLocaleString('en-US', { month: 'short' }).toUpperCase();
   const activeDayNum = activeDateObj.getDate();
   const activeMonthYearStr = activeDateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
-  // Subtitle active week date range string (e.g. "Aug 3, 2026 – Aug 9, 2026")
-  const weekStartObj = days[0]?.fullDateObj || currentTimeState;
-  const weekEndObj = days[6]?.fullDateObj || currentTimeState;
-  const activeWeekRangeStr = `${weekStartObj.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${weekEndObj.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  // Full Semester Date Range from beginning of semester until end of semester (Jun 15, 2026 – Sep 20, 2026)
+  const semesterStartStr = SEMESTER_START.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const semesterEndStr = SEMESTER_END.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const fullSemesterRangeStr = `${semesterStartStr} – ${semesterEndStr}`;
 
   const matchesSearch = (ev: TimetableEvent) => {
     if (!searchQuery.trim()) return true;
@@ -426,6 +615,213 @@ export const Timetable: React.FC = () => {
           <span>Please approach your faculty for further assistance if there is any missing/clashed/incorrect class timetable.</span>
         </div>
       </div>
+
+      {/* Admin Programme & Course Selection Category Bar */}
+      {user?.role === 'admin' && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 text-xs font-extrabold text-slate-800 dark:text-slate-100">
+            <div className="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/80 border border-sky-100 dark:border-sky-900 flex items-center justify-center text-sky-600 dark:text-sky-400 shadow-2xs shrink-0">
+              <Filter className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <span className="block font-bold text-slate-900 dark:text-white">Select Timetable Category</span>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Filter timetable schedule by programme and course</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            {/* Custom Programme Dropdown */}
+            <div className="relative w-full sm:w-72 md:w-80">
+              <button
+                key={`prog-btn-${selectedProgramme}`}
+                type="button"
+                onClick={() => {
+                  setIsProgDropdownOpen(!isProgDropdownOpen);
+                  setIsCourseDropdownOpen(false);
+                }}
+                className={`w-full flex items-center justify-between gap-2 text-xs font-bold px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/90 border rounded-xl text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs ${
+                  isProgDropdownOpen 
+                    ? 'border-sky-500 ring-2 ring-sky-500/20 dark:border-sky-400' 
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                title={selectedProgrammeLabel}
+              >
+                <div className="flex items-center gap-2 truncate">
+                  <GraduationCap className="h-4 w-4 text-slate-400 dark:text-slate-400 shrink-0" />
+                  <span key={`prog-text-${selectedProgramme}`} className="truncate">
+                    {selectedProgrammeLabel}
+                  </span>
+                </div>
+                <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${isProgDropdownOpen ? 'rotate-180 text-sky-600' : ''}`} />
+              </button>
+
+              {/* Programme Floating Dropdown Menu */}
+              {isProgDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsProgDropdownOpen(false)} />
+                  <div className="absolute left-0 right-0 sm:w-80 mt-1.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
+                    <div className="max-h-60 overflow-y-auto space-y-1">
+                      {/* Default Select Option */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedProgramme('');
+                          setIsProgDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                          selectedProgramme === ''
+                            ? 'bg-sky-600 text-white font-extrabold shadow-sm'
+                            : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                        }`}
+                      >
+                        <span>-- Select Programme --</span>
+                        {selectedProgramme === '' && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-2" />}
+                      </button>
+
+                      {/* Real Supabase Programme Options */}
+                      {programmeOptions.map((prog) => {
+                        const isSelected = selectedProgramme === prog.id;
+                        return (
+                          <button
+                            key={prog.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedProgramme(prog.id);
+                              setIsProgDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                              isSelected
+                                ? 'bg-sky-600 text-white font-extrabold shadow-sm'
+                                : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                            }`}
+                          >
+                            <span className="truncate">{prog.label}</span>
+                            {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-2" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Custom Course Dropdown */}
+            <div className="relative w-full sm:w-72 md:w-80">
+              <button
+                key={`course-btn-${selectedCourseCode}`}
+                type="button"
+                onClick={() => {
+                  setIsCourseDropdownOpen(!isCourseDropdownOpen);
+                  setIsProgDropdownOpen(false);
+                }}
+                className={`w-full flex items-center justify-between gap-2 text-xs font-bold px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/90 border rounded-xl text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs ${
+                  isCourseDropdownOpen 
+                    ? 'border-sky-500 ring-2 ring-sky-500/20 dark:border-sky-400' 
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                title={selectedCourseLabel}
+              >
+                <div className="flex items-center gap-2 truncate">
+                  <BookOpen className="h-4 w-4 text-slate-400 dark:text-slate-400 shrink-0" />
+                  <span key={`course-text-${selectedCourseCode}`} className="truncate">
+                    {selectedCourseLabel}
+                  </span>
+                </div>
+                <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${isCourseDropdownOpen ? 'rotate-180 text-sky-600' : ''}`} />
+              </button>
+
+              {/* Course Floating Dropdown Menu */}
+              {isCourseDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsCourseDropdownOpen(false)} />
+                  <div className="absolute left-0 right-0 sm:w-80 mt-1.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
+                    <div className="max-h-60 overflow-y-auto space-y-1">
+                      {/* Default Select Course Option */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCourseCode('');
+                          setIsCourseDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                          selectedCourseCode === ''
+                            ? 'bg-sky-600 text-white font-extrabold shadow-sm'
+                            : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                        }`}
+                      >
+                        <span>-- Select Course --</span>
+                        {selectedCourseCode === '' && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-2" />}
+                      </button>
+
+                      {/* All Courses Option */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCourseCode('ALL');
+                          setIsCourseDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                          selectedCourseCode === 'ALL'
+                            ? 'bg-sky-600 text-white font-extrabold shadow-sm'
+                            : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                        }`}
+                      >
+                        <span>All Courses</span>
+                        {selectedCourseCode === 'ALL' && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-2" />}
+                      </button>
+
+                      {/* Dynamic Course Options */}
+                      {availableCourses.map((c) => {
+                        const isSelected = selectedCourseCode === c.code;
+                        return (
+                          <button
+                            key={c.code}
+                            type="button"
+                            onClick={() => {
+                              setSelectedCourseCode(c.code);
+                              setIsCourseDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
+                              isSelected
+                                ? 'bg-sky-600 text-white font-extrabold shadow-sm'
+                                : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                            }`}
+                          >
+                            <div className="flex flex-col truncate pr-2">
+                              <span className="font-extrabold font-mono tracking-wider">{c.code}</span>
+                              <span className={`text-[11px] truncate ${isSelected ? 'text-white/90' : 'text-slate-500 dark:text-slate-400'}`}>
+                                {c.name}
+                              </span>
+                            </div>
+                            {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-2" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Clear Button */}
+            {(selectedProgramme || selectedCourseCode) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProgramme('');
+                  setSelectedCourseCode('');
+                  setIsProgDropdownOpen(false);
+                  setIsCourseDropdownOpen(false);
+                }}
+                className="px-3 py-2 text-xs font-extrabold text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Timetable Card Container */}
       <div className="uipro-card bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl">
@@ -458,7 +854,7 @@ export const Timetable: React.FC = () => {
               </div>
               
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                {activeWeekRangeStr}
+                {fullSemesterRangeStr}
               </p>
             </div>
           </div>
@@ -542,30 +938,41 @@ export const Timetable: React.FC = () => {
             <div className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-0.5 shadow-2xs">
               <button
                 type="button"
-                onClick={() => setSelectedWeekNum((prev) => Math.max(1, prev - 1))}
-                disabled={selectedWeekNum <= 1}
-                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg disabled:opacity-40 cursor-pointer transition-all"
-                title="Previous Week"
+                onClick={handlePrevDay}
+                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all"
+                title="Previous Day"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
 
               <button
+                key={`today-nav-btn-${selectedDateStr}`}
                 type="button"
-                onClick={() => {
-                  setSelectedWeekNum(getCurrentWeekNumber());
-                }}
-                className="px-3 py-1 text-xs font-bold text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all border-x border-slate-200 dark:border-slate-700"
+                onClick={handleToday}
+                className={`px-3 py-1 text-xs font-bold transition-all cursor-pointer border-x border-slate-200 dark:border-slate-700 rounded-lg ${
+                  selectedDateStr === formatDate(getMalaysiaDate())
+                    ? 'text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-slate-700'
+                    : 'text-sky-600 dark:text-sky-400 bg-sky-50/90 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 font-extrabold shadow-2xs'
+                }`}
+                title={selectedDateStr === formatDate(getMalaysiaDate()) ? 'Current Date (Today)' : 'Click to return to Today'}
               >
-                Today
+                <span key={`btn-text-${selectedDateStr}`}>
+                  {selectedDateStr === formatDate(getMalaysiaDate()) ? 'Today' : (() => {
+                    try {
+                      const d = new Date(selectedDateStr + 'T00:00:00');
+                      return `${d.toLocaleString('en-US', { month: 'short' })} ${d.getDate()}`;
+                    } catch (e) {
+                      return 'Today';
+                    }
+                  })()}
+                </span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setSelectedWeekNum((prev) => Math.min(14, prev + 1))}
-                disabled={selectedWeekNum >= 14}
-                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg disabled:opacity-40 cursor-pointer transition-all"
-                title="Next Week"
+                onClick={handleNextDay}
+                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all"
+                title="Next Day"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
@@ -574,11 +981,12 @@ export const Timetable: React.FC = () => {
             {/* Week Dropdown View Button with System Theme Blue Active Style */}
             <div className="relative">
               <button
+                key={`week-dropdown-btn-${selectedWeekNum}`}
                 type="button"
                 onClick={() => setIsWeekDropdownOpen(!isWeekDropdownOpen)}
                 className="flex items-center gap-2 px-3.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs"
               >
-                <span>Week {selectedWeekNum} View</span>
+                <span key={`week-label-${selectedWeekNum}`}>Week {selectedWeekNum} View</span>
                 <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isWeekDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -601,10 +1009,7 @@ export const Timetable: React.FC = () => {
                           <button
                             key={w}
                             type="button"
-                            onClick={() => {
-                              setSelectedWeekNum(w);
-                              setIsWeekDropdownOpen(false);
-                            }}
+                            onClick={() => handleSelectWeek(w)}
                             className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                               isSelected
                                 ? 'bg-sky-600 text-white font-extrabold shadow-sm'
@@ -643,8 +1048,22 @@ export const Timetable: React.FC = () => {
             <Loader2 className="h-8 w-8 text-brand-blue animate-spin" />
             <span>Synchronizing academic schedules...</span>
           </div>
+        ) : user?.role === 'admin' && !selectedProgramme && !selectedCourseCode ? (
+          <div className="p-16 my-4 flex flex-col items-center justify-center text-center gap-4 bg-slate-50/60 dark:bg-slate-900/30 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800">
+            <div className="w-16 h-16 rounded-2xl bg-sky-50 dark:bg-sky-950/60 border border-sky-100 dark:border-sky-900 flex items-center justify-center text-sky-600 dark:text-sky-400 shadow-xs">
+              <CalendarX2 className="h-8 w-8" />
+            </div>
+            <div className="space-y-1.5 max-w-sm">
+              <h3 className="text-base font-extrabold text-slate-800 dark:text-slate-100">
+                No preview timetable
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                Please select a programme and course category above to preview and manage specific timetables.
+              </p>
+            </div>
+          </div>
         ) : (
-          <div className="w-full overflow-x-auto">
+          <div key={`week-grid-${selectedWeekNum}`} className="w-full overflow-x-auto">
               <div className="min-w-[860px]">
 
                 {/* Top Day Headers (7 Columns: Mon - Sun) */}
@@ -652,21 +1071,28 @@ export const Timetable: React.FC = () => {
                   <div className="text-xs font-bold text-slate-400 flex items-center justify-center">
                     GMT+8
                   </div>
-                  {days.map((day) => (
-                    <div 
-                      key={day.name} 
-                      className={`flex items-center justify-center gap-1.5 text-xs font-semibold py-1.5 rounded-xl transition-all ${
-                        day.isToday 
-                          ? 'bg-sky-100/90 dark:bg-sky-900/50 text-sky-950 dark:text-sky-100 font-extrabold shadow-2xs ring-1 ring-sky-300/70 dark:ring-sky-700/70' 
-                          : 'text-slate-600 dark:text-slate-300'
-                      }`}
-                    >
-                      <span>{day.label}</span>
-                      <span className={`font-extrabold ${day.isToday ? 'text-sky-950 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>
-                        {day.dayNum}
-                      </span>
-                    </div>
-                  ))}
+                  {days.map((day) => {
+                    const isSelectedDay = day.date === selectedDateStr;
+                    return (
+                      <button 
+                        key={`header-${day.date}`} 
+                        type="button"
+                        onClick={() => setSelectedDateStr(day.date)}
+                        className={`flex items-center justify-center gap-1 text-xs font-semibold py-1.5 px-3 rounded-full transition-all cursor-pointer select-none whitespace-nowrap ${
+                          isSelectedDay 
+                            ? 'bg-sky-100/90 dark:bg-sky-900/80 text-sky-950 dark:text-sky-100 font-black ring-1.5 ring-sky-400 dark:ring-sky-500 shadow-2xs scale-105' 
+                            : day.isToday
+                            ? 'bg-slate-200/90 dark:bg-slate-700 text-slate-800 dark:text-slate-100 font-extrabold ring-1 ring-slate-300 dark:ring-slate-600 hover:bg-sky-50'
+                            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <span className="font-extrabold">{day.monthShort} {day.dayNum},</span>
+                        <span className={`font-black ${isSelectedDay ? 'text-sky-950 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>
+                          {day.label}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Weekly Grid Area with Time Rows */}
@@ -728,14 +1154,17 @@ export const Timetable: React.FC = () => {
 
                   {/* 7 Day Columns (Mon - Sun) */}
                   {days.map((day) => {
-                    const dayEvents = events.filter(e => e.day === day.name);
+                    const isSelectedDay = day.date === selectedDateStr;
+                    const dayEvents = displayedEvents.filter(e => e.day === day.name);
 
                     return (
                       <div 
-                        key={day.name} 
+                        key={`col-${day.date}`} 
                         className={`relative divide-y divide-slate-100 dark:divide-slate-800 transition-colors ${
-                          day.isToday 
-                            ? 'bg-sky-50/60 dark:bg-sky-950/20' 
+                          isSelectedDay 
+                            ? 'bg-sky-50/90 dark:bg-sky-950/40 border-x border-sky-100/60 dark:border-sky-900/30' 
+                            : day.isToday 
+                            ? 'bg-slate-100/80 dark:bg-slate-800/50 border-x border-slate-200/60 dark:border-slate-700/50' 
                             : 'bg-white dark:bg-slate-900'
                         }`}
                       >
@@ -997,14 +1426,14 @@ export const Timetable: React.FC = () => {
       )}
 
       {user?.role === 'admin' && (
-        <div className="uipro-card bg-white/75 p-5 border border-slate-200 shadow-premium space-y-4">
-          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider pb-3 border-b border-slate-100">
+        <div className="uipro-card bg-white/75 dark:bg-slate-900/75 p-5 border border-slate-200 dark:border-slate-800 shadow-premium space-y-4 rounded-2xl">
+          <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider pb-3 border-b border-slate-100 dark:border-slate-800">
             Manage Class Times :
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200/60 bg-slate-50/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                <tr className="border-b border-slate-200/60 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                   <th className="py-3 px-4">Course</th>
                   <th className="py-3 px-4">Type</th>
                   <th className="py-3 px-4">Day & Time</th>
@@ -1012,24 +1441,32 @@ export const Timetable: React.FC = () => {
                   <th className="py-3 px-4 text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-150/50 text-xs text-slate-700 bg-white">
-                {events.map(ev => (
-                  <tr key={ev.id} className="hover:bg-slate-50/30 transition-colors">
-                    <td className="py-3 px-4">
-                      <span className="font-extrabold font-mono tracking-wider">{ev.courseCode}</span>
-                      <span className="font-bold text-slate-500 ml-2">{ev.courseName}</span>
-                    </td>
-                    <td className="py-3 px-4 font-semibold">{ev.group}</td>
-                    <td className="py-3 px-4 font-semibold">{ev.day.substring(0, 3)} {ev.startTime}-{ev.endTime}</td>
-                    <td className="py-3 px-4 font-semibold">{ev.room}</td>
-                    <td className="py-3 px-4 text-right">
-                      <button onClick={() => openEdit(ev)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-800 text-white text-[11px] font-bold hover:bg-slate-700 transition-colors">
-                        Edit
-                      </button>
+              <tbody className="divide-y divide-slate-150/50 dark:divide-slate-800 text-xs text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900">
+                {displayedEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-12 text-center text-slate-400 dark:text-slate-500 font-medium">
+                      No class slots to manage. Please select a programme and course category above.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  displayedEvents.map(ev => (
+                    <tr key={ev.id} className="hover:bg-slate-50/30 dark:hover:bg-slate-800/30 transition-colors">
+                      <td className="py-3 px-4">
+                        <span className="font-extrabold font-mono tracking-wider">{ev.courseCode}</span>
+                        <span className="font-bold text-slate-500 dark:text-slate-400 ml-2">{ev.courseName}</span>
+                      </td>
+                      <td className="py-3 px-4 font-semibold">{ev.group}</td>
+                      <td className="py-3 px-4 font-semibold">{ev.day.substring(0, 3)} {ev.startTime}-{ev.endTime}</td>
+                      <td className="py-3 px-4 font-semibold">{ev.room}</td>
+                      <td className="py-3 px-4 text-right">
+                        <button onClick={() => openEdit(ev)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors cursor-pointer">
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

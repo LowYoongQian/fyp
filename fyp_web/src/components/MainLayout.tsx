@@ -37,12 +37,14 @@ import { t } from '../i18n/i18n';
 interface MainLayoutProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
+  isLoading?: boolean;
   children: React.ReactNode;
 }
 
 export const MainLayout: React.FC<MainLayoutProps> = ({
   currentTab,
   setCurrentTab,
+  isLoading = false,
   children
 }) => {
   const { user, logout } = useAuth();
@@ -431,12 +433,19 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       </aside>
 
       {/* Main Content Pane */}
-      <div className="flex-grow flex flex-col min-w-0 h-screen overflow-y-auto z-10">
+      <div className="flex-grow flex flex-col min-w-0 h-screen overflow-y-auto z-10 relative">
         {/* Top Header */}
         <header
           style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
-          className="flex h-20 shrink-0 items-center justify-between px-6 border-b backdrop-blur-md sticky top-0 z-30"
+          className="flex h-20 shrink-0 items-center justify-between px-6 border-b backdrop-blur-md sticky top-0 z-30 relative"
         >
+          {/* Material UI Indeterminate Blue Linear Progress Bar at the bottom border line of Header (Between Header & Body) */}
+          {isLoading && (
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-blue-100/60 dark:bg-slate-800/80 overflow-hidden pointer-events-none z-40">
+              <div className="mui-linear-bar1 h-full bg-brand-blue shadow-sm" />
+              <div className="mui-linear-bar2 h-full bg-sky-400 shadow-sm" />
+            </div>
+          )}
           <div className="flex items-center gap-4">
             <button
               type="button"
@@ -502,7 +511,7 @@ const LogoutTransitionOverlay: React.FC<LogoutTransitionOverlayProps> = ({ onCom
   // Use lazy useState initialization so startTime is created ONCE on mount and preserved across re-renders
   const [startTime] = useState<number>(() => Date.now());
   const [progress, setProgress] = useState<number>(0);
-  const [remainingSec, setRemainingSec] = useState<number>(3);
+  const [remainingSec, setRemainingSec] = useState<string>('1.5');
   const onCompleteRef = useRef(onComplete);
 
   useEffect(() => {
@@ -510,12 +519,12 @@ const LogoutTransitionOverlay: React.FC<LogoutTransitionOverlayProps> = ({ onCom
   }, [onComplete]);
 
   useEffect(() => {
-    const DURATION_MS = 3000;
+    const DURATION_MS = 1500; // 1.5 seconds total
 
     const timer = setInterval(() => {
       const elapsed = Date.now() - startTime;
       const pct = Math.min(100, Math.floor((elapsed / DURATION_MS) * 100));
-      const sec = Math.max(0, Math.ceil((DURATION_MS - elapsed) / 1000));
+      const sec = Math.max(0, (DURATION_MS - elapsed) / 1000).toFixed(1);
 
       setProgress(pct);
       setRemainingSec(sec);
@@ -524,7 +533,7 @@ const LogoutTransitionOverlay: React.FC<LogoutTransitionOverlayProps> = ({ onCom
         clearInterval(timer);
         onCompleteRef.current();
       }
-    }, 40);
+    }, 30);
 
     return () => clearInterval(timer);
   }, [startTime]);
@@ -541,22 +550,24 @@ const LogoutTransitionOverlay: React.FC<LogoutTransitionOverlayProps> = ({ onCom
         <p className="text-xs text-slate-500 dark:text-slate-400 font-sans font-medium">Clearing session credentials and redirecting to portal...</p>
       </div>
 
-      {/* Real-time Dynamic Progress Bar (Left to Right 0% to 100%) */}
-      <div className="w-72 sm:w-80 space-y-2.5">
-        <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative border border-slate-200 dark:border-slate-700 shadow-inner">
+      {/* Semantic UI Progress Component with Smart Attendance System Brand Styling */}
+      <div className="ui progress active indicating w-72 sm:w-80 space-y-2.5" data-percent={progress}>
+        {/* Track Container */}
+        <div className="w-full h-3.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative border border-slate-200/80 dark:border-slate-700/80 shadow-inner p-0.5">
+          {/* Active Gradient Bar with Semantic UI Pulse Overlay */}
           <div
-            className="h-full bg-gradient-to-r from-brand-blue via-sky-400 to-emerald-400 rounded-full transition-all duration-75 ease-out shadow-sm"
+            className="bar h-full bg-gradient-to-r from-brand-blue via-sky-400 to-emerald-400 rounded-full transition-all duration-75 ease-out shadow-sm relative overflow-hidden"
             style={{ width: `${progress}%` }}
           />
         </div>
 
-        {/* Percentage & Remaining Time */}
+        {/* Semantic UI Progress Label Row */}
         <div className="flex justify-between items-center text-xs font-mono font-bold text-slate-600 dark:text-slate-300 px-0.5">
           <span className="flex items-center gap-1 text-brand-blue dark:text-blue-400">
             <span>Progress:</span>
-            <span>{progress}%</span>
+            <span key={`pct-${progress}`}>{progress}%</span>
           </span>
-          <span className="text-slate-500 dark:text-slate-400 font-medium">
+          <span key={`sec-${remainingSec}`} className="text-slate-500 dark:text-slate-400 font-medium">
             {remainingSec} sec remaining
           </span>
         </div>

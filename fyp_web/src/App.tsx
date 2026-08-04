@@ -203,7 +203,11 @@ const DashboardContent: React.FC = () => {
   };
 
   return (
-    <MainLayout currentTab={currentTab} setCurrentTab={handleTabChange}>
+    <MainLayout
+      currentTab={currentTab}
+      setCurrentTab={handleTabChange}
+      isLoading={tabLoading}
+    >
       {renderActiveTab()}
     </MainLayout>
   );
