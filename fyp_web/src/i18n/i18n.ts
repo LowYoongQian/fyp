@@ -29,15 +29,21 @@ const FALLBACK_LANGUAGES: LanguageItem[] = [
 const FALLBACK_TRANSLATIONS: Record<string, any> = {
   en: {
     common: { dashboard: 'Dashboard', timetable: 'Timetable', attendance: 'Attendance', settings: 'Settings', logout: 'Sign Out' },
-    student: { portalTitle: 'Student Portal', welcome: 'Welcome back', enrolledCourses: 'Enrolled Courses', attendanceRate: 'Attendance Rate' }
+    student: { portalTitle: 'Student Portal', welcome: 'Welcome back', enrolledCourses: 'Enrolled Courses', attendanceRate: 'Attendance Rate' },
+    staff: { portalTitle: 'Staff Portal' },
+    admin: { portalTitle: 'Admin Portal' }
   },
   ms: {
     common: { dashboard: 'Papan Pemuka', timetable: 'Jadual Waktu', attendance: 'Kehadiran', settings: 'Tetapan', logout: 'Log Keluar' },
-    student: { portalTitle: 'Portal Pelajar', welcome: 'Selamat kembali', enrolledCourses: 'Kursus Berdaftar', attendanceRate: 'Kadar Kehadiran' }
+    student: { portalTitle: 'Portal Pelajar', welcome: 'Selamat kembali', enrolledCourses: 'Kursus Berdaftar', attendanceRate: 'Kadar Kehadiran' },
+    staff: { portalTitle: 'Portal Staf' },
+    admin: { portalTitle: 'Portal Pentadbir' }
   },
   zh: {
     common: { dashboard: '仪表板', timetable: '课程表', attendance: '考勤记录', settings: '系统设置', logout: '退出登录' },
-    student: { portalTitle: '学生门户', welcome: '欢迎回来', enrolledCourses: '已注册课程', attendanceRate: '出勤率' }
+    student: { portalTitle: '学生门户', welcome: '欢迎回来', enrolledCourses: '已注册课程', attendanceRate: '出勤率' },
+    staff: { portalTitle: '教职工门户' },
+    admin: { portalTitle: '管理员门户' }
   }
 };
 

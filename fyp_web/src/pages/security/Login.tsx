@@ -759,16 +759,17 @@ export const Login: React.FC = () => {
 
     const KEYFRAMES: Keyframe[] = [
       { hour: 0.0,  skyTop: '#030712', skyMid: '#0B0F29', skyBot: '#111827', horizonGlow: 'rgba(56, 189, 248, 0.15)', mountainDark: '#020617', mountainLight: '#0F172A', sunOpacity: 0.0, nightOpacity: 1.0 },
-      { hour: 4.0,  skyTop: '#050719', skyMid: '#0E1133', skyBot: '#161B3D', horizonGlow: 'rgba(56, 189, 248, 0.20)', mountainDark: '#040921', mountainLight: '#111833', sunOpacity: 0.0, nightOpacity: 1.0 },
-      { hour: 4.6,  skyTop: '#0A082B', skyMid: '#240F3F', skyBot: '#5E1442', horizonGlow: 'rgba(217, 70, 239, 0.35)', mountainDark: '#12092B', mountainLight: '#23103D', sunOpacity: 0.05, nightOpacity: 0.8 },
-      { hour: 5.2,  skyTop: '#1B1748', skyMid: '#6B1870', skyBot: '#ED3B59', horizonGlow: 'rgba(251, 146, 60, 0.65)', mountainDark: '#31103F', mountainLight: '#4A1D54', sunOpacity: 0.45, nightOpacity: 0.25 },
+      { hour: 4.5,  skyTop: '#050719', skyMid: '#0E1133', skyBot: '#161B3D', horizonGlow: 'rgba(56, 189, 248, 0.20)', mountainDark: '#040921', mountainLight: '#111833', sunOpacity: 0.0, nightOpacity: 1.0 },
+      { hour: 4.85, skyTop: '#0C0A2E', skyMid: '#240F3F', skyBot: '#5E1442', horizonGlow: 'rgba(217, 70, 239, 0.35)', mountainDark: '#12092B', mountainLight: '#23103D', sunOpacity: 0.0, nightOpacity: 0.4 },
+      { hour: 5.0,  skyTop: '#1B1748', skyMid: '#6B1870', skyBot: '#ED3B59', horizonGlow: 'rgba(251, 146, 60, 0.65)', mountainDark: '#31103F', mountainLight: '#4A1D54', sunOpacity: 0.2, nightOpacity: 0.0 },
       { hour: 6.0,  skyTop: '#0F3763', skyMid: '#0284C7', skyBot: '#BAE6FD', horizonGlow: 'rgba(253, 224, 71, 0.60)', mountainDark: '#0B4D36', mountainLight: '#087352', sunOpacity: 1.0, nightOpacity: 0.0 },
       { hour: 9.5,  skyTop: '#0284C7', skyMid: '#38BDF8', skyBot: '#BAE6FD', horizonGlow: 'rgba(254, 240, 138, 0.50)', mountainDark: '#047857', mountainLight: '#059669', sunOpacity: 1.0, nightOpacity: 0.0 },
       { hour: 12.0, skyTop: '#0369A1', skyMid: '#0284C7', skyBot: '#7DD3FC', horizonGlow: 'rgba(255, 255, 255, 0.65)', mountainDark: '#065F46', mountainLight: '#047857', sunOpacity: 1.0, nightOpacity: 0.0 },
       { hour: 16.5, skyTop: '#0284C7', skyMid: '#38BDF8', skyBot: '#FDBA74', horizonGlow: 'rgba(251, 146, 60, 0.55)', mountainDark: '#047857', mountainLight: '#059669', sunOpacity: 1.0, nightOpacity: 0.0 },
-      { hour: 18.5, skyTop: '#311B92', skyMid: '#881337', skyBot: '#E65100', horizonGlow: 'rgba(245, 158, 11, 0.70)', mountainDark: '#1A0B2E', mountainLight: '#2D124D', sunOpacity: 0.7, nightOpacity: 0.1 },
-      { hour: 19.5, skyTop: '#15103D', skyMid: '#331238', skyBot: '#4D1A33', horizonGlow: 'rgba(168, 85, 247, 0.40)', mountainDark: '#100B2B', mountainLight: '#1E123D', sunOpacity: 0.2, nightOpacity: 0.6 },
-      { hour: 20.5, skyTop: '#090D2A', skyMid: '#161B40', skyBot: '#202656', horizonGlow: 'rgba(99, 102, 241, 0.35)', mountainDark: '#0A0E26', mountainLight: '#131A3D', sunOpacity: 0.0, nightOpacity: 1.0 },
+      { hour: 18.8, skyTop: '#311B92', skyMid: '#881337', skyBot: '#E65100', horizonGlow: 'rgba(245, 158, 11, 0.70)', mountainDark: '#1A0B2E', mountainLight: '#2D124D', sunOpacity: 0.8, nightOpacity: 0.0 },
+      { hour: 19.8, skyTop: '#17113E', skyMid: '#3A133A', skyBot: '#541A35', horizonGlow: 'rgba(168, 85, 247, 0.40)', mountainDark: '#100B2B', mountainLight: '#1E123D', sunOpacity: 0.2, nightOpacity: 0.0 },
+      { hour: 20.0, skyTop: '#0C0C2D', skyMid: '#1A1744', skyBot: '#28245D', horizonGlow: 'rgba(99, 102, 241, 0.35)', mountainDark: '#0B0D26', mountainLight: '#14183B', sunOpacity: 0.0, nightOpacity: 0.2 },
+      { hour: 21.0, skyTop: '#090D2A', skyMid: '#161B40', skyBot: '#202656', horizonGlow: 'rgba(99, 102, 241, 0.35)', mountainDark: '#0A0E26', mountainLight: '#131A3D', sunOpacity: 0.0, nightOpacity: 1.0 },
       { hour: 24.0, skyTop: '#030712', skyMid: '#0B0F29', skyBot: '#111827', horizonGlow: 'rgba(56, 189, 248, 0.15)', mountainDark: '#020617', mountainLight: '#0F172A', sunOpacity: 0.0, nightOpacity: 1.0 },
     ];
 

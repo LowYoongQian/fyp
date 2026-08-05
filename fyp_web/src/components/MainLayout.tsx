@@ -129,7 +129,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
   const currentItem = navItems.find(item => item.id === currentTab);
   const currentTabLabel = currentItem ? currentItem.label : t('common.dashboard', 'en');
-  const portalName = user?.role === 'admin' ? t('admin.portalTitle', 'en') : user?.role === 'student' ? t('student.portalTitle', 'en') : t('staff.portalTitle', 'en');
+  const portalName = user?.role === 'admin' ? 'Admin Portal' : user?.role === 'student' ? 'Student Portal' : 'Staff Portal';
 
   return (
     <div

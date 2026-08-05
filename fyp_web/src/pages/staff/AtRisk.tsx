@@ -231,26 +231,34 @@ export const AtRisk: React.FC = () => {
     setCurrentPage(1);
   }, [courseFilter, activeFilter, searchQuery, itemsPerPage]);
 
-  // Pagination calculation
+  // Pagination calculation with safe page clamping
   const totalPages = Math.max(1, Math.ceil(filteredRisk.length / itemsPerPage));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const paginatedRisk = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
+    const start = (safeCurrentPage - 1) * itemsPerPage;
     return filteredRisk.slice(start, start + itemsPerPage);
-  }, [filteredRisk, currentPage, itemsPerPage]);
+  }, [filteredRisk, safeCurrentPage, itemsPerPage]);
 
   // Generate smart pagination page numbers with windowing/ellipsis
   const visiblePageNumbers = useMemo(() => {
     if (totalPages <= 7) {
       return Array.from({ length: totalPages }, (_, i) => i + 1);
     }
-    if (currentPage <= 4) {
+    if (safeCurrentPage <= 4) {
       return [1, 2, 3, 4, 5, '...', totalPages];
     }
-    if (currentPage >= totalPages - 3) {
+    if (safeCurrentPage >= totalPages - 3) {
       return [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
     }
-    return [1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages];
-  }, [currentPage, totalPages]);
+    return [1, '...', safeCurrentPage - 1, safeCurrentPage, safeCurrentPage + 1, '...', totalPages];
+  }, [safeCurrentPage, totalPages]);
 
   // Counts respect current course filter
   const scoped = useMemo(
@@ -467,12 +475,13 @@ export const AtRisk: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    paginatedRisk.map(item => {
+                    paginatedRisk.map((item, idx) => {
                       const ratePct = Math.round(item.attendance_rate * 100);
+                      const itemKey = item.id || `${item.student_id || item.student_code || 'st'}-${item.course_id || item.course_code || 'cr'}-${safeCurrentPage}-${idx}`;
 
                       return (
                         <tr
-                          key={item.id}
+                          key={itemKey}
                           className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors align-middle"
                         >
                           {/* Student Info */}
@@ -559,11 +568,11 @@ export const AtRisk: React.FC = () => {
 
           {/* Clean Footer Pagination Bar */}
           {filteredRisk.length > 0 && (
-            <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-800/20 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-sans">
+            <div key={`at-risk-footer-${safeCurrentPage}-${itemsPerPage}-${filteredRisk.length}`} className="px-5 py-4 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-800/20 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-sans">
               <div className="text-slate-500 dark:text-slate-400 text-[11.5px]">
-                Showing <strong className="text-slate-800 dark:text-slate-200">{(currentPage - 1) * itemsPerPage + 1}</strong> to{' '}
+                Showing <strong className="text-slate-800 dark:text-slate-200">{filteredRisk.length === 0 ? 0 : (safeCurrentPage - 1) * itemsPerPage + 1}</strong> to{' '}
                 <strong className="text-slate-800 dark:text-slate-200">
-                  {Math.min(currentPage * itemsPerPage, filteredRisk.length)}
+                  {Math.min(safeCurrentPage * itemsPerPage, filteredRisk.length)}
                 </strong>{' '}
                 of <strong className="text-slate-800 dark:text-slate-200">{filteredRisk.length}</strong> entries
               </div>
@@ -572,7 +581,7 @@ export const AtRisk: React.FC = () => {
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1 || loading}
+                  disabled={safeCurrentPage === 1 || loading}
                   className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer shadow-2xs"
                   title="Previous Page"
                 >
@@ -583,18 +592,18 @@ export const AtRisk: React.FC = () => {
                   {visiblePageNumbers.map((p, idx) => (
                     typeof p === 'number' ? (
                       <button
-                        key={idx}
+                        key={`page-btn-${p}`}
                         onClick={() => setCurrentPage(p)}
                         className={`h-7 min-w-[28px] px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          currentPage === p
-                            ? 'bg-brand-blue dark:bg-blue-600 text-white shadow-xs'
+                          safeCurrentPage === p
+                            ? 'bg-brand-blue dark:bg-blue-600 text-white shadow-xs ring-1 ring-brand-blue/30'
                             : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
                         }`}
                       >
                         {p}
                       </button>
                     ) : (
-                      <span key={idx} className="px-1 text-slate-400 font-bold select-none">
+                      <span key={`ellipsis-${idx}-${visiblePageNumbers[idx - 1] || 'start'}`} className="px-1 text-slate-400 font-bold select-none">
                         ...
                       </span>
                     )
@@ -603,7 +612,7 @@ export const AtRisk: React.FC = () => {
 
                 <button
                   onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages || loading}
+                  disabled={safeCurrentPage === totalPages || loading}
                   className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer shadow-2xs"
                   title="Next Page"
                 >

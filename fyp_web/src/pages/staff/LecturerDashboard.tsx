@@ -18,7 +18,9 @@ import {
   Sparkles,
   Bell,
   Mail,
-  Phone
+  Phone,
+  Check,
+  Clock
 } from 'lucide-react';
 
 export const LecturerDashboard: React.FC = () => {
@@ -29,10 +31,30 @@ export const LecturerDashboard: React.FC = () => {
   
   // Create Session Form
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
-  const [classGroup, setClassGroup] = useState<string>('G1');
+  const [classGroup, setClassGroup] = useState<string>('');
   const [creating, setCreating] = useState(false);
   const [creationError, setCreationError] = useState<string | null>(null);
-  const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false);
+  const [renderKey, setRenderKey] = useState<number>(0);
+  const triggerReRender = () => setRenderKey(prev => prev + 1);
+
+  const courseDropdownRef = useRef<HTMLDivElement>(null);
+  const groupDropdownRef = useRef<HTMLDivElement>(null);
+
+  const [isCourseOpen, setIsCourseOpen] = useState(false);
+  const [isGroupOpen, setIsGroupOpen] = useState(false);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (courseDropdownRef.current && !courseDropdownRef.current.contains(e.target as Node)) {
+        setIsCourseOpen(false);
+      }
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(e.target as Node)) {
+        setIsGroupOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Live Monitoring Session
   const [monitoredSessionId, setMonitoredSessionId] = useState<number | string | null>(null);
@@ -51,11 +73,28 @@ export const LecturerDashboard: React.FC = () => {
           : 'Dr. ' + user.email.split('@')[0].charAt(0).toUpperCase() + user.email.split('@')[0].slice(1)) 
     : 'Dr. Lee Min';
 
+  const getCourseIdentifier = (c: Course): string => {
+    if (!c) return '';
+    if (c.id !== undefined && c.id !== null && String(c.id).trim() !== '') return String(c.id).trim();
+    if (c.course_id !== undefined && c.course_id !== null && String(c.course_id).trim() !== '') return String(c.course_id).trim();
+    if (c.course_code && String(c.course_code).trim() !== '') return String(c.course_code).trim();
+    return '';
+  };
+
   const getAvailableGroupsForCourse = (courseId: string): string[] => {
     if (!courseId) return ['G1'];
+    const matched = courses.find(c => 
+      getCourseIdentifier(c) === courseId || 
+      String(c.id) === courseId || 
+      (c.course_id && String(c.course_id) === courseId) || 
+      c.course_code === courseId
+    );
+    const targetIdStr = matched ? String(matched.id) : courseId;
+    const targetCode = matched ? matched.course_code : courseId;
+
     const inUse = Array.from(new Set(
       enrolments
-        .filter(e => e.course_id.toString() === courseId)
+        .filter(e => String(e.course_id) === targetIdStr || e.course_code === targetCode)
         .map(e => e.class_group)
     )).filter((g: any) => g && g.startsWith('G')) as string[];
 
@@ -122,9 +161,6 @@ export const LecturerDashboard: React.FC = () => {
       setCourses(coursesList);
       setEnrolments(enrolmentsList);
       setRealAnnouncements(announcementsList);
-      if (coursesList.length > 0) {
-        setSelectedCourseId(coursesList[0].id.toString());
-      }
       await fetchActiveSessions(coursesList);
     } catch (err) {
       console.error("Failed to load initial lecturer dashboard data:", err);
@@ -151,7 +187,8 @@ export const LecturerDashboard: React.FC = () => {
     setCreating(true);
     setCreationError(null);
     try {
-      if (!selectedCourseId) throw new Error('Please select a course');
+      if (!selectedCourseId) throw new Error('Please select a subject course');
+      if (!classGroup) throw new Error('Please select a class allocation group');
       const response = await apiService.openSession(selectedCourseId, classGroup);
       await fetchActiveSessions();
       handleStartMonitor(response.id);
@@ -515,7 +552,7 @@ export const LecturerDashboard: React.FC = () => {
           ) : null}
 
           {/* Open Class Form */}
-          <div className={`uipro-card bg-white/75 relative flex flex-col justify-between ${isCourseDropdownOpen ? 'z-50' : 'z-10'}`}>
+          <div className="uipro-card bg-white/75 relative flex flex-col justify-between z-10">
             <div className="space-y-4">
               <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
                 <div className="p-2 bg-brand-blue-light rounded-xl text-brand-blue shadow-xs">
@@ -532,81 +569,446 @@ export const LecturerDashboard: React.FC = () => {
                 </div>
               )}
 
-              <form onSubmit={handleCreateSession} className="space-y-4 font-sans">
-                <div className="space-y-1 relative">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select Subject Course</label>
-                  
-                  {isCourseDropdownOpen && (
-                    <div 
-                      className="fixed inset-0 z-30" 
-                      onClick={() => setIsCourseDropdownOpen(false)} 
-                    />
-                  )}
-                  
-                  <div className={`relative ${isCourseDropdownOpen ? 'z-50' : 'z-45'}`}>
+              <form key={`session-form-${renderKey}-${selectedCourseId}-${classGroup}`} onSubmit={handleCreateSession} className="space-y-4 font-sans">
+                {/* Select Subject Course */}
+                <div className="space-y-1.5 relative" ref={courseDropdownRef}>
+                  <label className="text-[10px] font-bold text-slate-400 dark:text-slate-400 uppercase tracking-wider">Select Subject Course</label>
+                  <div className="relative">
                     <button
+                      key={`course-btn-${renderKey}-${selectedCourseId}`}
                       type="button"
-                      onClick={() => setIsCourseDropdownOpen(!isCourseDropdownOpen)}
-                      className="w-full uipro-input py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
+                      onClick={() => {
+                        setIsCourseOpen(prev => !prev);
+                        setIsGroupOpen(false);
+                      }}
+                      className={`w-full py-2.5 px-4 text-left flex items-center justify-between bg-slate-50 dark:bg-slate-800/90 border rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100/70 dark:hover:bg-slate-700/80 transition-all cursor-pointer ${
+                        isCourseOpen ? 'border-brand-blue dark:border-sky-400 ring-2 ring-brand-blue/20 dark:ring-sky-400/20' : 'border-slate-200 dark:border-slate-700'
+                      }`}
                     >
-                      <span className="truncate">
-                        {courses.find(c => c.id.toString() === selectedCourseId)
-                          ? `${courses.find(c => c.id.toString() === selectedCourseId)?.course_code} - ${courses.find(c => c.id.toString() === selectedCourseId)?.course_name}`
-                          : '-- Select Subject Course --'}
+                      <span className="truncate font-semibold">
+                        {(() => {
+                          if (!selectedCourseId) return '-- Select Subject Course --';
+                          const matchedCourse = courses.find(c => {
+                            const cId = getCourseIdentifier(c);
+                            return cId && (
+                              cId === selectedCourseId || 
+                              String(c.id) === String(selectedCourseId) || 
+                              (c.course_id && String(c.course_id) === String(selectedCourseId)) ||
+                              c.course_code === selectedCourseId
+                            );
+                          });
+                          if (matchedCourse) {
+                            return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
+                          }
+                          return selectedCourseId;
+                        })()}
                       </span>
-                      <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
+                      <ChevronDown className={`h-4 w-4 text-slate-400 dark:text-slate-400 shrink-0 ml-2 transition-transform duration-200 ${isCourseOpen ? 'rotate-180 text-brand-blue dark:text-sky-400' : ''}`} />
                     </button>
-                    
-                    {isCourseDropdownOpen && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
-                        {courses.map((c) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedCourseId(c.id.toString());
-                              setIsCourseDropdownOpen(false);
-                            }}
-                            className={`group w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-brand-blue hover:text-white transition-all flex flex-col gap-0.5 border-b border-slate-100 last:border-b-0 cursor-pointer ${
-                              selectedCourseId === c.id.toString() ? 'bg-slate-50 font-bold' : ''
-                            }`}
-                          >
-                            <span className="font-semibold font-mono text-brand-blue group-hover:text-white/90 transition-colors">{c.course_code}</span>
-                            <span className="text-[10px] text-slate-500 group-hover:text-white/80 transition-colors truncate">{c.course_name}</span>
-                          </button>
-                        ))}
+
+                    {isCourseOpen && (
+                      <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                        {courses.length === 0 ? (
+                          <div className="px-4 py-3 text-xs text-slate-400 dark:text-slate-500 text-center font-medium">No courses available</div>
+                        ) : (
+                          courses.map((c) => {
+                            const cId = getCourseIdentifier(c);
+                            const isSelected = cId === selectedCourseId || String(c.id) === String(selectedCourseId) || c.course_code === selectedCourseId;
+                            return (
+                              <button
+                                key={cId || c.course_code}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedCourseId(cId);
+                                  setClassGroup('');
+                                  setIsCourseOpen(false);
+                                  triggerReRender();
+                                }}
+                                className={`group w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer my-0.5 ${
+                                  isSelected 
+                                    ? 'bg-brand-blue-light dark:bg-sky-500/20 text-brand-blue dark:text-sky-300 font-bold border border-brand-blue/20 dark:border-sky-500/30' 
+                                    : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                                }`}
+                              >
+                                <div className="flex flex-col gap-0.5 min-w-0 pr-2">
+                                  <span className="font-semibold font-mono text-brand-blue dark:text-sky-400 group-hover:text-brand-blue dark:group-hover:text-sky-300 transition-colors">{c.course_code}</span>
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-300 transition-colors truncate">{c.course_name}</span>
+                                </div>
+                                {isSelected && (
+                                  <span className="flex items-center gap-1 text-[10px] bg-brand-blue dark:bg-sky-500 text-white dark:text-slate-900 px-2 py-0.5 rounded-md font-extrabold shadow-xs shrink-0">
+                                    <Check className="w-3 h-3 stroke-[3]" />
+                                    Selected
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })
+                        )}
                       </div>
                     )}
-                </div>
-              </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Class Allocation Group</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map(g => (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => setClassGroup(g)}
-                        className={`py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                          classGroup === g
-                            ? 'bg-brand-blue-light border-brand-blue/20 text-brand-blue'
-                            : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
-                        }`}
-                      >
-                        {g === 'All' ? 'Lecture' : `Group ${g.replace('G', '')}`}
-                      </button>
-                    ))}
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className="w-full uipro-button uipro-button-primary mt-2 cursor-pointer"
-                >
-                  {creating ? 'Launching...' : 'Start Active Session'}
-                </button>
+                {/* Upcoming Class Schedule Display Container */}
+                {(() => {
+                  const selectedCourse = selectedCourseId ? courses.find(c => {
+                    const cId = getCourseIdentifier(c);
+                    return cId && (
+                      cId === selectedCourseId || 
+                      String(c.id) === String(selectedCourseId) || 
+                      (c.course_id && String(c.course_id) === String(selectedCourseId)) ||
+                      c.course_code === selectedCourseId
+                    );
+                  }) : undefined;
+
+                  const checkScheduleStatus = (course?: Course) => {
+                    if (!course) {
+                      return {
+                        canStart: false,
+                        displayText: 'No subject course selected',
+                        subText: 'Select a course above to view scheduled class time.',
+                        isWithinOneHour: false,
+                      };
+                    }
+
+                    const { schedule_day, schedule_start, schedule_end, schedule_room } = course;
+                    const roomStr = schedule_room ? `Room: ${schedule_room}` : 'Room TBA';
+
+                    if (!schedule_start) {
+                      return {
+                        canStart: true,
+                        displayText: `Flexible Schedule | ${roomStr}`,
+                        subText: 'No fixed timetable assigned. Ready to launch.',
+                        isWithinOneHour: true,
+                      };
+                    }
+
+                    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                    const now = new Date();
+                    const currentDayName = daysOfWeek[now.getDay()];
+
+                    const parseTimeToMinutes = (timeStr: string): number | null => {
+                      if (!timeStr) return null;
+                      const clean = timeStr.trim().toUpperCase();
+                      const isPM = clean.includes('PM');
+                      const isAM = clean.includes('AM');
+                      const numPart = clean.replace(/(AM|PM)/g, '').trim();
+                      const parts = numPart.split(':');
+                      let hours = parseInt(parts[0], 10);
+                      const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
+
+                      if (isNaN(hours)) return null;
+                      if (isPM && hours < 12) hours += 12;
+                      if (isAM && hours === 12) hours = 0;
+
+                      return hours * 60 + minutes;
+                    };
+
+                    const startMinutes = parseTimeToMinutes(schedule_start);
+                    const endMinutes = schedule_end ? parseTimeToMinutes(schedule_end) : null;
+                    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+                    const formattedDay = schedule_day ? (schedule_day.charAt(0).toUpperCase() + schedule_day.slice(1).toLowerCase()) : 'Today';
+                    const isSameDay = !schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
+
+                    if (isSameDay && startMinutes !== null) {
+                      const diffMinutes = startMinutes - currentMinutes;
+
+                      if (currentMinutes >= startMinutes && (endMinutes === null || currentMinutes <= endMinutes + 30)) {
+                        return {
+                          canStart: true,
+                          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
+                          subText: 'Class window is currently active.',
+                          isWithinOneHour: true,
+                        };
+                      }
+
+                      if (diffMinutes > 0 && diffMinutes <= 60) {
+                        return {
+                          canStart: true,
+                          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
+                          subText: `Upcoming: Starts in ${diffMinutes} minutes`,
+                          isWithinOneHour: true,
+                        };
+                      }
+
+                      if (diffMinutes > 60) {
+                        const hoursLeft = (diffMinutes / 60).toFixed(1);
+                        return {
+                          canStart: false,
+                          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
+                          subText: `Scheduled today in ${hoursLeft} hours. Unlocks 1 hour before class.`,
+                          isWithinOneHour: false,
+                        };
+                      }
+                    }
+
+                    return {
+                      canStart: false,
+                      displayText: `${formattedDay} ${schedule_start}${schedule_end ? ` - ${schedule_end}` : ''} | ${roomStr}`,
+                      subText: `Class is scheduled for ${formattedDay}. Opening unlocks 1h before start.`,
+                      isWithinOneHour: false,
+                    };
+                  };
+
+                  const scheduleStatus = checkScheduleStatus(selectedCourse);
+
+                  return (
+                    <div className="p-3.5 bg-slate-50/80 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/80 rounded-xl space-y-2 transition-all">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-brand-blue dark:text-sky-400" />
+                          Upcoming Class Schedule
+                        </span>
+                        {selectedCourse && (
+                          <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-md flex items-center gap-1 ${
+                            scheduleStatus.canStart
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-400/20 dark:text-emerald-300 border border-emerald-500/20'
+                              : 'bg-amber-500/10 text-amber-600 dark:bg-amber-400/20 dark:text-amber-300 border border-amber-500/20'
+                          }`}>
+                            {scheduleStatus.canStart ? '🟢 Ready to Launch' : '🔒 Locked'}
+                          </span>
+                        )}
+                      </div>
+
+                      {!selectedCourse ? (
+                        <div className="py-2 text-[11px] text-slate-400 dark:text-slate-500 text-center font-medium italic">
+                          No subject course selected. Select a course above to view scheduled class time.
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span className="truncate">{scheduleStatus.displayText}</span>
+                          </div>
+                          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                            {scheduleStatus.subText}
+                          </div>
+
+                          {!scheduleStatus.canStart && (
+                            <div className="pt-2 mt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-[11px]">
+                              <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1 truncate w-full">
+                                <Clock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                                {(() => {
+                                  const { schedule_day, schedule_start } = selectedCourse;
+                                  if (!schedule_start) return 'Flexible schedule';
+
+                                  const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                                  const now = new Date();
+                                  const currentDayIndex = now.getDay();
+                                  const currentDayName = daysOfWeek[currentDayIndex];
+
+                                  const parseTimeToMinutes = (timeStr: string): number | null => {
+                                    if (!timeStr) return null;
+                                    const clean = timeStr.trim().toUpperCase();
+                                    const isPM = clean.includes('PM');
+                                    const isAM = clean.includes('AM');
+                                    const numPart = clean.replace(/(AM|PM)/g, '').trim();
+                                    const parts = numPart.split(':');
+                                    let hours = parseInt(parts[0], 10);
+                                    const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
+
+                                    if (isNaN(hours)) return null;
+                                    if (isPM && hours < 12) hours += 12;
+                                    if (isAM && hours === 12) hours = 0;
+
+                                    return hours * 60 + minutes;
+                                  };
+
+                                  const startMinutes = parseTimeToMinutes(schedule_start);
+                                  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+                                  const formattedDay = schedule_day ? (schedule_day.charAt(0).toUpperCase() + schedule_day.slice(1).toLowerCase()) : 'Today';
+                                  const isSameDay = !schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
+
+                                  if (isSameDay && startMinutes !== null) {
+                                    const diffMinutes = startMinutes - currentMinutes;
+                                    if (diffMinutes > 0) {
+                                      const hours = Math.floor(diffMinutes / 60);
+                                      const mins = diffMinutes % 60;
+                                      if (hours > 0) {
+                                        return `Time Remaining: Starts in ${hours}h ${mins}m`;
+                                      }
+                                      return `Time Remaining: Starts in ${mins} mins`;
+                                    }
+                                  }
+
+                                  const targetDayIndex = daysOfWeek.findIndex(d => d.toLowerCase() === formattedDay.toLowerCase());
+                                  if (targetDayIndex !== -1) {
+                                    let daysDiff = targetDayIndex - currentDayIndex;
+                                    if (daysDiff <= 0) daysDiff += 7;
+                                    return `Time Remaining: Starts in ${daysDiff} day${daysDiff > 1 ? 's' : ''} (${formattedDay} ${schedule_start})`;
+                                  }
+
+                                  return `Time Remaining: Scheduled for ${formattedDay} at ${schedule_start}`;
+                                })()}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Class Allocation Group */}
+                <div className="space-y-1.5 relative" ref={groupDropdownRef}>
+                  <label className="text-[10px] font-bold text-slate-400 dark:text-slate-400 uppercase tracking-wider">Class Allocation Group</label>
+                  <div className="relative">
+                    <button
+                      key={`group-btn-${renderKey}-${classGroup}`}
+                      type="button"
+                      disabled={!selectedCourseId}
+                      onClick={() => {
+                        if (!selectedCourseId) return;
+                        setIsGroupOpen(prev => !prev);
+                        setIsCourseOpen(false);
+                      }}
+                      className={`w-full py-2.5 px-4 text-left flex items-center justify-between bg-slate-50 dark:bg-slate-800/90 border rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100/70 dark:hover:bg-slate-700/80 transition-all cursor-pointer ${
+                        !selectedCourseId ? 'opacity-60 cursor-not-allowed' : ''
+                      } ${
+                        isGroupOpen ? 'border-brand-blue dark:border-sky-400 ring-2 ring-brand-blue/20 dark:ring-sky-400/20' : 'border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <span className="truncate">
+                        {!selectedCourseId
+                          ? '-- Select Subject Course First --'
+                          : !classGroup
+                            ? '-- Select Class Allocation Group --'
+                            : classGroup === 'All'
+                              ? 'Lecture (All Allocation Groups)'
+                              : `Group ${classGroup.replace('G', '')}`}
+                      </span>
+                      <ChevronDown className={`h-4 w-4 text-slate-400 dark:text-slate-400 shrink-0 ml-2 transition-transform duration-200 ${isGroupOpen ? 'rotate-180 text-brand-blue dark:text-sky-400' : ''}`} />
+                    </button>
+
+                    {isGroupOpen && selectedCourseId && (
+                      <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                        {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map((g) => {
+                          const isSelected = classGroup === g;
+                          const labelText = g === 'All' ? 'Lecture (All Allocation Groups)' : `Group ${g.replace('G', '')}`;
+                          return (
+                            <button
+                              key={g}
+                              type="button"
+                              onClick={() => {
+                                setClassGroup(g);
+                                setIsGroupOpen(false);
+                                triggerReRender();
+                              }}
+                              className={`group w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer my-0.5 ${
+                                isSelected 
+                                  ? 'bg-brand-blue-light dark:bg-sky-500/20 text-brand-blue dark:text-sky-300 font-bold border border-brand-blue/20 dark:border-sky-500/30' 
+                                  : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                              }`}
+                            >
+                              <span className="font-semibold text-slate-800 dark:text-slate-100 group-hover:text-brand-blue dark:group-hover:text-sky-300 transition-colors">
+                                {labelText}
+                              </span>
+                              {isSelected && (
+                                <span className="flex items-center gap-1 text-[10px] bg-brand-blue dark:bg-sky-500 text-white dark:text-slate-900 px-2 py-0.5 rounded-md font-extrabold shadow-xs shrink-0">
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                  Selected
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Submit button with 1-hour window lock enforce */}
+                {(() => {
+                  const selectedCourse = selectedCourseId ? courses.find(c => {
+                    const cId = getCourseIdentifier(c);
+                    return cId && (
+                      cId === selectedCourseId || 
+                      String(c.id) === String(selectedCourseId) || 
+                      (c.course_id && String(c.course_id) === String(selectedCourseId)) ||
+                      c.course_code === selectedCourseId
+                    );
+                  }) : undefined;
+
+                  let canStart = false;
+                  if (!selectedCourse) {
+                    canStart = false;
+                  } else if (!selectedCourse.schedule_start) {
+                    canStart = true;
+                  } else {
+                    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                    const now = new Date();
+                    const currentDayName = daysOfWeek[now.getDay()];
+
+                    const parseTimeToMinutes = (timeStr: string): number | null => {
+                      if (!timeStr) return null;
+                      const clean = timeStr.trim().toUpperCase();
+                      const isPM = clean.includes('PM');
+                      const isAM = clean.includes('AM');
+                      const numPart = clean.replace(/(AM|PM)/g, '').trim();
+                      const parts = numPart.split(':');
+                      let hours = parseInt(parts[0], 10);
+                      const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
+
+                      if (isNaN(hours)) return null;
+                      if (isPM && hours < 12) hours += 12;
+                      if (isAM && hours === 12) hours = 0;
+
+                      return hours * 60 + minutes;
+                    };
+
+                    const startMinutes = parseTimeToMinutes(selectedCourse.schedule_start);
+                    const endMinutes = selectedCourse.schedule_end ? parseTimeToMinutes(selectedCourse.schedule_end) : null;
+                    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+                    const formattedDay = selectedCourse.schedule_day ? (selectedCourse.schedule_day.charAt(0).toUpperCase() + selectedCourse.schedule_day.slice(1).toLowerCase()) : 'Today';
+                    const isSameDay = !selectedCourse.schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
+
+                    if (isSameDay && startMinutes !== null) {
+                      const diffMinutes = startMinutes - currentMinutes;
+                      if (currentMinutes >= startMinutes && (endMinutes === null || currentMinutes <= endMinutes + 30)) {
+                        canStart = true;
+                      } else if (diffMinutes > 0 && diffMinutes <= 60) {
+                        canStart = true;
+                      }
+                    }
+                  }
+
+                  const isLocked = !!selectedCourseId && !!classGroup && !canStart;
+                  const isButtonDisabled = creating || !canStart || !selectedCourseId || !classGroup;
+
+                  return (
+                    <div className="relative group w-full mt-2">
+                      <button
+                        type="submit"
+                        disabled={isButtonDisabled}
+                        title={isLocked ? 'Opens 1h before class' : undefined}
+                        className={`w-full uipro-button uipro-button-primary cursor-pointer transition-all ${
+                          isButtonDisabled ? 'opacity-60 cursor-not-allowed bg-slate-400 hover:bg-slate-400' : ''
+                        }`}
+                      >
+                        {creating
+                          ? 'Launching...'
+                          : !selectedCourseId
+                            ? 'Select Subject Course'
+                            : !classGroup
+                              ? 'Select Class Allocation Group'
+                              : !canStart
+                                ? 'Locked'
+                                : 'Start Active Session'}
+                      </button>
+
+                      {/* Floating tooltip on hover when locked */}
+                      {isLocked && (
+                        <div className="absolute left-1/2 -top-10 -translate-x-1/2 hidden group-hover:flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/95 dark:bg-slate-100/95 text-white dark:text-slate-900 text-[11px] font-bold rounded-lg shadow-xl whitespace-nowrap z-50 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+                          <span>Opens 1h before class</span>
+                          <div className="absolute left-1/2 -bottom-1 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95 dark:border-t-slate-100/95" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </form>
             </div>
           </div>

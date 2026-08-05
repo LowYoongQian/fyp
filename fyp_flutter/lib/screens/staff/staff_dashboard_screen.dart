@@ -50,6 +50,15 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
   List<dynamic> myTimetable = [];
   List<dynamic> myActiveSessions = [];
+  List<dynamic> myCourses = [];
+  List<dynamic> courseSessionsHistory = [];
+  bool isFetchingHistory = false;
+
+  int historyCurrentPage = 1;
+  int historyPageSize = 4;
+
+  String? selectedCourseId;
+  String selectedGroup = 'All';
 
   Timer? _poller;
 
@@ -74,7 +83,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     });
 
     try {
-      final ttUri = Uri.parse("${widget.apiBaseUrl}/staff/${widget.staffId}/timetable");
+      final ttUri = Uri.parse("${widget.apiBaseUrl}/lecturers/me/timetable");
       final ttRes = await http.get(ttUri, headers: {
         "Authorization": "Bearer ${widget.authToken}",
         "Content-Type": "application/json",
@@ -82,9 +91,24 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
       if (ttRes.statusCode == 200) {
         final List<dynamic> data = jsonDecode(ttRes.body);
-        myTimetable = data;
+        myTimetable = data.map((t) => {
+          'id': t['id'],
+          'courseId': t['course_id'] ?? t['courseId'] ?? '',
+          'course_id': t['course_id'] ?? t['courseId'] ?? '',
+          'courseCode': t['course_code'] ?? t['courseCode'] ?? '',
+          'course_code': t['course_code'] ?? t['courseCode'] ?? '',
+          'courseName': t['course_name'] ?? t['courseName'] ?? '',
+          'course_name': t['course_name'] ?? t['courseName'] ?? '',
+          'day': t['schedule_day'] ?? t['day'] ?? 'Monday',
+          'startTime': t['schedule_start'] ?? t['startTime'] ?? '08:00',
+          'endTime': t['schedule_end'] ?? t['endTime'] ?? '10:00',
+          'room': t['schedule_room'] ?? t['room'] ?? 'TBA',
+          'role': t['role'] ?? 'Lecture',
+          'classGroup': t['class_group'] ?? t['classGroup'] ?? 'All',
+        }).toList();
       }
 
+      await fetchMyCourses();
       await fetchActiveSessions();
     } catch (e) {
       debugPrint("Error loading lecturer data: $e");
@@ -124,6 +148,230 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
+  Future<void> fetchMyCourses() async {
+    try {
+      final uri = Uri.parse("${widget.apiBaseUrl}/lecturers/me/courses");
+      final res = await http.get(uri, headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+        "Content-Type": "application/json",
+      }).timeout(const Duration(seconds: 5));
+
+      if (res.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(res.body);
+        if (mounted) {
+          setState(() {
+            myCourses = data;
+            if (myCourses.isNotEmpty && (selectedCourseId == null || selectedCourseId!.isEmpty)) {
+              selectedCourseId = myCourses[0]['id']?.toString() ?? myCourses[0]['course_id']?.toString();
+            }
+          });
+          if (selectedCourseId != null && selectedCourseId!.isNotEmpty) {
+            await fetchCourseSessions(selectedCourseId!);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching lecturer courses: $e");
+    }
+  }
+
+  Future<void> fetchCourseSessions(String courseId) async {
+    if (!mounted) return;
+    setState(() {
+      isFetchingHistory = true;
+    });
+
+    try {
+      final uri = Uri.parse("${widget.apiBaseUrl}/sessions/course/$courseId/sessions");
+      final res = await http.get(uri, headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+        "Content-Type": "application/json",
+      }).timeout(const Duration(seconds: 6));
+
+      if (res.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(res.body);
+        if (mounted) {
+          setState(() {
+            courseSessionsHistory = data;
+            historyCurrentPage = 1;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching course sessions history: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          isFetchingHistory = false;
+        });
+      }
+    }
+  }
+
+  String _formatDateTimeStr(String isoString) {
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+    } catch (_) {
+      return isoString;
+    }
+  }
+
+  List<int> _getSmartPageNumbers(int current, int total) {
+    if (total <= 4) {
+      return List.generate(total, (i) => i + 1);
+    }
+    if (current <= 2) {
+      return [1, 2, 3, total];
+    } else if (current >= total - 1) {
+      return [1, total - 2, total - 1, total];
+    } else {
+      return [1, current, total];
+    }
+  }
+
+  List<Map<String, String>> _getAvailableCourses() {
+    final list = <Map<String, String>>[];
+    final seen = <String>{};
+
+    if (myCourses.isNotEmpty) {
+      for (final c in myCourses) {
+        final id = c['id']?.toString() ?? c['course_id']?.toString() ?? '';
+        if (id.isNotEmpty && !seen.contains(id)) {
+          seen.add(id);
+          list.add({
+            'id': id,
+            'code': c['course_code']?.toString() ?? id,
+            'name': c['course_name']?.toString() ?? 'Course',
+          });
+        }
+      }
+    }
+
+    if (list.isEmpty && myTimetable.isNotEmpty) {
+      for (final t in myTimetable) {
+        final id = t['courseId']?.toString() ?? t['course_id']?.toString() ?? '';
+        if (id.isNotEmpty && !seen.contains(id)) {
+          seen.add(id);
+          list.add({
+            'id': id,
+            'code': t['courseCode']?.toString() ?? t['course_code']?.toString() ?? id,
+            'name': t['courseName']?.toString() ?? t['course_name']?.toString() ?? 'Course',
+          });
+        }
+      }
+    }
+
+    return list;
+  }
+
+  Future<void> launchCourseSession(String courseId, String group) async {
+    final status = _getCourseScheduleStatus(courseId, group);
+    if (!(status['canStart'] as bool)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(status['hintText'] as String),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final uri = Uri.parse("${widget.apiBaseUrl}/sessions/open");
+      final body = jsonEncode({
+        "course_id": courseId,
+        "class_group": group,
+      });
+
+      final res = await http.post(
+        uri,
+        headers: {
+          "Authorization": "Bearer ${widget.authToken}",
+          "Content-Type": "application/json",
+        },
+        body: body,
+      );
+
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Attendance gate successfully opened for $group!"),
+              backgroundColor: const Color(0xFF059669),
+            ),
+          );
+        }
+        await fetchActiveSessions();
+      } else {
+        final err = jsonDecode(res.body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(err['detail'] ?? "Failed to open attendance gate"),
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Network error opening session: $e"),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> showManualRosterModal(String courseId, String group) async {
+    var activeSession = myActiveSessions.firstWhere(
+      (s) => s['courseId'] == courseId || s['course_id'] == courseId,
+      orElse: () => null,
+    );
+
+    if (activeSession == null) {
+      try {
+        final uri = Uri.parse("${widget.apiBaseUrl}/sessions/open");
+        final res = await http.post(
+          uri,
+          headers: {
+            "Authorization": "Bearer ${widget.authToken}",
+            "Content-Type": "application/json",
+          },
+          body: jsonEncode({
+            "course_id": courseId,
+            "class_group": group,
+          }),
+        );
+        if (res.statusCode == 200 || res.statusCode == 201) {
+          final data = jsonDecode(res.body);
+          activeSession = data;
+          await fetchActiveSessions();
+        }
+      } catch (e) {
+        debugPrint("Error opening session for roster: $e");
+      }
+    }
+
+    if (activeSession != null) {
+      final sessionId = activeSession['id'];
+      final courseCode = activeSession['courseCode'] ?? activeSession['course_code'] ?? courseId;
+      _showAttendeesModal(context, sessionId, courseCode);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Could not initialize session roster. Please try opening gate first."),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> handleOpenSession(Map<String, dynamic> slot) async {
     final now = ApiConfig.now;
     final startDt = slot['startDateTime'] as DateTime;
@@ -140,11 +388,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
 
     try {
-      final uri = Uri.parse("${widget.apiBaseUrl}/attendance/open-session");
+      final uri = Uri.parse("${widget.apiBaseUrl}/sessions/open");
       final body = jsonEncode({
-        "courseId": slot['courseId'],
-        "classGroup": slot['role'] == 'Lecture' ? 'All' : slot['classGroup'],
-        "durationMinutes": 120,
+        "course_id": slot['courseId'] ?? slot['course_id'],
+        "class_group": slot['role'] == 'Lecture' ? 'All' : (slot['classGroup'] ?? 'All'),
       });
 
       final res = await http.post(uri,
@@ -155,7 +402,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         body: body,
       );
 
-      if (res.statusCode == 200) {
+      if (res.statusCode == 200 || res.statusCode == 201) {
         final data = jsonDecode(res.body);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -189,6 +436,66 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
+  Map<String, dynamic> _getCourseScheduleStatus(String? courseId, String group) {
+    if (courseId == null || courseId.isEmpty) {
+      return {'canStart': false, 'statusText': 'Select Course', 'hintText': 'Please select a course first.'};
+    }
+    final now = ApiConfig.now;
+
+    final matchingSlots = myTimetable.where((slot) {
+      final cId = slot['courseId'] ?? slot['course_id'];
+      if (cId != courseId) return false;
+      if (group == 'All') return true;
+      final grp = slot['classGroup'] ?? slot['class_group'] ?? 'All';
+      return grp == 'All' || grp == group || group.contains(grp) || grp.contains(group);
+    }).toList();
+
+    if (matchingSlots.isEmpty) {
+      return {'canStart': true, 'statusText': '🟢 Ready to Launch', 'hintText': 'Course gate can be launched.'};
+    }
+
+    for (final slot in matchingSlots) {
+      final dayName = slot['day'] as String;
+      final startTimeStr = slot['startTime'] as String;
+      final endTimeStr = slot['endTime'] as String;
+
+      final startDt = _getSlotDateTime(dayName, startTimeStr, now);
+      final endDt = _getSlotDateTime(dayName, endTimeStr, now);
+
+      final diff = startDt.difference(now);
+
+      if (now.isAfter(startDt) && now.isBefore(endDt)) {
+        return {
+          'canStart': true,
+          'statusText': '🟢 Class in Progress',
+          'hintText': 'Class is currently active until $endTimeStr.',
+        };
+      }
+
+      if (diff.inMinutes > 0 && diff.inMinutes <= 60) {
+        return {
+          'canStart': true,
+          'statusText': '🟢 Ready to Launch',
+          'hintText': 'Starts in ${diff.inMinutes}m. Gate unlocked for check-in.',
+        };
+      }
+
+      if (diff.inMinutes > 60) {
+        String countStr = diff.inDays > 0
+            ? "${diff.inDays}d ${diff.inHours % 24}h"
+            : (diff.inHours > 0 ? "${diff.inHours}h ${diff.inMinutes % 60}m" : "${diff.inMinutes}m");
+
+        return {
+          'canStart': false,
+          'statusText': '🔒 Locked',
+          'hintText': 'Time Remaining: Starts in $countStr (Opens 1h before class).',
+        };
+      }
+    }
+
+    return {'canStart': true, 'statusText': '🟢 Ready to Launch', 'hintText': 'Unlocked for check-in.'};
+  }
+
   Future<void> handleCloseSession(dynamic sessionId) async {
     try {
       final uri = Uri.parse("${widget.apiBaseUrl}/attendance/close-session/$sessionId");
@@ -220,6 +527,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     final todaySlots = myTimetable.where((slot) {
       return (slot['day'] as String).toLowerCase() == todayName.toLowerCase();
     }).toList();
+    todaySlots.sort((a, b) => (a['startTime'] as String).compareTo(b['startTime'] as String));
 
     for (var slot in todaySlots) {
       final startDt = _getSlotDateTime(slot['day'] as String, slot['startTime'] as String, now);
@@ -648,10 +956,14 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         const SizedBox(width: 8),
                         IconButton(
                           onPressed: () {
-                            widget.onSyncRequested();
-                            loadLecturerData();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("No new staff notifications."),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
                           },
-                          icon: Icon(Icons.sync, color: headerButtonIconColor, size: 18),
+                          icon: Icon(Icons.notifications_outlined, color: headerButtonIconColor, size: 18),
                           style: IconButton.styleFrom(
                             backgroundColor: headerButtonBg,
                             padding: const EdgeInsets.all(8),
@@ -718,11 +1030,19 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         isLoading: true,
                         child: ShimmerSkeleton(),
                       )
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+                    : RefreshIndicator(
+                        onRefresh: () async {
+                          widget.onSyncRequested();
+                          await loadLecturerData();
+                        },
+                        color: primaryColor,
+                        backgroundColor: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                        child: SingleChildScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
                             // Profile Card
                             GlassCard(
                               child: Row(
@@ -834,18 +1154,23 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                 String buttonText = "Open Attendance Gate";
                                 bool buttonEnabled = false;
 
+                                final timeRemainingUntilEnd = endDt.difference(now);
+                                String endCountdownStr = timeRemainingUntilEnd.inHours > 0
+                                    ? "${timeRemainingUntilEnd.inHours}h ${timeRemainingUntilEnd.inMinutes % 60}m"
+                                    : "${timeRemainingUntilEnd.inMinutes}m";
+
                                 if (isAlreadyOpen) {
-                                  hintText = "Attendance gate is currently live.";
-                                  buttonText = "Attendance Gate is Live";
+                                  hintText = "Attendance gate is live ($endCountdownStr remaining until class ends).";
+                                  buttonText = "Gate is Live ($endCountdownStr Left)";
                                   buttonEnabled = false;
                                 } else if (isCurrentlyActive) {
-                                  hintText = "Class is currently in progress.";
-                                  buttonText = "Open Attendance Gate";
-                                  buttonEnabled = true;
+                                  hintText = "Class is in progress ($endCountdownStr remaining until ${upcomingSlot['endTime']}).";
+                                  buttonText = "Class in Progress ($endCountdownStr Left)";
+                                  buttonEnabled = false;
                                 } else if (isOpenWindow) {
                                   final diff = startDt.difference(now);
                                   hintText = "Class starts in ${diff.inMinutes}m. Check-in gate can be opened now.";
-                                  buttonText = "Open Attendance Gate";
+                                  buttonText = "Open Attendance Gate (Starts in ${diff.inMinutes}m)";
                                   buttonEnabled = true;
                                 } else {
                                   final diff = startDt.difference(now);
@@ -857,8 +1182,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                   } else {
                                     countdownStr = "${diff.inMinutes}m";
                                   }
-                                  hintText = "Attendance session is unavailable";
-                                  buttonText = "Opens in $countdownStr";
+                                  hintText = "Time Remaining: Starts in $countdownStr (Unlocks 1h before class).";
+                                  buttonText = "Locked (Opens in $countdownStr)";
                                   buttonEnabled = false;
                                 }
 
@@ -986,14 +1311,19 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                         ),
                                         label: Text(buttonText),
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: primaryColor,
-                                          foregroundColor: Colors.white,
-                                          disabledBackgroundColor: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                                          disabledForegroundColor: isDarkMode ? const Color(0xFFCBD5E1) : const Color(0xFF64748B),
-                                          elevation: 1,
+                                          backgroundColor: buttonEnabled ? primaryColor : (isDarkMode ? const Color(0xFF1E293B) : Colors.white),
+                                          foregroundColor: buttonEnabled ? Colors.white : (isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                                          disabledBackgroundColor: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                                          disabledForegroundColor: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                          elevation: buttonEnabled ? 1 : 0,
                                           padding: const EdgeInsets.symmetric(vertical: 12),
                                           shape: RoundedRectangleBorder(
                                             borderRadius: BorderRadius.circular(10),
+                                            side: BorderSide(
+                                              color: buttonEnabled
+                                                  ? Colors.transparent
+                                                  : (isDarkMode ? const Color(0xFF475569) : const Color(0xFFCBD5E1)),
+                                            ),
                                           ),
                                           textStyle: GoogleFonts.spaceGrotesk(
                                             fontSize: 12,
@@ -1001,6 +1331,353 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                           ),
                                         ),
                                       ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 24),
+
+                            // Course Sessions & Attendance History Section
+                            Text(
+                              "Course Sessions & Attendance History",
+                              style: GoogleFonts.spaceGrotesk(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: primaryTextColor,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Builder(
+                              builder: (context) {
+                                final availableCourses = _getAvailableCourses();
+                                final effectiveCourseId = (availableCourses.any((c) => c['id'] == selectedCourseId))
+                                    ? selectedCourseId
+                                    : (availableCourses.isNotEmpty ? availableCourses[0]['id'] : null);
+
+                                return GlassCard(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            "Select Course",
+                                            style: GoogleFonts.inter(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: secondaryTextColor,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+
+                                      // Enhanced Course Dropdown Selector
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(alpha: 0.03),
+                                              blurRadius: 4,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: DropdownButtonHideUnderline(
+                                          child: DropdownButton<String>(
+                                            isExpanded: true,
+                                            value: effectiveCourseId,
+                                            icon: Icon(Icons.keyboard_arrow_down_rounded, color: primaryColor, size: 22),
+                                            hint: Text("Select Course", style: TextStyle(color: secondaryTextColor, fontSize: 12)),
+                                            dropdownColor: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                                            borderRadius: BorderRadius.circular(12),
+                                            items: availableCourses.map((c) {
+                                              return DropdownMenuItem<String>(
+                                                value: c['id'],
+                                                child: Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                                  child: Row(
+                                                    children: [
+                                                      Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                        decoration: BoxDecoration(
+                                                          color: primaryColor.withValues(alpha: 0.12),
+                                                          borderRadius: BorderRadius.circular(6),
+                                                          border: Border.all(color: primaryColor.withValues(alpha: 0.2)),
+                                                        ),
+                                                        child: Text(
+                                                          c['code']!,
+                                                          style: GoogleFonts.inter(
+                                                            fontSize: 10,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: primaryColor,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Expanded(
+                                                        child: Text(
+                                                          c['name']!,
+                                                          style: GoogleFonts.spaceGrotesk(
+                                                            fontSize: 12,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: primaryTextColor,
+                                                          ),
+                                                          overflow: TextOverflow.ellipsis,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            }).toList(),
+                                            onChanged: (val) {
+                                              if (val != null) {
+                                                setState(() => selectedCourseId = val);
+                                                fetchCourseSessions(val);
+                                              }
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 14),
+
+                                      // Class Sessions History List Header
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            "Class Sessions (Current & Past)",
+                                            style: GoogleFonts.inter(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: secondaryTextColor,
+                                            ),
+                                          ),
+                                          if (isFetchingHistory)
+                                            const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+
+                                      // Course Sessions History List with Modern Pagination
+                                      if (isFetchingHistory)
+                                        const Padding(
+                                          padding: EdgeInsets.symmetric(vertical: 16),
+                                          child: Center(child: CircularProgressIndicator()),
+                                        )
+                                      else if (courseSessionsHistory.isEmpty)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                                          decoration: BoxDecoration(
+                                            color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                            borderRadius: BorderRadius.circular(10),
+                                            border: Border.all(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              "No class sessions recorded yet for this course.",
+                                              style: GoogleFonts.inter(fontSize: 10.5, color: secondaryTextColor),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ),
+                                        )
+                                      else
+                                        Builder(
+                                          builder: (context) {
+                                            final int totalItems = courseSessionsHistory.length;
+                                            final int totalPages = (totalItems / historyPageSize).ceil();
+                                            final int safeCurrentPage = totalPages > 0 ? (historyCurrentPage > totalPages ? totalPages : (historyCurrentPage < 1 ? 1 : historyCurrentPage)) : 1;
+                                            final int startIndex = (safeCurrentPage - 1) * historyPageSize;
+                                            final int endIndex = (startIndex + historyPageSize) > totalItems ? totalItems : (startIndex + historyPageSize);
+
+                                            final pagedSessions = courseSessionsHistory.sublist(startIndex, endIndex);
+
+                                            return Column(
+                                              children: [
+                                                Column(
+                                                  children: pagedSessions.map((sess) {
+                                                    final bool isOpen = sess['is_open'] == true;
+                                                    final String sessId = sess['id']?.toString() ?? '';
+                                                    final String groupStr = sess['class_group'] ?? 'All';
+                                                    final String openedAtStr = sess['opened_at'] != null
+                                                        ? _formatDateTimeStr(sess['opened_at'] as String)
+                                                        : 'Unknown Date';
+
+                                                    return Container(
+                                                      margin: const EdgeInsets.only(bottom: 8),
+                                                      decoration: BoxDecoration(
+                                                        color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                                        borderRadius: BorderRadius.circular(10),
+                                                        border: Border.all(
+                                                          color: isOpen
+                                                              ? const Color(0xFF10B981).withValues(alpha: 0.4)
+                                                              : (isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                                        ),
+                                                      ),
+                                                      child: ListTile(
+                                                        dense: true,
+                                                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                                                        leading: Container(
+                                                          padding: const EdgeInsets.all(6),
+                                                          decoration: BoxDecoration(
+                                                            color: (isOpen ? const Color(0xFF10B981) : const Color(0xFF64748B)).withValues(alpha: 0.15),
+                                                            shape: BoxShape.circle,
+                                                          ),
+                                                          child: Icon(
+                                                            isOpen ? Icons.sensors : Icons.history,
+                                                            color: isOpen ? const Color(0xFF10B981) : secondaryTextColor,
+                                                            size: 16,
+                                                          ),
+                                                        ),
+                                                        title: Text(
+                                                          "Session: $openedAtStr",
+                                                          style: GoogleFonts.spaceGrotesk(fontSize: 11.5, fontWeight: FontWeight.bold, color: primaryTextColor),
+                                                        ),
+                                                        subtitle: Text(
+                                                          "Group: $groupStr · Status: ${isOpen ? 'LIVE GATE' : 'COMPLETED SESSION'}",
+                                                          style: GoogleFonts.inter(
+                                                            fontSize: 9.5,
+                                                            fontWeight: FontWeight.w600,
+                                                            color: isOpen ? const Color(0xFF10B981) : secondaryTextColor,
+                                                          ),
+                                                        ),
+                                                        trailing: ElevatedButton.icon(
+                                                          onPressed: () {
+                                                            final courseCode = availableCourses.firstWhere(
+                                                                (c) => c['id'] == effectiveCourseId,
+                                                                orElse: () => {'code': 'Course'})['code']!;
+                                                            _showAttendeesModal(context, sessId, courseCode);
+                                                          },
+                                                          icon: const Icon(Icons.people_alt_outlined, size: 12),
+                                                          label: Text(isOpen ? "Current Roster" : "Past Roster"),
+                                                          style: ElevatedButton.styleFrom(
+                                                            backgroundColor: isOpen ? const Color(0xFF10B981) : primaryColor,
+                                                            foregroundColor: Colors.white,
+                                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                                            textStyle: GoogleFonts.inter(fontSize: 9.5, fontWeight: FontWeight.bold),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    );
+                                                  }).toList(),
+                                                ),
+
+                                                // Modern Responsive Pagination Footer
+                                                if (totalPages > 1) ...[
+                                                  const SizedBox(height: 8),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                    decoration: BoxDecoration(
+                                                      color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                                      borderRadius: BorderRadius.circular(10),
+                                                      border: Border.all(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                                                    ),
+                                                    child: Row(
+                                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                      children: [
+                                                        Flexible(
+                                                          child: Text(
+                                                            "Showing ${startIndex + 1}–$endIndex of $totalItems",
+                                                            style: GoogleFonts.inter(
+                                                              fontSize: 9.5,
+                                                              fontWeight: FontWeight.w600,
+                                                              color: secondaryTextColor,
+                                                            ),
+                                                            overflow: TextOverflow.ellipsis,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(width: 6),
+                                                        SingleChildScrollView(
+                                                          scrollDirection: Axis.horizontal,
+                                                          child: Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              IconButton(
+                                                                onPressed: safeCurrentPage > 1
+                                                                    ? () => setState(() => historyCurrentPage = safeCurrentPage - 1)
+                                                                    : null,
+                                                                icon: const Icon(Icons.chevron_left, size: 16),
+                                                                padding: EdgeInsets.zero,
+                                                                constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                                                                style: IconButton.styleFrom(
+                                                                  backgroundColor: safeCurrentPage > 1
+                                                                      ? (isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
+                                                                      : Colors.transparent,
+                                                                  foregroundColor: safeCurrentPage > 1 ? primaryTextColor : secondaryTextColor.withValues(alpha: 0.3),
+                                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                                                ),
+                                                              ),
+                                                              const SizedBox(width: 2),
+                                                              ..._getSmartPageNumbers(safeCurrentPage, totalPages).map((pageNum) {
+                                                                final isSelected = pageNum == safeCurrentPage;
+
+                                                                return Padding(
+                                                                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                                                                  child: InkWell(
+                                                                    onTap: () => setState(() => historyCurrentPage = pageNum),
+                                                                    borderRadius: BorderRadius.circular(6),
+                                                                    child: Container(
+                                                                      width: 24,
+                                                                      height: 24,
+                                                                      alignment: Alignment.center,
+                                                                      decoration: BoxDecoration(
+                                                                        color: isSelected
+                                                                            ? primaryColor
+                                                                            : (isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
+                                                                        borderRadius: BorderRadius.circular(6),
+                                                                        border: Border.all(
+                                                                          color: isSelected
+                                                                              ? primaryColor
+                                                                              : (isDarkMode ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                                                                        ),
+                                                                      ),
+                                                                      child: Text(
+                                                                        "$pageNum",
+                                                                        style: GoogleFonts.inter(
+                                                                          fontSize: 9.5,
+                                                                          fontWeight: FontWeight.bold,
+                                                                          color: isSelected ? Colors.white : primaryTextColor,
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                );
+                                                              }),
+                                                              const SizedBox(width: 2),
+                                                              IconButton(
+                                                                onPressed: safeCurrentPage < totalPages
+                                                                    ? () => setState(() => historyCurrentPage = safeCurrentPage + 1)
+                                                                    : null,
+                                                                icon: const Icon(Icons.chevron_right, size: 16),
+                                                                padding: EdgeInsets.zero,
+                                                                constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                                                                style: IconButton.styleFrom(
+                                                                  backgroundColor: safeCurrentPage < totalPages
+                                                                      ? (isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
+                                                                      : Colors.transparent,
+                                                                  foregroundColor: safeCurrentPage < totalPages ? primaryTextColor : secondaryTextColor.withValues(alpha: 0.3),
+                                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            );
+                                          },
+                                        ),
                                     ],
                                   ),
                                 );
@@ -1166,6 +1843,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           ],
                         ),
                       ),
+                    ),
               ),
             ],
           ),

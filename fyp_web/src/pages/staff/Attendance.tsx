@@ -31,6 +31,7 @@ export const Attendance: React.FC = () => {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(new Date());
   const [isSessionDropdownOpen, setIsSessionDropdownOpen] = useState(false);
+  const [isGroupDropdownOpen, setIsGroupDropdownOpen] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
   
   // Attendance records state
@@ -452,9 +453,15 @@ export const Attendance: React.FC = () => {
                   className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
                 >
                   <span className="truncate">
-                    {courses.find(c => c.id.toString() === selectedCourseId)
-                      ? `${courses.find(c => c.id.toString() === selectedCourseId)?.course_code} - ${courses.find(c => c.id.toString() === selectedCourseId)?.course_name}`
-                      : '---Select Subject Course---'}
+                    {(() => {
+                      const matchedCourse = courses.find(c => 
+                        String(c.id) === String(selectedCourseId) || c.course_code === selectedCourseId
+                      );
+                      if (matchedCourse) {
+                        return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
+                      }
+                      return selectedCourseId ? selectedCourseId : '---Select Subject Course---';
+                    })()}
                   </span>
                   <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                 </button>
@@ -473,45 +480,78 @@ export const Attendance: React.FC = () => {
                     >
                       <span className="font-semibold group-hover:text-white/90">---Select Subject Course---</span>
                     </button>
-                    {courses.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedCourseId(c.id.toString());
-                          setIsCourseDropdownOpen(false);
-                        }}
-                        className={`group w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-brand-blue hover:text-white transition-all flex flex-col gap-0.5 border-b border-slate-100 last:border-b-0 cursor-pointer ${
-                          selectedCourseId === c.id.toString() ? 'bg-slate-50 font-bold' : ''
-                        }`}
-                      >
-                        <span className="font-semibold font-mono text-brand-blue group-hover:text-white/90 transition-colors">{c.course_code}</span>
-                        <span className="text-[10px] text-slate-500 group-hover:text-white/80 transition-colors truncate">{c.course_name}</span>
-                      </button>
-                    ))}
+                    {courses.map((c) => {
+                      const isSelected = String(selectedCourseId) === String(c.id) || selectedCourseId === c.course_code;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCourseId(String(c.id));
+                            setIsCourseDropdownOpen(false);
+                          }}
+                          className={`group w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-brand-blue hover:text-white transition-all flex items-center justify-between border-b border-slate-100 last:border-b-0 cursor-pointer ${
+                            isSelected ? 'bg-slate-50 font-bold' : ''
+                          }`}
+                        >
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="font-semibold font-mono text-brand-blue group-hover:text-white/90 transition-colors">{c.course_code}</span>
+                            <span className="text-[10px] text-slate-500 group-hover:text-white/80 transition-colors truncate">{c.course_name}</span>
+                          </div>
+                          {isSelected && (
+                            <span className="text-[10px] bg-brand-blue text-white group-hover:bg-white group-hover:text-brand-blue px-2 py-0.5 rounded-md font-extrabold transition-colors ml-2 shrink-0">
+                              Selected
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
             </div>
 
             {/* Group select */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 relative">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Class Group</label>
-              <div className="flex flex-col gap-1.5">
-                {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map(g => (
-                  <button
-                    key={g}
-                    type="button"
-                    onClick={() => setSelectedGroup(g)}
-                    className={`w-full text-left py-2 px-3.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                      selectedGroup === g
-                        ? 'bg-brand-blue-light border-brand-blue/20 text-brand-blue'
-                        : 'bg-slate-50 border-slate-200/50 text-slate-500 hover:bg-slate-100/30'
-                    }`}
-                  >
-                    {g === 'All' ? 'Full Lecture Session' : `Group ${g.replace('G', '')}`}
-                  </button>
-                ))}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsGroupDropdownOpen(prev => !prev)}
+                  className="w-full uipro-input py-2 px-3.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer font-semibold"
+                >
+                  <span className="truncate">
+                    {selectedGroup === 'All' ? 'Full Lecture Session' : `Group ${selectedGroup.replace('G', '')}`}
+                  </span>
+                  <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
+                </button>
+
+                {isGroupDropdownOpen && (
+                  <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                    {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map((g) => (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => {
+                          setSelectedGroup(g);
+                          setIsGroupDropdownOpen(false);
+                        }}
+                        className={`group w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-brand-blue hover:text-white transition-all flex items-center justify-between border-b border-slate-100 last:border-b-0 cursor-pointer ${
+                          selectedGroup === g ? 'bg-slate-50 font-bold' : ''
+                        }`}
+                      >
+                        <span className="font-semibold text-slate-800 group-hover:text-white transition-colors">
+                          {g === 'All' ? 'Full Lecture Session' : `Group ${g.replace('G', '')}`}
+                        </span>
+                        {selectedGroup === g && (
+                          <span className="text-[10px] bg-brand-blue text-white group-hover:bg-white group-hover:text-brand-blue px-2 py-0.5 rounded-md font-extrabold transition-colors">
+                            Selected
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

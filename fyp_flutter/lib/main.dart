@@ -203,8 +203,14 @@ class ApiConfig {
   // Global time offset to align with the server clock
   static Duration serverOffset = Duration.zero;
 
-  // Server-aligned current time getter
-  static DateTime get now => DateTime.now().add(serverOffset);
+  // Campus timezone offset is UTC+8 (Asia/Kuala_Lumpur)
+  static const Duration campusTimezoneOffset = Duration(hours: 8);
+
+  // Server-aligned campus wall-clock time getter (Asia/Kuala_Lumpur GMT+8)
+  static DateTime get now {
+    final utcNow = DateTime.now().toUtc().add(serverOffset);
+    return utcNow.add(campusTimezoneOffset);
+  }
 
   static String getEffectiveUrl() {
     // 1. Flutter Web -> ALWAYS use Production Railway HTTPS Backend
@@ -594,6 +600,14 @@ class _AppRootState extends State<AppRoot> {
       });
     }
 
+    if (studentAuthToken.isEmpty) {
+      debugPrint("Skipping syncData: User is not authenticated.");
+      if (mounted) {
+        setState(() => isSyncing = false);
+      }
+      return;
+    }
+
     // Only show full screen overlay if there is absolutely no cached data
     if (!hasCachedData) {
       setState(() => isSyncing = true);
@@ -608,10 +622,10 @@ class _AppRootState extends State<AppRoot> {
         ).timeout(const Duration(seconds: 4));
         if (serverTimeRes.statusCode == 200) {
           final serverTimeStr = jsonDecode(serverTimeRes.body)['server_time'];
-          final serverTime = DateTime.parse(serverTimeStr).toLocal();
-          final localTime = DateTime.now();
-          ApiConfig.serverOffset = serverTime.difference(localTime);
-          debugPrint("Synced server time offset: ${ApiConfig.serverOffset.inMilliseconds} ms");
+          final serverUtc = DateTime.parse(serverTimeStr).toUtc();
+          final localUtc = DateTime.now().toUtc();
+          ApiConfig.serverOffset = serverUtc.difference(localUtc);
+          debugPrint("Synced server UTC time offset: ${ApiConfig.serverOffset.inMilliseconds} ms");
         }
       } catch (e) {
         debugPrint("Warning: could not sync server offset clock: $e");
@@ -743,18 +757,21 @@ class _AppRootState extends State<AppRoot> {
       await prefs.setString('cached_student_schedule', jsonEncode(loadedSchedule));
       await prefs.setString('cached_student_announcements', jsonEncode(loadedAnnouncements));
     } catch (e) {
+      final msg = e.toString();
       debugPrint("Attendance sync failed: $e");
       
-      setState(() => isDatabaseOffline = true);
+      if (!msg.contains("Not authenticated")) {
+        setState(() => isDatabaseOffline = true);
 
-      // If we don't have any cached data at all, show the offline snackbar alert
-      if (!hasCachedData && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Working Offline: ${_friendlyError(e)}"),
-            backgroundColor: const Color(0xFFDC2626),
-          ),
-        );
+        // If we don't have any cached data at all, show the offline snackbar alert
+        if (!hasCachedData && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Working Offline: ${_friendlyError(e)}"),
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+          );
+        }
       }
     } finally {
       setState(() => isSyncing = false);

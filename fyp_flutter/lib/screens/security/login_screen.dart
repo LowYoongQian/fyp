@@ -32,18 +32,6 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void handleDemoFill() {
-    setState(() {
-      if (widget.portalType == 'student') {
-        _emailOrIdController.text = 'ST0061111'; // student 'low'
-        _passwordController.text = 'password123';
-      } else {
-        _emailOrIdController.text = 'T000001'; // lecturer 'Dr. Wong'
-        _passwordController.text = 'password123';
-      }
-    });
-  }
-
   void submit() {
     if (_formKey.currentState!.validate()) {
       widget.onLogin(
@@ -253,35 +241,6 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                     ),
                   ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Demo Fill Panel
-            Text(
-              "QUICK DEMO INITIAL FILL",
-              style: GoogleFonts.inter(
-                fontSize: 9,
-                fontWeight: FontWeight.w600,
-                color: secondaryTextColor,
-                letterSpacing: 1.0,
-              ),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: handleDemoFill,
-              icon: Icon(Icons.flash_on, size: 12, color: primaryColor),
-              label: Text(
-                isStudent ? "Student Profile (Low)" : "Staff Profile (Dr. Wong)",
-                style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: primaryTextColor),
-              ),
-              style: OutlinedButton.styleFrom(
-                backgroundColor: cardBgColor,
-                side: BorderSide(color: borderColor),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
             ),

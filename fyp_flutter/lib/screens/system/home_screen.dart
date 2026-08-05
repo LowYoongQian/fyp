@@ -33,6 +33,14 @@ class _HomeScreenState extends State<HomeScreen> {
     {'title': 'More', 'icon': Icons.more_horiz_outlined, 'color': Color(0xFF64748B)},
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.onRefresh();
+    });
+  }
+
   String _dayOfWeekName(int day) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     return days[day - 1];
@@ -135,12 +143,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // Main Home Scrollable Area
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              physics: const BouncingScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            child: RefreshIndicator(
+              onRefresh: widget.onRefresh,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                   const SizedBox(height: 8),
                   
                   // Welcome Banner
@@ -522,15 +532,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       );
                     }),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 32),
                 ],
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
 }
 
 // Decorative graphic lines matching the banner style
