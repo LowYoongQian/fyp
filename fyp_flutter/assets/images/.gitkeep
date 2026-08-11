@@ -1,0 +1,2 @@
+Declared in pubspec.yaml. Kept so `flutter test` / `flutter build` do not fail
+with "unable to find directory entry in pubspec.yaml" while the folder is empty.

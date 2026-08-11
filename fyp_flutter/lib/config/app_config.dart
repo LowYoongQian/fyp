@@ -25,4 +25,16 @@ class AppConfig {
   // Backward compatibility getters
   static String get apiBaseUrl => kIsWeb ? productionApiUrl : productionApiUrl;
   static String get emulatorApiBaseUrl => emulatorApiUrl;
+
+  /// True when the backend is a hosted HTTPS server rather than something on the
+  /// local machine/LAN. Used to skip LAN auto-discovery: scanning the subnet is
+  /// pointless against a public host, and a stale discovered URL would silently
+  /// override this one (ApiConfig.customUrl outranks productionApiUrl).
+  static bool get isRemoteBackend {
+    final uri = Uri.tryParse(productionApiUrl);
+    if (uri == null) return false;
+    if (uri.scheme != 'https') return false;
+    final h = uri.host;
+    return h != 'localhost' && h != '127.0.0.1' && h != '10.0.2.2';
+  }
 }

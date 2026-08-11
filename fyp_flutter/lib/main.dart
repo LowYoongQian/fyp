@@ -287,7 +287,12 @@ class _AppRootState extends State<AppRoot> {
 
   Future<void> _initApp() async {
     setState(() => isSyncing = true);
-    if (!kIsWeb) {
+    // LAN discovery only makes sense when the configured backend is itself on the
+    // LAN (local dev against uvicorn). Once API_BASE_URL is a public HTTPS host,
+    // discovery would scan 254 LAN IPs on port 443 over plain HTTP, find nothing,
+    // and — worse — a stale cached custom_api_url would keep overriding it,
+    // because customUrl wins over productionApiUrl in getEffectiveUrl().
+    if (!kIsWeb && !AppConfig.isRemoteBackend) {
       try {
         final prefs = await SharedPreferences.getInstance();
         final savedCustomUrl = prefs.getString('custom_api_url');
@@ -323,6 +328,16 @@ class _AppRootState extends State<AppRoot> {
       } catch (e) {
         debugPrint("Server auto-discovery/init failed: $e");
       }
+    } else if (!kIsWeb) {
+      // Drop any URL discovered by an older build. It is inert now, but it would
+      // come back to life (and win) if this app were ever pointed at a LAN
+      // backend again.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('custom_api_url');
+      } catch (_) {}
+      ApiConfig.customUrl = null;
+      debugPrint("Remote backend configured (${AppConfig.productionApiUrl}); skipping LAN discovery.");
     }
 
     try {
