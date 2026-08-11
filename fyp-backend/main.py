@@ -230,6 +230,11 @@ def get_system_languages():
 def root():
     return {"status": "online", "message": "Smart Attendance API is running"}
 
+@app.get("/health")
+def health():
+    """Health check endpoint for Azure App Service"""
+    return {"status": "healthy"}
+
 if __name__ == "__main__":
     import os
     import uvicorn
