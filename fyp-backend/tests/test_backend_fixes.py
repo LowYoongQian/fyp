@@ -530,6 +530,55 @@ def check_group_slots_isolated():
         db.close()
 
 
+def check_demo_clock():
+    """DEMO_CLOCK shifts the app clock, and is inert when unset or malformed.
+
+    The demo switch exists so the check-in flow can be exercised at 3am against a
+    timetable that has no class then. It must be off by default: a shift that leaked
+    into a normal run would move every attendance timestamp and every window check.
+    """
+    import os
+    import importlib
+    from datetime import timedelta
+
+    def reload_with(value):
+        if value is None:
+            os.environ.pop("DEMO_CLOCK", None)
+        else:
+            os.environ["DEMO_CLOCK"] = value
+        import utils.timeutil as t
+        return importlib.reload(t)
+
+    original = os.environ.get("DEMO_CLOCK")
+    try:
+        t = reload_with(None)
+        assert t._DEMO_SHIFT == timedelta(0), "unset DEMO_CLOCK still shifted the clock"
+
+        # A time alone lands on today; a day + time lands on that weekday.
+        t = reload_with("14:30")
+        assert (t.campus_now().hour, t.campus_now().minute) == (14, 30), t.campus_now()
+        # utcnow() must move with it, or stored timestamps and window checks disagree.
+        assert abs((t.campus_now() - t.utcnow()) - t.local_offset()) < timedelta(seconds=1)
+
+        for day in ("Monday", "Wednesday", "Friday"):
+            t = reload_with(f"{day} 09:00")
+            got = t.campus_now()
+            assert got.strftime("%A") == day, f"{day} -> {got:%A}"
+            assert (got.hour, got.minute) == (9, 0), got
+            assert got >= t.utcnow(), "campus time cannot precede UTC at +08"
+
+        # Bad input degrades to the real clock rather than an arbitrary shift.
+        for bad in ("garbage", "Funday 10:00", "25:99", ""):
+            t = reload_with(bad)
+            assert t._DEMO_SHIFT == timedelta(0), f"'{bad}' shifted the clock"
+    finally:
+        if original is None:
+            os.environ.pop("DEMO_CLOCK", None)
+        else:
+            os.environ["DEMO_CLOCK"] = original
+        importlib.reload(__import__("utils.timeutil", fromlist=["utils"]))
+
+
 def check_no_5xx_on_reads():
     """Every parameterless GET, for each role, must not return 5xx.
     This is what caught /students/me/attendance ordering by a @property."""
@@ -569,6 +618,7 @@ OFFLINE = [
     check_course_access_guard,
     check_announcement_visibility,
     check_session_window,
+    check_demo_clock,
 ]
 NEEDS_DB = [
     check_uuid_path_params,
