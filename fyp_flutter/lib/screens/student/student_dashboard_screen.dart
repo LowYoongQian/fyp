@@ -33,6 +33,7 @@ class MainScreen extends StatefulWidget {
   final Future<void> Function() onSyncRequested;
   final Function(dynamic, String, String, String, String, bool, {int? challengeMs, Map<String, dynamic>? extraDetails}) onCheckInComplete;
   final VoidCallback onRegisterFace;
+  final VoidCallback onTestFaceMatch;
 
   const MainScreen({
     super.key,
@@ -52,6 +53,7 @@ class MainScreen extends StatefulWidget {
     required this.onSyncRequested,
     required this.onCheckInComplete,
     required this.onRegisterFace,
+    required this.onTestFaceMatch,
   });
 
   @override
@@ -367,6 +369,27 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // Standalone face-match test. Only useful once a face is registered, so it stays
+  // hidden until then -- before that the notice above is the thing to act on.
+  Widget _buildFaceMatchTestButton() {
+    if (!widget.isFaceRegistered) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: OutlinedButton.icon(
+        onPressed: widget.onTestFaceMatch,
+        icon: const Icon(Icons.center_focus_strong, size: 15),
+        label: const Text("Test Face Recognition"),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFF2563EB),
+          side: const BorderSide(color: Color(0xFFBFDBFE)),
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold),
         ),
       ),
     );
@@ -805,6 +828,7 @@ class _MainScreenState extends State<MainScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildFaceVerificationNotice(),
+            _buildFaceMatchTestButton(),
             // Active Lectures from backend
             Text(
               "Available Session Windows",

@@ -65,6 +65,49 @@ def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), curre
     }
 
 
+@router.post("/me/face/verify", status_code=200)
+def verify_face_only(body: FaceRegisterSubmit, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    """Compare a fresh selfie against this student's stored embedding. Nothing else.
+
+    The ArcFace comparison is the same one check-in runs, isolated from everything
+    check-in also demands — an open session, the timetable window, the campus network,
+    liveness — so the recognition step can be exercised on its own (e.g. outside class
+    hours, where no session can legally be open).
+
+    Deliberately READ-ONLY: no AttendanceRecord, no session lookup, no db writes at
+    all. That is what keeps it from being a way to mark attendance while bypassing the
+    guards check-in enforces — it can only ever report a distance back to the caller.
+    """
+    student = require_own_profile(db, Student, current_user.id, "Student")
+
+    if not body.image_base64.strip():
+        raise HTTPException(status_code=400, detail="A captured face image is required.")
+
+    stored = db.query(FaceEmbedding).filter(
+        FaceEmbedding.student_id == student.id,
+        FaceEmbedding.is_active == True,  # noqa: E712
+    ).first()
+    if not stored:
+        raise HTTPException(
+            status_code=400,
+            detail="No registered face found. Register your face first."
+        )
+
+    # enforce_detection=False mirrors check-in: a wrong or absent face is caught by
+    # the threshold below rather than by the detector, so this reports the same
+    # verdict check-in would reach on the same photo.
+    live_vec = _embedding_to_floats(_extract_face_embedding(body.image_base64, enforce_detection=False))
+    distance = _cosine_distance(live_vec, _embedding_to_floats(stored.embedding))
+
+    return {
+        "matched": distance <= _FACE_MATCH_THRESHOLD,
+        "distance": round(distance, 4),
+        "threshold": _FACE_MATCH_THRESHOLD,
+        "confidence": round(1.0 - distance, 4),
+        "student_name": student.name,
+    }
+
+
 @router.get("/me/courses")
 def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     """Courses this student is enrolled in, with timetable info for the app."""

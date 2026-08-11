@@ -530,6 +530,64 @@ def check_group_slots_isolated():
         db.close()
 
 
+def check_face_verify_is_read_only():
+    """/students/me/face/verify compares and reports. It must never write.
+
+    It exists to test recognition in isolation, which means it deliberately skips the
+    guards check-in enforces (open session, timetable window, campus network, liveness).
+    That is only safe while it cannot record anything -- if it ever grew a write, it
+    would become a way to mark attendance with every one of those guards bypassed.
+    """
+    import base64
+
+    from main import app
+    from db.database import SessionLocal
+    from db.models import User, Student, FaceEmbedding, AttendanceRecord
+    from utils.security import create_access_token
+
+    db = SessionLocal()
+    try:
+        row = (db.query(Student, FaceEmbedding)
+               .join(FaceEmbedding, FaceEmbedding.student_id == Student.id)
+               .filter(FaceEmbedding.is_active == True)  # noqa: E712
+               .first())
+        if not row:
+            return  # no registered face to compare against
+        student, _ = row
+        user = db.query(User).filter(User.id == student.user_id).first()
+        if not user:
+            return
+        headers = {"Authorization": "Bearer " + create_access_token(
+            {"user_id": user.id, "role": user.role})}
+
+        before = db.query(AttendanceRecord).filter(
+            AttendanceRecord.student_id == student.id).count()
+
+        client = TestClient(app)
+        # An undecodable image: the extractor rejects it, so this exercises the
+        # endpoint without needing a real photo in the test suite.
+        r = client.post("/students/me/face/verify",
+                        json={"image_base64": base64.b64encode(b"not-an-image").decode()},
+                        headers=headers)
+        assert r.status_code == 400, f"garbage image -> {r.status_code}: {r.text[:200]}"
+
+        r = client.post("/students/me/face/verify",
+                        json={"image_base64": "  "}, headers=headers)
+        assert r.status_code == 400, f"empty image -> {r.status_code}"
+
+        # Unauthenticated callers cannot reach it at all.
+        r = client.post("/students/me/face/verify", json={"image_base64": "x"})
+        assert r.status_code in (401, 403), f"unauthenticated -> {r.status_code}"
+
+        db.expire_all()
+        after = db.query(AttendanceRecord).filter(
+            AttendanceRecord.student_id == student.id).count()
+        assert before == after, (
+            f"face/verify changed attendance rows: {before} -> {after}")
+    finally:
+        db.close()
+
+
 def check_no_5xx_on_reads():
     """Every parameterless GET, for each role, must not return 5xx.
     This is what caught /students/me/attendance ordering by a @property."""
@@ -576,6 +634,7 @@ NEEDS_DB = [
     check_duplicate_checkin_rejected,
     check_override_enrolment_rule,
     check_group_slots_isolated,
+    check_face_verify_is_read_only,
     check_no_5xx_on_reads,
 ]
 

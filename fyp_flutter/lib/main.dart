@@ -1295,6 +1295,100 @@ class _AppRootState extends State<AppRoot> {
     );
   }
 
+  // Face matching on its own: scan, compare against the stored embedding, show the
+  // distance. No session, no timetable window, no network check, and nothing written
+  // to the database -- so the recognition step can be tested outside class hours,
+  // where no session can legally be open. Same `context` reasoning as registerFace.
+  Future<void> testFaceMatch(BuildContext _) async {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FaceScannerScreen(
+          title: "Face Match Test",
+          onScanComplete: (imageBase64, livenessPassed, {int? challengeMs}) async {
+            if (!mounted) return;
+            if (imageBase64 == null || imageBase64.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("Test cancelled: no selfie captured."),
+                  backgroundColor: Color(0xFFDC2626),
+                ),
+              );
+              return;
+            }
+            // Liveness is deliberately NOT required here. This screen tests identity
+            // matching alone; the real check-in still enforces liveness.
+
+            setState(() => isSyncing = true);
+            try {
+              final apiUrl = ApiConfig.getEffectiveUrl();
+              final http.Response response;
+              try {
+                response = await http.post(
+                  Uri.parse('$apiUrl/students/me/face/verify'),
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer $studentAuthToken',
+                  },
+                  body: jsonEncode({'image_base64': imageBase64}),
+                ).timeout(const Duration(seconds: 20));
+              } on TimeoutException {
+                throw Exception("The server took too long to respond. Please try again.");
+              } catch (_) {
+                throw Exception("Cannot reach the server. Make sure the backend is running.");
+              }
+
+              if (response.statusCode != 200) {
+                throw Exception(_detailOf(response, 'Face match test failed (${response.statusCode}).'));
+              }
+
+              final result = jsonDecode(response.body) as Map<String, dynamic>;
+              final matched = result['matched'] == true;
+              final distance = result['distance'];
+              final threshold = result['threshold'];
+
+              if (!mounted) return;
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: Row(
+                    children: [
+                      Icon(
+                        matched ? Icons.verified_user : Icons.report_gmailerrorred,
+                        color: matched ? const Color(0xFF10B981) : const Color(0xFFDC2626),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(matched ? "Face Matched" : "No Match"),
+                    ],
+                  ),
+                  content: Text(
+                    matched
+                        ? "Identity confirmed as ${result['student_name']}.\n\n"
+                          "Distance $distance (threshold $threshold).\n"
+                          "Lower is a closer match."
+                        : "This face does not match the registered profile.\n\n"
+                          "Distance $distance exceeds the threshold of $threshold.",
+                    style: GoogleFonts.inter(fontSize: 12.5),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text("Close"),
+                    ),
+                  ],
+                ),
+              );
+            } catch (e) {
+              if (mounted) showErrorDialog(_friendlyError(e), context);
+            } finally {
+              if (mounted) setState(() => isSyncing = false);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
   void _showFaceRegistrationPrompt(BuildContext context) {
     showDialog(
       context: context,
@@ -1506,6 +1600,7 @@ class _AppRootState extends State<AppRoot> {
                 onSyncRequested: () => syncData(context),
                 onCheckInComplete: (sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, {int? challengeMs, Map<String, dynamic>? extraDetails}) => submitAttendance(sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, context, challengeMs: challengeMs, extraDetails: extraDetails),
                 onRegisterFace: () => registerFace(context),
+                onTestFaceMatch: () => testFaceMatch(context),
               )
             : LoginScreen(
                 portalType: 'student',
