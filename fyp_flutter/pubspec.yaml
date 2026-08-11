@@ -23,8 +23,20 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
   assets:
     - assets/images/
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  # iOS 不允许透明通道，保险起见强制去掉
+  remove_alpha_ios: true
+  # Android 8.0+ 自适应图标：系统会按厂商形状裁剪（圆形/方形/水滴）
+  # 所以前景图内容要收在中间安全区，用的是缩小版那张
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"

@@ -9,7 +9,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.front" android:required="false"/>
     <application
-        android:label="fyp_flutter"
+        android:label="SmartAttend"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
