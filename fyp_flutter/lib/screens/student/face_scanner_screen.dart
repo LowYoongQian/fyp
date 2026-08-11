@@ -273,7 +273,21 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
 
             double? leftEye = face.leftEyeOpenProbability;
             double? rightEye = face.rightEyeOpenProbability;
+            // Yaw sign is normalised to ONE convention here, at the single point it
+            // enters the app: positive = the user's own left. Everything downstream
+            // (the gauge and the Turn Left/Right checks) can then ignore the platform.
+            //
+            // It has to be normalised because the two platforms hand ML Kit different
+            // images: Android sends a front-camera NV21 buffer through
+            // rotationCompensation, iOS passes bgra8888 straight through. headEulerAngleY
+            // is measured against the image, so that mirroring difference flips its sign
+            // — which is why "Turn Left" only passed when an iPhone user turned RIGHT.
             double? rotY = face.headEulerAngleY; // Yaw (left/right)
+            if (rotY != null &&
+                Platform.isIOS &&
+                _cameraController?.description.lensDirection == CameraLensDirection.front) {
+              rotY = -rotY;
+            }
             double? rotX = face.headEulerAngleX; // Pitch (up/down)
 
             // Guard: only rebuild if a value changed meaningfully.
