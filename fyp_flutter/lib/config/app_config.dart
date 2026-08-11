@@ -4,10 +4,11 @@
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
-  // Production Railway Backend URL (HTTPS)
+  // Production Backend URL (Azure)
+  // 如果要切回 Railway，改成 'https://fyps.up.railway.app'
   static const String productionApiUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://fyps.up.railway.app',
+    defaultValue: 'https://api.smartsystem.live',
   );
 
   // Android Emulator fallback URL.
