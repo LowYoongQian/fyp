@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # 也可手动触发
 
 env:
-  FLUTTER_VERSION: '3.24.0'  # 改成你项目用的 Flutter 版本
+  FLUTTER_VERSION: '3.41.4'  # 匹配本地开发环境
   JAVA_VERSION: '17'
 
 jobs:
