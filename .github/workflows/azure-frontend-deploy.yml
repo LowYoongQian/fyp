@@ -1,16 +1,22 @@
 # Azure Frontend Deployment
-# Triggers: manual dispatch only (safe testing)
-# Builds React app and deploys to Azure Static Web Apps
+# 自动触发：push 到 main 且前端代码变更
+# 手动触发：也可以手动运行
 
 name: Azure Frontend Deploy
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  push:
+    branches:
+      - main
+    paths:
+      - 'fyp_web/**'
+      - '.github/workflows/azure-frontend-deploy.yml'
+  workflow_dispatch:  # 保留手动触发选项
     inputs:
       environment:
         description: 'Deployment environment'
         required: true
-        default: 'staging'
+        default: 'production'
         type: choice
         options:
           - staging

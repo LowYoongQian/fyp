@@ -1,24 +1,31 @@
 # Azure Backend Deployment
-# Triggers: manual dispatch only (safe testing)
-# Builds Docker image and deploys to Azure App Service
+# 自动触发：push 到 main 且后端代码变更
+# 手动触发：也可以手动运行
 
 name: Azure Backend Deploy
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  push:
+    branches:
+      - main
+    paths:
+      - 'fyp-backend/**'
+      - 'Dockerfile'
+      - '.github/workflows/azure-backend-deploy.yml'
+  workflow_dispatch:  # 保留手动触发选项
     inputs:
       environment:
         description: 'Deployment environment'
         required: true
-        default: 'staging'
+        default: 'production'
         type: choice
         options:
           - staging
           - production
 
 env:
-  AZURE_WEBAPP_NAME: fyp-backend-api
-  REGISTRY_NAME: yss2026fyp  # Change this to your ACR name
+  AZURE_WEBAPP_NAME: fyp-backend-azure  # 改成实际创建的名称
+  REGISTRY_NAME: yss2026fyp
   IMAGE_NAME: fyp-backend
 
 jobs:
