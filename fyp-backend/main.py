@@ -8,6 +8,8 @@ import asyncio
 import logging
 import os
 import hashlib
+import time
+from collections import OrderedDict
 
 from domain.announcements import announcement_dict
 from db.database import SessionLocal, engine
@@ -36,10 +38,41 @@ def _is_realtime(path: str) -> bool:
     return path == "/sessions" or path.startswith(NO_STORE_PREFIXES)
 
 
+_SERVER_CACHE_TTL = 20
+_SERVER_CACHE_LIMIT = 256
+_server_response_cache = OrderedDict()
+
+
+def _response_cache_key(request) -> str:
+    # Authenticated responses are isolated by a non-reversible token digest.
+    auth = request.headers.get("authorization", "public")
+    scope = hashlib.sha256(auth.encode()).hexdigest()[:20]
+    return f"{scope}:{request.url.path}?{request.url.query}"
+
+
+def _clear_server_response_cache():
+    _server_response_cache.clear()
+
+
 class ETagMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.method not in ("GET", "HEAD"):
-            return await call_next(request)
+            response = await call_next(request)
+            if request.method in ("POST", "PUT", "PATCH", "DELETE") and response.status_code < 400:
+                _clear_server_response_cache()
+            return response
+
+        cache_key = _response_cache_key(request)
+        if not _is_realtime(request.url.path):
+            cached = _server_response_cache.get(cache_key)
+            if cached and time.monotonic() - cached[0] < _SERVER_CACHE_TTL:
+                _, body, status_code, headers, media_type = cached
+                _server_response_cache.move_to_end(cache_key)
+                if request.headers.get("if-none-match") == headers.get("ETag"):
+                    return Response(status_code=304, headers={"ETag": headers["ETag"], "Cache-Control": headers["Cache-Control"]})
+                return Response(content=body, status_code=status_code, headers=headers, media_type=media_type)
+            if cached:
+                del _server_response_cache[cache_key]
 
         response = await call_next(request)
 
@@ -76,6 +109,13 @@ class ETagMiddleware(BaseHTTPMiddleware):
         headers["ETag"] = etag
         headers["Cache-Control"] = cache_control
         headers["content-length"] = str(len(response_body))
+
+        _server_response_cache[cache_key] = (
+            time.monotonic(), response_body, response.status_code, headers, response.media_type
+        )
+        _server_response_cache.move_to_end(cache_key)
+        while len(_server_response_cache) > _SERVER_CACHE_LIMIT:
+            _server_response_cache.popitem(last=False)
         
         return Response(
             content=response_body,

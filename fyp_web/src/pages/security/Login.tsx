@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check } from 'lucide-react';
 import { swalError, swalSuccess } from '../../utils/swal';
+import { apiService } from '../../services/api';
 import Swal from 'sweetalert2';
 import sasLogoLocal from '../../assets/saslogo.png';
 
@@ -991,7 +992,7 @@ export const Login: React.FC = () => {
     setSubmitting(true);
 
     try {
-      await login(email, password, portalMode === 'student' ? 'student' : 'staff_admin');
+      const loginData = await login(email, password, portalMode === 'student' ? 'student' : 'staff_admin');
       if (portalMode === 'student') {
         if (rememberMe) {
           localStorage.setItem('remember_me_student', 'true');
@@ -999,6 +1000,9 @@ export const Login: React.FC = () => {
         } else {
           localStorage.removeItem('remember_me_student');
           localStorage.removeItem('remember_student_email');
+        }
+        if (!loginData.recovery_email_verified) {
+          await setupRecoveryEmail();
         }
       }
     } catch (err: any) {
@@ -1012,33 +1016,134 @@ export const Login: React.FC = () => {
   };
 
   const handleForgotPassword = async () => {
-    const { value: emailInput } = await Swal.fire({
-      title: 'Password Reset Request',
-      text: 'Enter your registered student email address to receive password recovery instructions.',
-      input: 'email',
-      inputValue: email || '',
-      inputPlaceholder: 'e.g. student@student.school.edu',
+    const { value } = await Swal.fire({
+      title: 'Reset your password',
+      html: `<p class="password-reset-intro">Enter the details linked to your student account.</p>
+        <div class="password-reset-form">
+          <div class="password-reset-control">
+            <label for="reset-student-id" class="password-reset-label">Student ID</label>
+            <div class="password-reset-field" id="reset-student-id-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6"/></svg>
+              <input id="reset-student-id" class="password-reset-input" inputmode="numeric" autocomplete="username" maxlength="7" placeholder="e.g. 2501013" aria-describedby="reset-student-id-help">
+            </div>
+            <span id="reset-student-id-help" class="password-reset-help">Enter the 7-digit ID without “ST”.</span>
+          </div>
+          <div class="password-reset-control">
+            <label for="reset-school-email" class="password-reset-label">School email</label>
+            <div class="password-reset-field" id="reset-school-email-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 8 6 8-6M4 4h16v16H4z"/></svg>
+              <input id="reset-school-email" type="email" class="password-reset-input" autocomplete="email" value="${email.replace(/"/g, '&quot;')}" placeholder="name@student.school.edu">
+            </div>
+          </div>
+        </div>`,
       showCancelButton: true,
       confirmButtonText: 'Send Reset Link',
       cancelButtonText: 'Cancel',
       customClass: {
-        popup: '!rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
+        popup: 'password-reset-popup !rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
         title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-base',
-        htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-xs',
-        input: '!rounded-xl !border-slate-300 !text-xs !py-2.5',
+        htmlContainer: 'password-reset-content !text-slate-600 dark:!text-slate-300 !text-xs',
+        actions: 'password-reset-actions',
         confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
         cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
       },
       buttonsStyling: false,
+      focusConfirm: false,
+      didOpen: () => {
+        const studentIdInput = document.getElementById('reset-student-id');
+        const schoolEmailInput = document.getElementById('reset-school-email');
+        studentIdInput?.addEventListener('input', () => document.getElementById('reset-student-id-field')?.classList.remove('is-invalid'));
+        schoolEmailInput?.addEventListener('input', () => document.getElementById('reset-school-email-field')?.classList.remove('is-invalid'));
+        studentIdInput?.focus();
+      },
+      preConfirm: () => {
+        const studentIdInput = document.getElementById('reset-student-id') as HTMLInputElement;
+        const schoolEmailInput = document.getElementById('reset-school-email') as HTMLInputElement;
+        const studentId = studentIdInput?.value.trim();
+        const schoolEmail = schoolEmailInput?.value.trim();
+        const studentIdValid = /^\d{7}$/.test(studentId);
+        const schoolEmailValid = emailRegex.test(schoolEmail);
+
+        document.getElementById('reset-student-id-field')?.classList.toggle('is-invalid', !studentIdValid);
+        document.getElementById('reset-school-email-field')?.classList.toggle('is-invalid', !schoolEmailValid);
+
+        if (!studentIdValid) {
+          studentIdInput?.focus();
+          Swal.showValidationMessage('Enter your 7-digit student ID.');
+          return false;
+        }
+        if (!schoolEmailValid) {
+          schoolEmailInput?.focus();
+          Swal.showValidationMessage('Enter a valid school email.');
+          return false;
+        }
+        return { studentId, schoolEmail };
+      },
     });
 
-    if (emailInput) {
-      swalSuccess(
-        'Request Submitted',
-        `Password recovery instructions have been sent to ${emailInput}. Please check your email inbox.`
-      );
+    if (value) {
+      const result = await apiService.forgotPassword(value.studentId, value.schoolEmail);
+      swalSuccess('Request received', result.message);
     }
   };
+
+  const setupRecoveryEmail = async () => {
+    const { value: recoveryEmail } = await Swal.fire({
+      title: 'Add a recovery email',
+      text: 'Use your personal Gmail. We send password reset links here.',
+      input: 'email',
+      inputPlaceholder: 'yourname@gmail.com',
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      confirmButtonText: 'Send Code',
+      preConfirm: value => value.trim().toLowerCase().endsWith('@gmail.com') ? value.trim() : Swal.showValidationMessage('Enter a Gmail address.'),
+    });
+    if (!recoveryEmail) return;
+    await apiService.requestRecoveryEmail(recoveryEmail);
+    const { value: code } = await Swal.fire({
+      title: 'Check your Gmail',
+      text: 'Enter the 6-digit code we sent.',
+      input: 'text',
+      inputPlaceholder: '000000',
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      confirmButtonText: 'Verify Email',
+      preConfirm: value => /^\d{6}$/.test(value.trim()) ? value.trim() : Swal.showValidationMessage('Enter the 6-digit code.'),
+    });
+    if (code) {
+      await apiService.verifyRecoveryEmail(code);
+      await swalSuccess('Recovery email ready', 'You can now reset your password safely.');
+    }
+  };
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('reset_token');
+    if (!token) return;
+    void Swal.fire({
+      title: 'Set a new password',
+      html: `<p class="text-xs text-slate-500 mb-4">Use at least 8 characters.</p>
+        <input id="new-reset-password" type="password" class="swal2-input !m-0 !mb-3 !w-full" placeholder="New password">
+        <input id="confirm-reset-password" type="password" class="swal2-input !m-0 !w-full" placeholder="Confirm password">`,
+      confirmButtonText: 'Save Password',
+      allowOutsideClick: false,
+      preConfirm: () => {
+        const password = (document.getElementById('new-reset-password') as HTMLInputElement)?.value;
+        const confirm = (document.getElementById('confirm-reset-password') as HTMLInputElement)?.value;
+        if (password.length < 8) return Swal.showValidationMessage('Use at least 8 characters.');
+        if (password !== confirm) return Swal.showValidationMessage('Passwords do not match.');
+        return password;
+      },
+    }).then(async result => {
+      if (!result.value) return;
+      try {
+        await apiService.resetPassword(token, result.value);
+        window.history.replaceState({}, '', window.location.pathname);
+        await swalSuccess('Password updated', 'You can sign in with your new password.');
+      } catch (err: any) {
+        await swalError('Reset failed', err.response?.data?.detail || 'The reset link is invalid or expired.');
+      }
+    });
+  }, []);
 
   return (
     <div
@@ -1379,69 +1484,6 @@ export const Login: React.FC = () => {
               <div className="absolute right-16 -top-3 text-cyan-200 text-xs font-mono animate-pulse drop-shadow-[0_0_6px_#38bdf8]">✦</div>
               <div className="absolute right-36 top-3 text-purple-200 text-[10px] font-mono animate-ping" style={{ animationDuration: '1.5s' }}>★</div>
             </div>
-          {/* Rare Late Night Astronomical Constellation Linking Event (Every 3 minutes in Late Night) */}
-          {activeConstellation && (
-            <div
-              className={`absolute z-20 pointer-events-none transition-all duration-1000 ${
-                activeConstellation.phase === 'unlinking' ? 'animate-constellation-fadeout' : 'opacity-100'
-              }`}
-              style={{
-                top: `${activeConstellation.top}%`,
-                left: `${activeConstellation.left}%`,
-                width: `${activeConstellation.size}px`,
-                height: `${activeConstellation.size * 0.85}px`,
-              }}
-            >
-              <svg viewBox="0 0 100 100" className="w-full h-full overflow-visible">
-                {/* Connecting Starlight Beams */}
-                {activeConstellation.pattern.edges.map(([fromIdx, toIdx], eIdx) => {
-                  const fromNode = activeConstellation.pattern.nodes[fromIdx];
-                  const toNode = activeConstellation.pattern.nodes[toIdx];
-                  if (!fromNode || !toNode) return null;
-
-                  return (
-                    <line
-                      key={`edge-${eIdx}`}
-                      x1={fromNode.x}
-                      y1={fromNode.y}
-                      x2={toNode.x}
-                      y2={toNode.y}
-                      stroke="url(#starlightLineGrad)"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      className="animate-constellation-link drop-shadow-[0_0_8px_rgba(56,189,248,0.95)]"
-                      style={{ animationDelay: `${eIdx * 0.35}s` }}
-                    />
-                  );
-                })}
-
-                {/* Star Nodes (Glowing Specks with Pulsing Halo) */}
-                {activeConstellation.pattern.nodes.map((node, nIdx) => (
-                  <g key={`node-${nIdx}`} transform={`translate(${node.x}, ${node.y})`}>
-                    {/* Pulsing Outer Halo */}
-                    <circle r="4.5" fill="rgba(56,189,248,0.35)" className="animate-ping" style={{ animationDuration: '3s', animationDelay: `${nIdx * 0.2}s` }} />
-                    {/* Hot White Star Nucleus */}
-                    <circle r="2.2" fill="#FFFFFF" className="drop-shadow-[0_0_8px_#38BDF8]" />
-                    {/* Sparkle Diamond Overlay */}
-                    <path d="M0 -3.5 L0.8 0 L0 3.5 L-0.8 0 Z" fill="#E0F2FE" />
-                  </g>
-                ))}
-
-                <defs>
-                  <linearGradient id="starlightLineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#E0F2FE" />
-                    <stop offset="50%" stopColor="#38BDF8" />
-                    <stop offset="100%" stopColor="#C084FC" />
-                  </linearGradient>
-                </defs>
-              </svg>
-
-              {/* Sleek Constellation Label Badge */}
-              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap px-2.5 py-0.5 rounded-full bg-slate-950/75 border border-cyan-400/40 text-[10px] font-mono text-cyan-200 shadow-lg backdrop-blur-md animate-pulse">
-                ✦ Constellation: <span className="font-semibold text-white">{activeConstellation.pattern.name}</span>
-              </div>
-            </div>
-          )}
           </div>
         </div>
       )}

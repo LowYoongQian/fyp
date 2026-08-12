@@ -10,24 +10,33 @@ class UserService {
     return prefs.getString('auth_token');
   }
 
-  static Future<Map<String, String>> _getHeaders() async {
-    final token = await _getToken();
+  static Future<Map<String, String>> _getHeaders([String? authToken]) async {
+    final token = authToken ?? await _getToken();
     return {
       'Content-Type': 'application/json',
       if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
 
-  static Future<Map<String, dynamic>?> fetchUserProfile() async {
+  static Future<Map<String, dynamic>?> fetchUserProfile({
+    String? authToken,
+    String? apiBaseUrl,
+  }) async {
     try {
-      final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/me');
-      final response = await http.get(url, headers: headers);
+      final headers = await _getHeaders(authToken);
+      final url = Uri.parse(
+        '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me',
+      );
+      final response = await http
+          .get(url, headers: headers)
+          .timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;
       } else {
-        debugPrint('Failed to fetch user profile: ${response.statusCode} ${response.body}');
+        debugPrint(
+          'Failed to fetch user profile: ${response.statusCode} ${response.body}',
+        );
         return null;
       }
     } catch (e) {
@@ -39,11 +48,15 @@ class UserService {
   static Future<bool> changePassword({
     required String currentPassword,
     required String newPassword,
+    String? authToken,
+    String? apiBaseUrl,
   }) async {
     try {
-      final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/change-password');
-      final response = await http.post(
+      final headers = await _getHeaders(authToken);
+      final url = Uri.parse(
+        '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/change-password',
+      );
+      final response = await http.put(
         url,
         headers: headers,
         body: jsonEncode({
@@ -85,11 +98,17 @@ class UserService {
     }
   }
 
-  static Future<bool> uploadAvatar(String avatarUrl) async {
+  static Future<bool> uploadAvatar(
+    String avatarUrl, {
+    String? authToken,
+    String? apiBaseUrl,
+  }) async {
     try {
-      final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/avatar');
-      final response = await http.post(
+      final headers = await _getHeaders(authToken);
+      final url = Uri.parse(
+        '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/avatar',
+      );
+      final response = await http.put(
         url,
         headers: headers,
         body: jsonEncode({'avatar_url': avatarUrl}),
@@ -104,6 +123,46 @@ class UserService {
     } catch (e) {
       debugPrint('Error uploading avatar: $e');
       return false;
+    }
+  }
+
+  static Future<void> requestRecoveryEmail(
+    String email,
+    String authToken,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse(
+            '${ApiConfig.getEffectiveUrl()}/auth/recovery-email/request',
+          ),
+          headers: await _getHeaders(authToken),
+          body: jsonEncode({'recovery_email': email}),
+        )
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode != 200) {
+      if (response.statusCode == 404) {
+        throw Exception(
+          'Recovery service is not available on this server. Please update the server and try again.',
+        );
+      }
+      throw Exception(
+        jsonDecode(response.body)['detail'] ?? 'Could not send code',
+      );
+    }
+  }
+
+  static Future<void> verifyRecoveryEmail(String code, String authToken) async {
+    final response = await http
+        .post(
+          Uri.parse(
+            '${ApiConfig.getEffectiveUrl()}/auth/recovery-email/verify',
+          ),
+          headers: await _getHeaders(authToken),
+          body: jsonEncode({'code': code}),
+        )
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode != 200) {
+      throw Exception(jsonDecode(response.body)['detail'] ?? 'Code is invalid');
     }
   }
 

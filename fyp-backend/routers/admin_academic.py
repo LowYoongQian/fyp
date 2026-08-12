@@ -7,6 +7,7 @@ from db.database import get_db
 from domain.audit import log_admin_action
 from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, groups_for_course,
                               lecture_meetings, meeting_key_for, pick_slot_for_new)
+from domain.session_sync import sync_class_sessions
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
@@ -423,6 +424,11 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
 
     meeting.day, meeting.start, meeting.end, meeting.room = body.day, body.start, body.end, body.room
     db.commit()
+
+    # Timetable edits can make a class eligible to open immediately. Bypass the
+    # normal one-minute throttle so mobile clients do not have to wait for an
+    # unrelated API request to notice the new window.
+    sync_class_sessions(force=True)
 
     log_admin_action(db, current_user, "UPDATE_TIMETABLE",
                      f"Moved {meeting.role} for {course_code}"

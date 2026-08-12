@@ -4,7 +4,12 @@ from sqlalchemy.exc import IntegrityError
 
 from utils.timeutil import iso_utc, utcnow
 from db.database import get_db
-from datetime import datetime
+from datetime import datetime, timedelta
+import hashlib
+import html
+import os
+import secrets
+import httpx
 from db.models import User, Student, Lecturer
 from utils.security import hash_password, verify_password, create_access_token
 from schemas import LoginRequest, RegisterRequest, TokenResponse
@@ -114,6 +119,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         "avatar_url": user.avatar_url,
         "status": user.status or "Active",
         "last_login_at": iso_utc(user.last_login_at),
+        "recovery_email_verified": bool(user.recovery_email_verified),
     }
     if student is not None:
         resp.update({
@@ -167,6 +173,102 @@ class AdminProfileUpdateRequest(BaseModel):
     email: str
     code: str
 
+class RecoveryEmailRequest(BaseModel):
+    recovery_email: str
+
+class RecoveryEmailVerify(BaseModel):
+    code: str
+
+class ForgotPasswordRequest(BaseModel):
+    student_id: str
+    school_email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+def _token_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+def _send_email(to: str, subject: str, html_body: str, idempotency_key: str):
+    api_key = os.getenv("RESEND_API_KEY")
+    sender = os.getenv("RESEND_FROM_EMAIL")
+    if not api_key or not sender:
+        raise HTTPException(status_code=503, detail="Email service is not configured")
+    response = httpx.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {api_key}", "Idempotency-Key": idempotency_key},
+        json={"from": sender, "to": [to], "subject": subject, "html": html_body},
+        timeout=10,
+    )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=503, detail="Email could not be sent")
+
+@router.post("/recovery-email/request")
+def request_recovery_email(body: RecoveryEmailRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    address = body.recovery_email.strip().lower()
+    if user.role != "student":
+        raise HTTPException(status_code=403, detail="Student account required")
+    if not address.endswith("@gmail.com"):
+        raise HTTPException(status_code=400, detail="Enter a Gmail address")
+    existing = db.query(User).filter(User.recovery_email == address, User.id != user.id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="This Gmail is already linked to another account")
+    code = f"{secrets.randbelow(1000000):06d}"
+    user.recovery_email = address
+    user.recovery_email_verified = False
+    user.recovery_code_hash = _token_hash(code)
+    user.recovery_code_expires_at = utcnow() + timedelta(minutes=10)
+    db.commit()
+    _send_email(address, "Verify your recovery email", f"<p>Your verification code is:</p><h1>{code}</h1><p>This code expires in 10 minutes.</p>", f"recovery-{user.id}-{code}")
+    return {"message": "Code sent"}
+
+@router.post("/recovery-email/verify")
+def verify_recovery_email(body: RecoveryEmailVerify, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    valid = user.recovery_code_hash and secrets.compare_digest(user.recovery_code_hash, _token_hash(body.code.strip()))
+    if not valid or not user.recovery_code_expires_at or user.recovery_code_expires_at < utcnow():
+        raise HTTPException(status_code=400, detail="Code is invalid or expired")
+    user.recovery_email_verified = True
+    user.recovery_code_hash = None
+    user.recovery_code_expires_at = None
+    db.commit()
+    return {"message": "Recovery email verified"}
+
+@router.post("/forgot-password")
+def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    raw_id = body.student_id.strip().upper()
+    student_code = raw_id if raw_id.startswith("ST") else f"ST{raw_id}"
+    student = db.query(Student).filter(Student.student_code == student_code).first()
+    user = db.query(User).filter(User.id == str(student.user_id)).first() if student else None
+    if user and user.email.lower() == body.school_email.strip().lower() and user.recovery_email_verified and user.recovery_email:
+        token = secrets.token_urlsafe(32)
+        user.password_reset_hash = _token_hash(token)
+        user.password_reset_expires_at = utcnow() + timedelta(minutes=20)
+        db.commit()
+        base_url = os.getenv("WEB_APP_URL", "http://localhost:5173").rstrip("/")
+        link = f"{base_url}/?reset_token={token}"
+        safe_link = html.escape(link, quote=True)
+        try:
+            _send_email(user.recovery_email, "Reset your password", f'<p>Use this link to set a new password:</p><p><a href="{safe_link}">Reset password</a></p><p>This link expires in 20 minutes.</p>', f"reset-{user.id}-{token[:12]}")
+        except HTTPException:
+            # Keep the public response identical so this endpoint cannot reveal
+            # whether the supplied student ID and school email matched an account.
+            pass
+    return {"message": "If the details match, a reset link was sent to the verified recovery email."}
+
+@router.post("/reset-password")
+def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    user = db.query(User).filter(User.password_reset_hash == _token_hash(body.token)).first()
+    if not user or not user.password_reset_expires_at or user.password_reset_expires_at < utcnow():
+        raise HTTPException(status_code=400, detail="Reset link is invalid or expired")
+    user.password_hash = hash_password(body.new_password)
+    user.password_reset_hash = None
+    user.password_reset_expires_at = None
+    db.commit()
+    return {"message": "Password updated"}
+
 @router.get("/me")
 def get_current_user_profile(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     name = "User"
@@ -202,6 +304,8 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "email_notifications": user.email_notifications,
         "push_notifications": user.push_notifications,
         "in_app_notifications": user.in_app_notifications,
+        "recovery_email": user.recovery_email,
+        "recovery_email_verified": user.recovery_email_verified,
     }
 
 @router.put("/me/settings")

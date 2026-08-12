@@ -1274,3 +1274,160 @@ div[class*="fixed inset-0"][class*="bg-slate"] {
     right: -8%;
   }
 }
+
+/* Password reset dialog */
+.password-reset-popup {
+  width: min(32rem, calc(100vw - 2rem)) !important;
+  padding: 1.75rem !important;
+}
+
+.password-reset-content {
+  margin: 0.6rem 0 0 !important;
+  padding: 0 !important;
+}
+
+.password-reset-intro {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.password-reset-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  text-align: left;
+}
+
+.password-reset-control {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.password-reset-label {
+  color: #334155;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.password-reset-field {
+  display: flex;
+  min-height: 3.1rem;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.85rem;
+  background: #f8fafc;
+  padding: 0 0.9rem;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.password-reset-field:hover {
+  border-color: #94a3b8;
+}
+
+.password-reset-field:focus-within {
+  border-color: #2563eb;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.password-reset-field.is-invalid {
+  border-color: #ef4444;
+  background: #fff7f7;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.1);
+}
+
+.password-reset-field svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: #64748b;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+}
+
+.password-reset-field:focus-within svg {
+  stroke: #2563eb;
+}
+
+.password-reset-input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+}
+
+.password-reset-input::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+  opacity: 1;
+}
+
+.password-reset-help {
+  color: #64748b;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.password-reset-actions {
+  gap: 0.65rem;
+  margin: 1.4rem 0 0 !important;
+}
+
+html.dark .password-reset-intro,
+html.dark .password-reset-help {
+  color: #94a3b8;
+}
+
+html.dark .password-reset-label {
+  color: #e2e8f0;
+}
+
+html.dark .password-reset-field {
+  border-color: #334155;
+  background: #0f172a;
+}
+
+html.dark .password-reset-field:hover {
+  border-color: #475569;
+}
+
+html.dark .password-reset-field:focus-within {
+  border-color: #60a5fa;
+  background: #111827;
+}
+
+html.dark .password-reset-field.is-invalid {
+  border-color: #f87171;
+  background: rgba(127, 29, 29, 0.16);
+}
+
+html.dark .password-reset-input {
+  color: #f8fafc;
+}
+
+@media (max-width: 480px) {
+  .password-reset-popup {
+    padding: 1.4rem !important;
+  }
+
+  .password-reset-actions {
+    width: 100%;
+  }
+
+  .password-reset-actions button {
+    flex: 1;
+  }
+}

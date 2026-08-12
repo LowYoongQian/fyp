@@ -21,24 +21,72 @@ api.interceptors.request.use((config) => {
   return Promise.reject(error);
 });
 
-// Memory cache for client-side API caching
-const apiCache = new Map<string, { data: any; timestamp: number }>();
-const CACHE_TTL = 30000; // 30 seconds cache TTL
+// Short-lived, user-scoped cache. sessionStorage survives refreshes but is cleared
+// when the tab/session ends, so authenticated data is never shared across accounts.
+type ApiCacheEntry = { data: any; timestamp: number };
+const apiCache = new Map<string, ApiCacheEntry>();
+const pendingGets = new Map<string, Promise<any>>();
+const CACHE_TTL = 60000;
+const CACHE_PREFIX = 'sas_api_cache:';
+const NO_CLIENT_CACHE = ['/sessions', '/students/me/active-sessions', '/students/me/attendance', '/admin/sessions'];
+
+const cacheScope = () => {
+  try {
+    const user = JSON.parse(sessionStorage.getItem('auth_user') || '{}');
+    return String(user.user_id || 'public');
+  } catch {
+    return 'public';
+  }
+};
+
+const isRealtimeUrl = (url: string) => NO_CLIENT_CACHE.some(path => url === path || url.startsWith(`${path}/`));
+const storageKey = (key: string) => `${CACHE_PREFIX}${key}`;
 
 export const clearApiCache = () => {
   apiCache.clear();
+  pendingGets.clear();
+  for (let index = sessionStorage.length - 1; index >= 0; index--) {
+    const key = sessionStorage.key(index);
+    if (key?.startsWith(CACHE_PREFIX)) sessionStorage.removeItem(key);
+  }
 };
 
 // Helper to handle cached GET requests
 export const cachedGet = async (url: string, params?: any): Promise<any> => {
-  const cacheKey = JSON.stringify({ url, params });
-  const cached = apiCache.get(cacheKey);
+  if (isRealtimeUrl(url)) {
+    return (await api.get(url, { params })).data;
+  }
+
+  const cacheKey = JSON.stringify({ scope: cacheScope(), url, params });
+  let cached = apiCache.get(cacheKey);
+  if (!cached) {
+    try {
+      const stored = sessionStorage.getItem(storageKey(cacheKey));
+      cached = stored ? JSON.parse(stored) as ApiCacheEntry : undefined;
+      if (cached) apiCache.set(cacheKey, cached);
+    } catch {
+      cached = undefined;
+    }
+  }
   if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
     return cached.data;
   }
-  const response = await api.get(url, { params });
-  apiCache.set(cacheKey, { data: response.data, timestamp: Date.now() });
-  return response.data;
+
+  const pending = pendingGets.get(cacheKey);
+  if (pending) return pending;
+
+  const request = api.get(url, { params }).then(response => {
+    const entry = { data: response.data, timestamp: Date.now() };
+    apiCache.set(cacheKey, entry);
+    try {
+      sessionStorage.setItem(storageKey(cacheKey), JSON.stringify(entry));
+    } catch {
+      // Storage can be unavailable or full; the in-memory cache still works.
+    }
+    return response.data;
+  }).finally(() => pendingGets.delete(cacheKey));
+  pendingGets.set(cacheKey, request);
+  return request;
 };
 
 // Invalidate memory cache whenever a mutating request (POST, PUT, DELETE) succeeds
@@ -323,6 +371,14 @@ export const apiService = {
     const response = await api.post('/auth/login', { email, password, portal });
     return response.data;
   },
+  forgotPassword: async (studentId: string, schoolEmail: string) =>
+    (await api.post('/auth/forgot-password', { student_id: studentId, school_email: schoolEmail })).data,
+  resetPassword: async (token: string, newPassword: string) =>
+    (await api.post('/auth/reset-password', { token, new_password: newPassword })).data,
+  requestRecoveryEmail: async (recoveryEmail: string) =>
+    (await api.post('/auth/recovery-email/request', { recovery_email: recoveryEmail })).data,
+  verifyRecoveryEmail: async (code: string) =>
+    (await api.post('/auth/recovery-email/verify', { code })).data,
 
   register: async (data: any) => {
     const response = await api.post('/auth/register', data);

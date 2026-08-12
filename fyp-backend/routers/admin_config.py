@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Union, Optional
 
 from domain.security_settings import is_enabled
+from integrations.network_verify import get_client_ip
 from db.database import get_db
 import ipaddress
 import socket
@@ -99,15 +100,7 @@ def detect_connection(request: Request, db: Session = Depends(get_db), current_u
     # Same policy read the check-in path uses, so both agree on what "trusted" means.
     trust_proxy = is_enabled(db, "trust_proxy_header")
 
-    client_host = request.client.host if (request and request.client) else "127.0.0.1"
-    if trust_proxy:
-        x_forwarded = request.headers.get("x-forwarded-for")
-        if x_forwarded:
-            client_ip = x_forwarded.split(",")[0].strip()
-        else:
-            client_ip = client_host
-    else:
-        client_ip = client_host
+    client_ip = get_client_ip(request, trust_proxy) or "127.0.0.1"
 
     # Resolve local LAN/Wi-Fi socket interface IP if client is on loopback
     ipv6_address = None

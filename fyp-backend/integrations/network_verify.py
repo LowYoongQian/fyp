@@ -16,6 +16,41 @@ import re
 from typing import Optional, List, Tuple
 
 
+def normalize_client_ip(value: Optional[str]) -> str:
+    """Return a canonical IP from common reverse-proxy address formats.
+
+    Some hosts forward IPv4 as ``address:source-port`` while bracketed IPv6
+    may arrive as ``[address]:source-port``.  ``ipaddress`` rejects both forms
+    unless the transport port is removed first.
+    """
+    candidate = (value or "").strip().strip('"')
+    if candidate.lower().startswith("for="):
+        candidate = candidate[4:].strip().strip('"')
+
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        pass
+
+    if candidate.startswith("[") and "]" in candidate:
+        host = candidate[1:candidate.index("]")]
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            return candidate
+
+    host, separator, port = candidate.rpartition(":")
+    if separator and port.isdigit():
+        try:
+            parsed = ipaddress.ip_address(host)
+            if parsed.version == 4:
+                return str(parsed)
+        except ValueError:
+            pass
+
+    return candidate
+
+
 def get_client_ip(request, trust_proxy_header: bool = False) -> str:
     """Resolve the client's source IP.
 
@@ -26,9 +61,9 @@ def get_client_ip(request, trust_proxy_header: bool = False) -> str:
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
             # left-most entry is the original client
-            return fwd.split(",")[0].strip()
+            return normalize_client_ip(fwd.split(",")[0])
     client = request.client
-    return client.host if client else ""
+    return normalize_client_ip(client.host if client else "")
 
 
 def _ip_in_cidr(ip_str: str, cidr: str) -> bool:

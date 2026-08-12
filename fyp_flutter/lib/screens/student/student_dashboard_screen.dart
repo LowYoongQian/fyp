@@ -31,7 +31,18 @@ class MainScreen extends StatefulWidget {
 
   final VoidCallback onLogout;
   final Future<void> Function() onSyncRequested;
-  final Function(dynamic, String, String, String, String, bool, {int? challengeMs, Map<String, dynamic>? extraDetails}) onCheckInComplete;
+  final Future<void> Function() onTimetableRefresh;
+  final Function(
+    dynamic,
+    String,
+    String,
+    String,
+    String,
+    bool, {
+    int? challengeMs,
+    Map<String, dynamic>? extraDetails,
+  })
+  onCheckInComplete;
   final VoidCallback onRegisterFace;
   final VoidCallback onTestFaceMatch;
 
@@ -51,6 +62,7 @@ class MainScreen extends StatefulWidget {
     required this.isSyncing,
     required this.onLogout,
     required this.onSyncRequested,
+    required this.onTimetableRefresh,
     required this.onCheckInComplete,
     required this.onRegisterFace,
     required this.onTestFaceMatch,
@@ -63,7 +75,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _activeTabIndex = 0; // 0 for Check-In, 1 for Schedule, 2 for History
   late PageController _pageController;
-  
+
   // Real active sessions queried from backend
   List<Map<String, dynamic>> activeSessions = [];
   bool isLoadingSessions = false;
@@ -73,16 +85,15 @@ class _MainScreenState extends State<MainScreen> {
   int _attendanceFilterIndex = 0; // 0 for Today, 1 for Overall
 
   Timer? _refreshTimer;
+  bool _refreshInProgress = false;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _activeTabIndex);
     fetchActiveSessions();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      if (mounted) {
-        setState(() {});
-      }
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      unawaited(_refreshDashboardData());
     });
   }
 
@@ -94,12 +105,38 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String _monthAbbreviation(int month) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return months[month - 1];
   }
 
   String _monthFullName(int month) {
-    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
     return months[month - 1];
   }
 
@@ -130,16 +167,27 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String _dayOfWeekName(int day) {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
     return days[day - 1];
   }
 
   int getMarkedCountForDate(DateTime date) {
-    final isToday = date.year == ApiConfig.now.year &&
+    final isToday =
+        date.year == ApiConfig.now.year &&
         date.month == ApiConfig.now.month &&
         date.day == ApiConfig.now.day;
-    
-    final matchLabel = "${_monthAbbreviation(date.month)} ${date.day}, ${date.year}".toLowerCase();
+
+    final matchLabel =
+        "${_monthAbbreviation(date.month)} ${date.day}, ${date.year}"
+            .toLowerCase();
 
     return widget.attendanceHistory.where((log) {
       final logDate = log['date'].toString().toLowerCase();
@@ -155,14 +203,11 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String getTodayCheckInTime() {
-    final todayLog = widget.attendanceHistory.firstWhere(
-      (log) {
-        final logDate = log['date'].toString().toLowerCase();
-        final isVerified = log['status'].toString().toLowerCase() == 'verified';
-        return logDate.contains('today') && isVerified;
-      },
-      orElse: () => <String, dynamic>{},
-    );
+    final todayLog = widget.attendanceHistory.firstWhere((log) {
+      final logDate = log['date'].toString().toLowerCase();
+      final isVerified = log['status'].toString().toLowerCase() == 'verified';
+      return logDate.contains('today') && isVerified;
+    }, orElse: () => <String, dynamic>{});
     if (todayLog.isEmpty) return "-";
     final dateStr = todayLog['date'].toString();
     if (dateStr.contains(',')) {
@@ -196,9 +241,13 @@ class _MainScreenState extends State<MainScreen> {
   Map<String, dynamic>? getTodaySessionWindow() {
     final now = ApiConfig.now;
     final todayName = _dayOfWeekName(now.weekday);
-    final todays = widget.studentSchedule.where((s) => s['day'] == todayName).toList();
+    final todays = widget.studentSchedule
+        .where((s) => s['day'] == todayName)
+        .toList();
     if (todays.isEmpty) return null;
-    todays.sort((a, b) => (a['startTime'] as String).compareTo(b['startTime'] as String));
+    todays.sort(
+      (a, b) => (a['startTime'] as String).compareTo(b['startTime'] as String),
+    );
 
     Map<String, dynamic>? active;
     Map<String, dynamic>? upcoming;
@@ -233,26 +282,41 @@ class _MainScreenState extends State<MainScreen> {
   // Shared authed GET helper — every read goes through the backend with JWT.
   Future<http.Response> _authedGet(String path) {
     final apiUrl = ApiConfig.getEffectiveUrl();
-    return http.get(
-      Uri.parse('$apiUrl$path'),
-      headers: {
-        'Content-Type': 'application/json',
-        if (widget.authToken.isNotEmpty) 'Authorization': 'Bearer ${widget.authToken}',
-      },
-    ).timeout(const Duration(seconds: 12));
+    return http
+        .get(
+          Uri.parse('$apiUrl$path'),
+          headers: {
+            'Content-Type': 'application/json',
+            if (widget.authToken.isNotEmpty)
+              'Authorization': 'Bearer ${widget.authToken}',
+          },
+        )
+        .timeout(const Duration(seconds: 12));
+  }
+
+  Future<void> _refreshDashboardData() async {
+    if (!mounted || _refreshInProgress) return;
+    _refreshInProgress = true;
+    try {
+      await Future.wait([widget.onTimetableRefresh(), fetchActiveSessions()]);
+    } finally {
+      _refreshInProgress = false;
+    }
   }
 
   // Query active lectures matching this student's enrolments (backend API).
   Future<void> fetchActiveSessions() async {
     if (isLoadingSessions) return;
-    
+
     // 1. Try loading cached active sessions from SharedPreferences first
     try {
       final prefs = await SharedPreferences.getInstance();
       final cachedSessionsStr = prefs.getString('cached_active_sessions');
       if (cachedSessionsStr != null && cachedSessionsStr.isNotEmpty) {
         final List<dynamic> decoded = jsonDecode(cachedSessionsStr);
-        final List<Map<String, dynamic>> mapped = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        final List<Map<String, dynamic>> mapped = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
         setState(() {
           activeSessions = mapped;
           sessionsError = null;
@@ -285,7 +349,7 @@ class _MainScreenState extends State<MainScreen> {
           'alreadyCheckedIn': item['already_checked_in'] ?? false,
         });
       }
-      
+
       setState(() {
         activeSessions = loadedList;
         sessionsError = null;
@@ -296,7 +360,7 @@ class _MainScreenState extends State<MainScreen> {
       await prefs.setString('cached_active_sessions', jsonEncode(loadedList));
     } catch (e) {
       debugPrint("Error loading active sessions: $e");
-      
+
       // Only set error and show the Cloud Off block if we have absolutely no cached data
       if (activeSessions.isEmpty) {
         setState(() => sessionsError = _friendlyError(e));
@@ -317,8 +381,6 @@ class _MainScreenState extends State<MainScreen> {
     return msg;
   }
 
-
-
   Widget _buildFaceVerificationNotice() {
     if (widget.isFaceRegistered) return const SizedBox.shrink();
     return Container(
@@ -329,7 +391,11 @@ class _MainScreenState extends State<MainScreen> {
           children: [
             Row(
               children: [
-                const Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B), size: 20),
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Color(0xFFF59E0B),
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   "Face Verification Required",
@@ -388,8 +454,13 @@ class _MainScreenState extends State<MainScreen> {
           foregroundColor: const Color(0xFF2563EB),
           side: const BorderSide(color: Color(0xFFBFDBFE)),
           padding: const EdgeInsets.symmetric(vertical: 13),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          textStyle: GoogleFonts.inter(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ),
     );
@@ -409,7 +480,8 @@ class _MainScreenState extends State<MainScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => FullTimetableScreen(schedule: widget.studentSchedule),
+                builder: (context) =>
+                    FullTimetableScreen(schedule: widget.studentSchedule),
               ),
             );
           },
@@ -424,10 +496,16 @@ class _MainScreenState extends State<MainScreen> {
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white
+                        : const Color(0xFF0F172A),
                   ),
                 ),
-                const Icon(Icons.chevron_right, color: Color(0xFF64748B), size: 20),
+                const Icon(
+                  Icons.chevron_right,
+                  color: Color(0xFF64748B),
+                  size: 20,
+                ),
               ],
             ),
           ),
@@ -440,11 +518,18 @@ class _MainScreenState extends State<MainScreen> {
               child: Center(
                 child: Column(
                   children: [
-                    const Icon(Icons.event_busy_outlined, color: Color(0xFF94A3B8), size: 20),
+                    const Icon(
+                      Icons.event_busy_outlined,
+                      color: Color(0xFF94A3B8),
+                      size: 20,
+                    ),
                     const SizedBox(height: 6),
                     Text(
                       "No classes scheduled for today.",
-                      style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B)),
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: const Color(0xFF64748B),
+                      ),
                     ),
                   ],
                 ),
@@ -464,13 +549,18 @@ class _MainScreenState extends State<MainScreen> {
               final isLecture = groupStr.startsWith('l');
               final isTutor = groupStr.startsWith('t');
               final badgeLetter = isLecture ? 'L' : (isTutor ? 'T' : 'P');
-              
+
               final Color themeColor = isLecture
                   ? const Color(0xFF2563EB)
-                  : (isTutor ? const Color(0xFF10B981) : const Color(0xFFF59E0B));
-              
+                  : (isTutor
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFFF59E0B));
+
               return GlassCard(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
                     CircleAvatar(
@@ -504,7 +594,11 @@ class _MainScreenState extends State<MainScreen> {
                             style: GoogleFonts.spaceGrotesk(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
-                              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                              color:
+                                  Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? Colors.white
+                                  : const Color(0xFF0F172A),
                             ),
                           ),
                         ],
@@ -514,7 +608,7 @@ class _MainScreenState extends State<MainScreen> {
                 ),
               );
             },
-          )
+          ),
       ],
     );
   }
@@ -522,17 +616,28 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
-    final secondaryTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-    final pillBgColor = isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
-    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final primaryTextColor = isDarkMode
+        ? Colors.white
+        : const Color(0xFF0F172A);
+    final secondaryTextColor = isDarkMode
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF64748B);
+    final pillBgColor = isDarkMode
+        ? const Color(0xFF0F172A)
+        : const Color(0xFFF1F5F9);
+    final borderColor = isDarkMode
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
 
     return SafeArea(
       child: Column(
         children: [
           // Top Navigation Bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -548,7 +653,11 @@ class _MainScreenState extends State<MainScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: const Center(
-                        child: Icon(Icons.qr_code_scanner, color: Colors.white, size: 18),
+                        child: Icon(
+                          Icons.qr_code_scanner,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -599,10 +708,19 @@ class _MainScreenState extends State<MainScreen> {
                       onPressed: () {
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                          MaterialPageRoute(
+                            builder: (_) => ProfileScreen(
+                              authToken: widget.authToken,
+                              apiBaseUrl: ApiConfig.getEffectiveUrl(),
+                            ),
+                          ),
                         );
                       },
-                      icon: const Icon(Icons.person_rounded, color: Color(0xFF2563EB), size: 18),
+                      icon: const Icon(
+                        Icons.person_rounded,
+                        color: Color(0xFF2563EB),
+                        size: 18,
+                      ),
                       style: IconButton.styleFrom(
                         backgroundColor: const Color(0xFFEFF6FF),
                         padding: const EdgeInsets.all(8),
@@ -617,7 +735,11 @@ class _MainScreenState extends State<MainScreen> {
                         await widget.onSyncRequested();
                         await fetchActiveSessions();
                       },
-                      icon: const Icon(Icons.sync, color: Color(0xFF2563EB), size: 18),
+                      icon: const Icon(
+                        Icons.sync,
+                        color: Color(0xFF2563EB),
+                        size: 18,
+                      ),
                       style: IconButton.styleFrom(
                         backgroundColor: const Color(0xFFEFF6FF),
                         padding: const EdgeInsets.all(8),
@@ -629,7 +751,11 @@ class _MainScreenState extends State<MainScreen> {
                     const SizedBox(width: 8),
                     IconButton(
                       onPressed: widget.onLogout,
-                      icon: const Icon(Icons.logout, color: Color(0xFFEF4444), size: 18),
+                      icon: const Icon(
+                        Icons.logout,
+                        color: Color(0xFFEF4444),
+                        size: 18,
+                      ),
                       style: IconButton.styleFrom(
                         backgroundColor: const Color(0xFFFEF2F2),
                         padding: const EdgeInsets.all(8),
@@ -646,15 +772,22 @@ class _MainScreenState extends State<MainScreen> {
 
           // Welcome Card (Positioned directly under the Appbar)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 6.0,
+            ),
             child: GlassCard(
               child: Row(
                 children: [
                   CircleAvatar(
                     radius: 24,
-                    backgroundColor: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                    backgroundColor: const Color(
+                      0xFF2563EB,
+                    ).withValues(alpha: 0.1),
                     child: Text(
-                      widget.studentName.substring(0, min(2, widget.studentName.length)).toUpperCase(),
+                      widget.studentName
+                          .substring(0, min(2, widget.studentName.length))
+                          .toUpperCase(),
                       style: GoogleFonts.spaceGrotesk(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
@@ -717,14 +850,18 @@ class _MainScreenState extends State<MainScreen> {
                       bottom: 0,
                       child: Container(
                         decoration: BoxDecoration(
-                          color: isDarkMode ? const Color(0xFF2563EB) : Colors.white,
+                          color: isDarkMode
+                              ? const Color(0xFF2563EB)
+                              : Colors.white,
                           borderRadius: BorderRadius.circular(8),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.04),
+                              color: Colors.black.withValues(
+                                alpha: isDarkMode ? 0.2 : 0.04,
+                              ),
                               blurRadius: 4,
                               offset: const Offset(0, 2),
-                            )
+                            ),
                           ],
                         ),
                       ),
@@ -733,10 +870,18 @@ class _MainScreenState extends State<MainScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: _buildSegmentButton(0, "Dashboard List", Icons.qr_code_scanner),
+                          child: _buildSegmentButton(
+                            0,
+                            "Dashboard List",
+                            Icons.qr_code_scanner,
+                          ),
                         ),
                         Expanded(
-                          child: _buildSegmentButton(1, "Attendance", Icons.history),
+                          child: _buildSegmentButton(
+                            1,
+                            "Attendance",
+                            Icons.history,
+                          ),
                         ),
                       ],
                     ),
@@ -753,10 +898,7 @@ class _MainScreenState extends State<MainScreen> {
               onPageChanged: (idx) {
                 setState(() => _activeTabIndex = idx);
               },
-              children: [
-                _buildCheckInTab(),
-                _buildHistoryTab(),
-              ],
+              children: [_buildCheckInTab(), _buildHistoryTab()],
             ),
           ),
         ],
@@ -785,7 +927,8 @@ class _MainScreenState extends State<MainScreen> {
         highlightColor: Colors.transparent,
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 8),
-          color: Colors.transparent, // Always transparent, background is drawn by the stack's pill
+          color: Colors
+              .transparent, // Always transparent, background is drawn by the stack's pill
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -793,8 +936,12 @@ class _MainScreenState extends State<MainScreen> {
                 icon,
                 size: 14,
                 color: isSelected
-                    ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF2563EB))
-                    : (Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                    ? (Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white
+                          : const Color(0xFF2563EB))
+                    : (Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF94A3B8)
+                          : const Color(0xFF64748B)),
               ),
               const SizedBox(width: 6),
               Text(
@@ -803,8 +950,12 @@ class _MainScreenState extends State<MainScreen> {
                   fontSize: 10,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                   color: isSelected
-                      ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A))
-                      : (Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                      ? (Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : const Color(0xFF0F172A))
+                      : (Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF94A3B8)
+                            : const Color(0xFF64748B)),
                 ),
               ),
             ],
@@ -835,7 +986,9 @@ class _MainScreenState extends State<MainScreen> {
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
-                color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : const Color(0xFF0F172A),
               ),
             ),
             const SizedBox(height: 8),
@@ -843,7 +996,8 @@ class _MainScreenState extends State<MainScreen> {
               final now = ApiConfig.now;
               final todayName = _dayOfWeekName(now.weekday);
               final todayClasses = widget.studentSchedule.where((item) {
-                return item['day'].toString().toLowerCase() == todayName.toLowerCase();
+                return item['day'].toString().toLowerCase() ==
+                    todayName.toLowerCase();
               }).toList();
 
               // Filter out classes that have already ended
@@ -854,21 +1008,27 @@ class _MainScreenState extends State<MainScreen> {
                 return !now.isAfter(endDt);
               }).toList();
 
-              remainingClasses.sort((a, b) => (a['startTime'] as String).compareTo(b['startTime'] as String));
+              remainingClasses.sort(
+                (a, b) => (a['startTime'] as String).compareTo(
+                  b['startTime'] as String,
+                ),
+              );
 
               if (isLoadingSessions) {
                 return ShimmerLoading(
                   isLoading: true,
                   child: Column(
-                    children: List.generate(1, (index) => 
-                      Container(
+                    children: List.generate(
+                      1,
+                      (index) => Container(
                         margin: const EdgeInsets.only(bottom: 12),
                         child: GlassCard(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Container(
                                     width: 80,
@@ -925,15 +1085,25 @@ class _MainScreenState extends State<MainScreen> {
               if (sessionsError != null) {
                 return GlassCard(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 8),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16.0,
+                      horizontal: 8,
+                    ),
                     child: Column(
                       children: [
-                        const Icon(Icons.cloud_off, color: Color(0xFFEF4444), size: 24),
+                        const Icon(
+                          Icons.cloud_off,
+                          color: Color(0xFFEF4444),
+                          size: 24,
+                        ),
                         const SizedBox(height: 6),
                         Text(
                           sessionsError!,
                           textAlign: TextAlign.center,
-                          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B)),
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            color: const Color(0xFF64748B),
+                          ),
                         ),
                         const SizedBox(height: 10),
                         OutlinedButton.icon(
@@ -961,22 +1131,34 @@ class _MainScreenState extends State<MainScreen> {
                 final startDt = _parseTodayTime(startTimeStr);
                 final endDt = _parseTodayTime(endTimeStr);
 
-                final isLectureSlot = cls['group'].toString().toLowerCase().startsWith('l');
-                
+                final isLectureSlot = cls['group']
+                    .toString()
+                    .toLowerCase()
+                    .startsWith('l');
+
                 final activeSess = activeSessions.firstWhere(
-                  (s) => s['courseCode'] == courseCode &&
-                         (isLectureSlot ? s['classGroup'] == 'All' : s['classGroup'] != 'All'),
+                  (s) =>
+                      s['courseCode'] == courseCode &&
+                      (isLectureSlot
+                          ? s['classGroup'] == 'All'
+                          : s['classGroup'] != 'All'),
                   orElse: () => <String, dynamic>{},
                 );
 
-                final bool isSessionOpen = activeSess.isNotEmpty && activeSess['isOpen'] == true;
-                final dynamic sessionId = activeSess.isNotEmpty ? (activeSess['sessionId'] ?? activeSess['id']) : null;
+                final bool isSessionOpen =
+                    activeSess.isNotEmpty && activeSess['isOpen'] == true;
+                final dynamic sessionId = activeSess.isNotEmpty
+                    ? (activeSess['sessionId'] ?? activeSess['id'])
+                    : null;
 
-                final isThisSessionCheckedIn = widget.isCheckedInToday &&
-                    widget.attendanceHistory.any((record) =>
-                        record['courseCode'] == courseCode &&
-                        record['date'].toString().contains('Today') &&
-                        record['status'] == 'Verified');
+                final isThisSessionCheckedIn =
+                    widget.isCheckedInToday &&
+                    widget.attendanceHistory.any(
+                      (record) =>
+                          record['courseCode'] == courseCode &&
+                          record['date'].toString().contains('Today') &&
+                          record['status'] == 'Verified',
+                    );
 
                 bool classStarted = false;
                 bool classEnded = false;
@@ -989,25 +1171,33 @@ class _MainScreenState extends State<MainScreen> {
                   if (!classStarted) {
                     final diff = startDt.difference(now);
                     if (diff.inHours > 0) {
-                      remainingHint = "Class starts in ${diff.inHours}h ${diff.inMinutes % 60}m";
+                      remainingHint =
+                          "Class starts in ${diff.inHours}h ${diff.inMinutes % 60}m";
                     } else {
                       remainingHint = "Class starts in ${diff.inMinutes}m";
                     }
                   } else if (!classEnded) {
                     final diff = endDt.difference(now);
                     if (diff.inHours > 0) {
-                      remainingHint = "Class ends in ${diff.inHours}h ${diff.inMinutes % 60}m";
+                      remainingHint =
+                          "Class ends in ${diff.inHours}h ${diff.inMinutes % 60}m";
                     } else {
                       remainingHint = "Class ends in ${diff.inMinutes}m";
                     }
                   } else {
-                    remainingHint = "Class ended at ${_formatDisplayTime(endTimeStr)}";
+                    remainingHint =
+                        "Class ended at ${_formatDisplayTime(endTimeStr)}";
                   }
                 }
 
-                final bool canCheckIn = isSessionOpen && classStarted && !classEnded && !isThisSessionCheckedIn;
+                final bool canCheckIn =
+                    isSessionOpen &&
+                    classStarted &&
+                    !classEnded &&
+                    !isThisSessionCheckedIn;
 
-                final Color themeColor = isSessionOpen && classStarted && !classEnded
+                final Color themeColor =
+                    isSessionOpen && classStarted && !classEnded
                     ? const Color(0xFF2563EB)
                     : const Color(0xFF94A3B8);
 
@@ -1022,9 +1212,15 @@ class _MainScreenState extends State<MainScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: isSessionOpen && classStarted && !classEnded
+                                  color:
+                                      isSessionOpen &&
+                                          classStarted &&
+                                          !classEnded
                                       ? const Color(0xFFEFF6FF)
                                       : const Color(0xFFF1F5F9),
                                   borderRadius: BorderRadius.circular(6),
@@ -1033,18 +1229,22 @@ class _MainScreenState extends State<MainScreen> {
                                   isThisSessionCheckedIn
                                       ? "COMPLETED"
                                       : isSessionOpen
-                                          ? (classStarted
-                                              ? (classEnded ? "CLOSED" : "ACTIVE WINDOW")
-                                              : "UPCOMING (OPEN)")
-                                          : "SESSION NOT ACTIVE",
+                                      ? (classStarted
+                                            ? (classEnded
+                                                  ? "CLOSED"
+                                                  : "ACTIVE WINDOW")
+                                            : "UPCOMING (OPEN)")
+                                      : "SESSION NOT ACTIVE",
                                   style: GoogleFonts.inter(
                                     fontSize: 8,
                                     fontWeight: FontWeight.bold,
                                     color: isThisSessionCheckedIn
                                         ? const Color(0xFF10B981)
-                                        : isSessionOpen && classStarted && !classEnded
-                                            ? const Color(0xFF2563EB)
-                                            : const Color(0xFF64748B),
+                                        : isSessionOpen &&
+                                              classStarted &&
+                                              !classEnded
+                                        ? const Color(0xFF2563EB)
+                                        : const Color(0xFF64748B),
                                   ),
                                 ),
                               ),
@@ -1052,7 +1252,10 @@ class _MainScreenState extends State<MainScreen> {
                                 "Tut Group: $classGroup",
                                 style: GoogleFonts.inter(
                                   fontSize: 9,
-                                  color: isSessionOpen && classStarted && !classEnded
+                                  color:
+                                      isSessionOpen &&
+                                          classStarted &&
+                                          !classEnded
                                       ? const Color(0xFF2563EB)
                                       : const Color(0xFF64748B),
                                   fontWeight: FontWeight.w700,
@@ -1085,7 +1288,10 @@ class _MainScreenState extends State<MainScreen> {
                                 Icon(
                                   Icons.access_time,
                                   size: 11,
-                                  color: isSessionOpen && classStarted && !classEnded
+                                  color:
+                                      isSessionOpen &&
+                                          classStarted &&
+                                          !classEnded
                                       ? const Color(0xFF2563EB)
                                       : const Color(0xFF94A3B8),
                                 ),
@@ -1095,7 +1301,10 @@ class _MainScreenState extends State<MainScreen> {
                                   style: GoogleFonts.inter(
                                     fontSize: 9.5,
                                     fontWeight: FontWeight.w600,
-                                    color: isSessionOpen && classStarted && !classEnded
+                                    color:
+                                        isSessionOpen &&
+                                            classStarted &&
+                                            !classEnded
                                         ? const Color(0xFF2563EB)
                                         : const Color(0xFF64748B),
                                   ),
@@ -1107,16 +1316,26 @@ class _MainScreenState extends State<MainScreen> {
 
                           isThisSessionCheckedIn
                               ? Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: const Color(0xFFECFDF5),
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.2)),
+                                    border: Border.all(
+                                      color: const Color(
+                                        0xFF10B981,
+                                      ).withValues(alpha: 0.2),
+                                    ),
                                   ),
                                   child: Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      const Icon(Icons.check_circle_outline, color: Color(0xFF10B981), size: 16),
+                                      const Icon(
+                                        Icons.check_circle_outline,
+                                        color: Color(0xFF10B981),
+                                        size: 16,
+                                      ),
                                       const SizedBox(width: 6),
                                       Text(
                                         "CHECK-IN REGISTERED",
@@ -1138,33 +1357,58 @@ class _MainScreenState extends State<MainScreen> {
                                             MaterialPageRoute(
                                               builder: (context) => FaceScannerScreen(
                                                 title: "$courseCode Check-In",
-                                                onScanComplete: (imageBase64, livenessPassed, {int? challengeMs}) {
-                                                  if (imageBase64 == null || imageBase64.isEmpty || !livenessPassed) {
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      const SnackBar(
-                                                        content: Text("Check-in cancelled: face scan or liveness was not completed."),
-                                                        backgroundColor: Color(0xFFDC2626),
-                                                      ),
-                                                    );
-                                                    return;
-                                                  }
-                                                  widget.onCheckInComplete(
-                                                    sessionId!,
-                                                    "Campus-Staff-WiFi",
-                                                    courseCode,
-                                                    courseName,
-                                                    imageBase64,
-                                                    livenessPassed,
-                                                    challengeMs: challengeMs,
-                                                    extraDetails: {
-                                                      'timeSlot': "$startTimeStr - $endTimeStr",
-                                                      'room': room,
-                                                      'classGroup': classGroup,
-                                                      'lecturerName': activeSess['createdByName'] ?? activeSess['lecturerName'] ?? cls['lecturerName'] ?? 'Dr. Low',
-                                                      'lecturerRole': activeSess['createdRole'] ?? activeSess['lecturerRole'] ?? cls['lecturerRole'] ?? 'Lecturer',
+                                                onScanComplete:
+                                                    (
+                                                      imageBase64,
+                                                      livenessPassed, {
+                                                      int? challengeMs,
+                                                    }) {
+                                                      if (imageBase64 == null ||
+                                                          imageBase64.isEmpty ||
+                                                          !livenessPassed) {
+                                                        ScaffoldMessenger.of(
+                                                          context,
+                                                        ).showSnackBar(
+                                                          const SnackBar(
+                                                            content: Text(
+                                                              "Check-in cancelled: face scan or liveness was not completed.",
+                                                            ),
+                                                            backgroundColor:
+                                                                Color(
+                                                                  0xFFDC2626,
+                                                                ),
+                                                          ),
+                                                        );
+                                                        return;
+                                                      }
+                                                      widget.onCheckInComplete(
+                                                        sessionId!,
+                                                        "Campus-Staff-WiFi",
+                                                        courseCode,
+                                                        courseName,
+                                                        imageBase64,
+                                                        livenessPassed,
+                                                        challengeMs:
+                                                            challengeMs,
+                                                        extraDetails: {
+                                                          'timeSlot':
+                                                              "$startTimeStr - $endTimeStr",
+                                                          'room': room,
+                                                          'classGroup':
+                                                              classGroup,
+                                                          'lecturerName':
+                                                              activeSess['createdByName'] ??
+                                                              activeSess['lecturerName'] ??
+                                                              cls['lecturerName'] ??
+                                                              'Dr. Low',
+                                                          'lecturerRole':
+                                                              activeSess['createdRole'] ??
+                                                              activeSess['lecturerRole'] ??
+                                                              cls['lecturerRole'] ??
+                                                              'Lecturer',
+                                                        },
+                                                      );
                                                     },
-                                                  );
-                                                },
                                               ),
                                             ),
                                           );
@@ -1172,24 +1416,34 @@ class _MainScreenState extends State<MainScreen> {
                                   icon: Icon(
                                     isSessionOpen
                                         ? (classStarted
-                                            ? (classEnded ? Icons.lock_clock : Icons.qr_code_scanner)
-                                            : Icons.lock_clock)
+                                              ? (classEnded
+                                                    ? Icons.lock_clock
+                                                    : Icons.qr_code_scanner)
+                                              : Icons.lock_clock)
                                         : Icons.lock_clock,
                                     size: 14,
                                   ),
                                   label: Text(
                                     isSessionOpen
                                         ? (classStarted
-                                            ? (classEnded ? "Attendance Closed" : "Perform Face & WiFi Check-In")
-                                            : "Opens at ${_formatDisplayTime(startTimeStr)}")
+                                              ? (classEnded
+                                                    ? "Attendance Closed"
+                                                    : "Perform Face & WiFi Check-In")
+                                              : "Opens at ${_formatDisplayTime(startTimeStr)}")
                                         : "Session Not Open",
                                   ),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: themeColor,
                                     foregroundColor: Colors.white,
-                                    disabledBackgroundColor: const Color(0xFFCBD5E1),
-                                    disabledForegroundColor: const Color(0xFF94A3B8),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    disabledBackgroundColor: const Color(
+                                      0xFFCBD5E1,
+                                    ),
+                                    disabledForegroundColor: const Color(
+                                      0xFF94A3B8,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
                                     ),
@@ -1214,11 +1468,18 @@ class _MainScreenState extends State<MainScreen> {
                     child: Center(
                       child: Column(
                         children: [
-                          const Icon(Icons.notifications_none, color: Color(0xFF94A3B8), size: 24),
+                          const Icon(
+                            Icons.notifications_none,
+                            color: Color(0xFF94A3B8),
+                            size: 24,
+                          ),
                           const SizedBox(height: 6),
                           Text(
                             "No active session windows available at this time.",
-                            style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B)),
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              color: const Color(0xFF64748B),
+                            ),
                           ),
                         ],
                       ),
@@ -1227,9 +1488,7 @@ class _MainScreenState extends State<MainScreen> {
                 );
               }
 
-              return Column(
-                children: cards,
-              );
+              return Column(children: cards);
             })(),
             const SizedBox(height: 20),
             _buildTodayTimetableSection(),
@@ -1239,7 +1498,9 @@ class _MainScreenState extends State<MainScreen> {
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
-                color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : const Color(0xFF0F172A),
               ),
             ),
             const SizedBox(height: 8),
@@ -1267,12 +1528,23 @@ class _MainScreenState extends State<MainScreen> {
                 if (dateRaw != null) {
                   final dt = DateTime.tryParse(dateRaw)?.toLocal();
                   if (dt != null) {
-                    final months = const ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+                    final months = const [
+                      'January',
+                      'February',
+                      'March',
+                      'April',
+                      'May',
+                      'June',
+                      'July',
+                      'August',
+                      'September',
+                      'October',
+                      'November',
+                      'December',
+                    ];
                     dateStr = "${months[dt.month - 1]} ${dt.day}, ${dt.year}";
                   }
                 }
-                
-
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12.0),
@@ -1292,7 +1564,9 @@ class _MainScreenState extends State<MainScreen> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                                      color: const Color(
+                                        0xFF2563EB,
+                                      ).withValues(alpha: 0.1),
                                       shape: BoxShape.circle,
                                     ),
                                     child: const Icon(
@@ -1304,7 +1578,8 @@ class _MainScreenState extends State<MainScreen> {
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
@@ -1314,12 +1589,17 @@ class _MainScreenState extends State<MainScreen> {
                                                 style: GoogleFonts.spaceGrotesk(
                                                   fontSize: 13,
                                                   fontWeight: FontWeight.bold,
-                                                  color: const Color(0xFF1E293B),
+                                                  color: const Color(
+                                                    0xFF1E293B,
+                                                  ),
                                                 ),
                                               ),
                                             ),
                                             const SizedBox(width: 8),
-                                            _buildPublisherBadge(ann['publisher'] as String? ?? 'ADMIN'),
+                                            _buildPublisherBadge(
+                                              ann['publisher'] as String? ??
+                                                  'ADMIN',
+                                            ),
                                           ],
                                         ),
                                         const SizedBox(height: 2),
@@ -1360,16 +1640,25 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-
   Widget _buildHistoryTab() {
     final now = ApiConfig.now;
-    final dayAbbrev = const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][now.weekday - 1];
+    final dayAbbrev = const [
+      'Mon',
+      'Tue',
+      'Wed',
+      'Thu',
+      'Fri',
+      'Sat',
+      'Sun',
+    ][now.weekday - 1];
     final monthAbbrev = _monthAbbreviation(now.month);
-    final todayLabelStr = "$dayAbbrev, ${now.day} $monthAbbrev ${now.year} (today)";
+    final todayLabelStr =
+        "$dayAbbrev, ${now.day} $monthAbbrev ${now.year} (today)";
 
     final reportDayOfWeek = _dayOfWeekName(now.weekday);
     final reportMonthName = _monthFullName(now.month);
-    final reportDateLabelStr = "$reportDayOfWeek, $reportMonthName ${now.day}, ${now.year}";
+    final reportDateLabelStr =
+        "$reportDayOfWeek, $reportMonthName ${now.day}, ${now.year}";
 
     final todayCheckInTime = getTodayCheckInTime();
     final hasCheckedInToday = todayCheckInTime != "-";
@@ -1402,435 +1691,557 @@ class _MainScreenState extends State<MainScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildFaceVerificationNotice(),
-          // 1. Daily Attendance Report Section
-          Text(
-            "Daily Attendance Report",
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            reportDateLabelStr,
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF334155) : const Color(0xFFBFDBFE).withValues(alpha: 0.5)),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        "Marked",
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          color: const Color(0xFF2563EB),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        "${getMarkedCountForDate(now)}",
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+            // 1. Daily Attendance Report Section
+            Text(
+              "Daily Attendance Report",
+              style: GoogleFonts.spaceGrotesk(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : const Color(0xFF0F172A),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF334155) : const Color(0xFFBFDBFE).withValues(alpha: 0.5)),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        "Enrolled",
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          color: const Color(0xFF2563EB),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        "26",
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-
-          // 2. Live Attendance Section
-          Text(
-            "Live attendance",
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
             ),
-          ),
-          const SizedBox(height: 8),
+            const SizedBox(height: 2),
+            Text(
+              reportDateLabelStr,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? const Color(0xFF94A3B8)
+                    : const Color(0xFF64748B),
+              ),
+            ),
+            const SizedBox(height: 12),
 
-          GlassCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            Row(
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_today_outlined, size: 14, color: Color(0xFF64748B)),
-                    const SizedBox(width: 8),
-                    Text(
-                      todayLabelStr,
-                      style: GoogleFonts.inter(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF1E293B),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Padding(
-                  padding: const EdgeInsets.only(left: 22.0),
-                  child: Text(
-                    todaySession != null
-                        ? "${todaySession['courseCode']} · ${todaySession['group']} ($sessionStartLabel - $sessionEndLabel)"
-                        : "No scheduled class today",
-                    style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: const Color(0xFF64748B),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Start time",
-                          style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8), fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          sessionStartLabel,
-                          style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.bold, color: const Color(0xFF1E293B)),
-                        ),
-                      ],
-                    ),
-                    Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          children: [
-                            Container(width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFFCBD5E1), shape: BoxShape.circle)),
-                            Expanded(child: Container(height: 1, color: const Color(0xFFCBD5E1))),
-                            Container(width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFFCBD5E1), shape: BoxShape.circle)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          "End time",
-                          style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8), fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          sessionEndLabel,
-                          style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.bold, color: const Color(0xFF1E293B)),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      "Time is  ",
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-                    const _LiveClock(),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                ElevatedButton.icon(
-                  onPressed: (!hasCheckedInToday && !canClockIn)
-                      ? null // disabled outside the class window / no class
-                      : () {
-                    if (hasCheckedInToday) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text("You have already checked in today at $todayCheckInTime!"),
-                          backgroundColor: const Color(0xFF10B981),
-                        ),
-                      );
-                      return;
-                    }
-
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => FaceScannerScreen(
-                          title: "Daily Attendance Scan",
-                          onScanComplete: (imageBase64, livenessPassed, {int? challengeMs}) {
-                            if (imageBase64 == null || imageBase64.isEmpty || !livenessPassed) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Check-in cancelled: face scan or liveness was not completed."),
-                                  backgroundColor: Color(0xFFDC2626),
-                                ),
-                              );
-                              return;
-                            }
-                            if (activeSessions.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("No open session to check in to right now."),
-                                  backgroundColor: Color(0xFFF59E0B),
-                                ),
-                              );
-                              return;
-                            }
-                            final session = activeSessions.first;
-                            widget.onCheckInComplete(
-                              session['sessionId'],
-                              "Campus-Staff-WiFi",
-                              session['courseCode'],
-                              session['courseName'],
-                              imageBase64,
-                              livenessPassed,
-                              challengeMs: challengeMs,
-                            );
-                          },
-                        ),
-                      ),
-                    );
-                  },
-                  icon: Icon(
-                    hasCheckedInToday
-                        ? Icons.check_circle
-                        : (canClockIn ? Icons.qr_code_scanner : Icons.lock_clock),
-                    size: 14,
-                  ),
-                  label: Text(
-                    hasCheckedInToday
-                        ? "Clocked In Successfully"
-                        : sessionStatus == 'active'
-                            ? "Clock in"
-                            : sessionStatus == 'before'
-                                ? "Opens at $sessionStartLabel"
-                                : sessionStatus == 'after'
-                                    ? "Attendance closed"
-                                    : "No class today",
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: hasCheckedInToday ? const Color(0xFF10B981) : const Color(0xFF2563EB),
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: const Color(0xFF94A3B8),
-                    disabledForegroundColor: Colors.white,
+                Expanded(
+                  child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF1E293B)
+                          : const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF334155)
+                            : const Color(0xFFBFDBFE).withValues(alpha: 0.5),
+                      ),
                     ),
-                    elevation: 1,
-                    textStyle: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+                    child: Column(
+                      children: [
+                        Text(
+                          "Marked",
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            color: const Color(0xFF2563EB),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "${getMarkedCountForDate(now)}",
+                          style: GoogleFonts.spaceGrotesk(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
+                                ? Colors.white
+                                : const Color(0xFF0F172A),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF1E293B)
+                          : const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF334155)
+                            : const Color(0xFFBFDBFE).withValues(alpha: 0.5),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          "Enrolled",
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            color: const Color(0xFF2563EB),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "26",
+                          style: GoogleFonts.spaceGrotesk(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
+                                ? Colors.white
+                                : const Color(0xFF0F172A),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 24),
+            const SizedBox(height: 24),
 
-          // 3. Attendance Log Section
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Attendance Log",
-                style: GoogleFonts.spaceGrotesk(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
-                ),
+            // 2. Live Attendance Section
+            Text(
+              "Live attendance",
+              style: GoogleFonts.spaceGrotesk(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : const Color(0xFF0F172A),
               ),
-              Row(
+            ),
+            const SizedBox(height: 8),
+
+            GlassCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildFilterChip("Today", 0),
-                  const SizedBox(width: 8),
-                  _buildFilterChip("Overall", 1),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          if (_attendanceFilterIndex == 0)
-            (filteredLogs.isEmpty
-                ? GlassCard(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 24.0),
-                      child: Center(
-                        child: Text(
-                          "No attendance logs recorded today.",
-                          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.calendar_today_outlined,
+                        size: 14,
+                        color: Color(0xFF64748B),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        todayLabelStr,
+                        style: GoogleFonts.inter(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF1E293B),
                         ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 22.0),
+                    child: Text(
+                      todaySession != null
+                          ? "${todaySession['courseCode']} · ${todaySession['group']} ($sessionStartLabel - $sessionEndLabel)"
+                          : "No scheduled class today",
+                      style: GoogleFonts.inter(
+                        fontSize: 10,
+                        color: const Color(0xFF64748B),
+                      ),
                     ),
-                  )
-                : ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: filteredLogs.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final log = filteredLogs[index];
-                      final isVerified = log['status'] == 'Verified';
-                      final courseCode = log['courseCode'].toString().toUpperCase();
-                      final courseName = log['courseName'].toString().toUpperCase();
-                      final firstChar = courseCode.isNotEmpty ? courseCode.substring(0, 1) : "C";
+                  ),
+                  const SizedBox(height: 20),
 
-                      final logDate = log['date'].toString();
-                      final timePart = logDate.contains(',') ? logDate.split(',').last.trim() : logDate;
-                      final timeRoomHeader = "$timePart, Room ${log['group']}";
-
-                      final footerLabel = isVerified ? "Registered at $timePart" : "Absent";
-
-                      String lecturerName = "DR. WONG KANG SHIANG";
-                      if (courseCode.contains('GEN') || courseCode.contains('T_')) {
-                        lecturerName = "JULIAN GOH TOK MIN";
-                      }
-
-                      return GlassCard(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            CircleAvatar(
-                              radius: 16,
-                              backgroundColor: const Color(0xFF2563EB).withValues(alpha: 0.1),
-                              child: Text(
-                                firstChar,
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: const Color(0xFF2563EB),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Start time",
+                            style: GoogleFonts.inter(
+                              fontSize: 10,
+                              color: const Color(0xFF94A3B8),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            sessionStartLabel,
+                            style: GoogleFonts.spaceGrotesk(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF1E293B),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFCBD5E1),
+                                  shape: BoxShape.circle,
                                 ),
                               ),
+                              Expanded(
+                                child: Container(
+                                  height: 1,
+                                  color: const Color(0xFFCBD5E1),
+                                ),
+                              ),
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFCBD5E1),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            "End time",
+                            style: GoogleFonts.inter(
+                              fontSize: 10,
+                              color: const Color(0xFF94A3B8),
+                              fontWeight: FontWeight.bold,
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            sessionEndLabel,
+                            style: GoogleFonts.spaceGrotesk(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF1E293B),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        "Time is  ",
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: const Color(0xFF64748B),
+                        ),
+                      ),
+                      const _LiveClock(),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  ElevatedButton.icon(
+                    onPressed: (!hasCheckedInToday && !canClockIn)
+                        ? null // disabled outside the class window / no class
+                        : () {
+                            if (hasCheckedInToday) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    "You have already checked in today at $todayCheckInTime!",
+                                  ),
+                                  backgroundColor: const Color(0xFF10B981),
+                                ),
+                              );
+                              return;
+                            }
+
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => FaceScannerScreen(
+                                  title: "Daily Attendance Scan",
+                                  onScanComplete:
+                                      (
+                                        imageBase64,
+                                        livenessPassed, {
+                                        int? challengeMs,
+                                      }) {
+                                        if (imageBase64 == null ||
+                                            imageBase64.isEmpty ||
+                                            !livenessPassed) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                "Check-in cancelled: face scan or liveness was not completed.",
+                                              ),
+                                              backgroundColor: Color(
+                                                0xFFDC2626,
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                        if (activeSessions.isEmpty) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                "No open session to check in to right now.",
+                                              ),
+                                              backgroundColor: Color(
+                                                0xFFF59E0B,
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                        final session = activeSessions.first;
+                                        widget.onCheckInComplete(
+                                          session['sessionId'],
+                                          "Campus-Staff-WiFi",
+                                          session['courseCode'],
+                                          session['courseName'],
+                                          imageBase64,
+                                          livenessPassed,
+                                          challengeMs: challengeMs,
+                                        );
+                                      },
+                                ),
+                              ),
+                            );
+                          },
+                    icon: Icon(
+                      hasCheckedInToday
+                          ? Icons.check_circle
+                          : (canClockIn
+                                ? Icons.qr_code_scanner
+                                : Icons.lock_clock),
+                      size: 14,
+                    ),
+                    label: Text(
+                      hasCheckedInToday
+                          ? "Clocked In Successfully"
+                          : sessionStatus == 'active'
+                          ? "Clock in"
+                          : sessionStatus == 'before'
+                          ? "Opens at $sessionStartLabel"
+                          : sessionStatus == 'after'
+                          ? "Attendance closed"
+                          : "No class today",
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: hasCheckedInToday
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFF2563EB),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFF94A3B8),
+                      disabledForegroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 1,
+                      textStyle: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // 3. Attendance Log Section
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "Attendance Log",
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white
+                        : const Color(0xFF0F172A),
+                  ),
+                ),
+                Row(
+                  children: [
+                    _buildFilterChip("Today", 0),
+                    const SizedBox(width: 8),
+                    _buildFilterChip("Overall", 1),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            if (_attendanceFilterIndex == 0)
+              (filteredLogs.isEmpty
+                  ? GlassCard(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24.0),
+                        child: Center(
+                          child: Text(
+                            "No attendance logs recorded today.",
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              color: const Color(0xFF94A3B8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: filteredLogs.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final log = filteredLogs[index];
+                        final isVerified = log['status'] == 'Verified';
+                        final courseCode = log['courseCode']
+                            .toString()
+                            .toUpperCase();
+                        final courseName = log['courseName']
+                            .toString()
+                            .toUpperCase();
+                        final firstChar = courseCode.isNotEmpty
+                            ? courseCode.substring(0, 1)
+                            : "C";
+
+                        final logDate = log['date'].toString();
+                        final timePart = logDate.contains(',')
+                            ? logDate.split(',').last.trim()
+                            : logDate;
+                        final timeRoomHeader =
+                            "$timePart, Room ${log['group']}";
+
+                        final footerLabel = isVerified
+                            ? "Registered at $timePart"
+                            : "Absent";
+
+                        String lecturerName = "DR. WONG KANG SHIANG";
+                        if (courseCode.contains('GEN') ||
+                            courseCode.contains('T_')) {
+                          lecturerName = "JULIAN GOH TOK MIN";
+                        }
+
+                        return GlassCard(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              CircleAvatar(
+                                radius: 16,
+                                backgroundColor: const Color(
+                                  0xFF2563EB,
+                                ).withValues(alpha: 0.1),
+                                child: Text(
+                                  firstChar,
+                                  style: GoogleFonts.spaceGrotesk(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: const Color(0xFF2563EB),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      timeRoomHeader,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w600,
+                                        color: const Color(0xFF2563EB),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      "$courseName ($courseCode)",
+                                      style: GoogleFonts.spaceGrotesk(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color:
+                                            Theme.of(context).brightness ==
+                                                Brightness.dark
+                                            ? Colors.white
+                                            : const Color(0xFF0F172A),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.person_outline,
+                                          size: 11,
+                                          color: Color(0xFF64748B),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          lecturerName,
+                                          style: GoogleFonts.inter(
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.w500,
+                                            color: const Color(0xFF64748B),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
+                                  const SizedBox(height: 26),
                                   Text(
-                                    timeRoomHeader,
+                                    footerLabel,
                                     style: GoogleFonts.inter(
                                       fontSize: 9,
-                                      fontWeight: FontWeight.w600,
-                                      color: const Color(0xFF2563EB),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    "$courseName ($courseCode)",
-                                    style: GoogleFonts.spaceGrotesk(
-                                      fontSize: 11,
                                       fontWeight: FontWeight.bold,
-                                      color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                                      color: isVerified
+                                          ? const Color(0xFF10B981)
+                                          : const Color(0xFFEF4444),
                                     ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Row(
-                                    children: [
-                                      const Icon(Icons.person_outline, size: 11, color: Color(0xFF64748B)),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        lecturerName,
-                                        style: GoogleFonts.inter(
-                                          fontSize: 9.5,
-                                          fontWeight: FontWeight.w500,
-                                          color: const Color(0xFF64748B),
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ],
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Column(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                const SizedBox(height: 26),
-                                Text(
-                                  footerLabel,
-                                  style: GoogleFonts.inter(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    color: isVerified ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ))
-          else
-            _buildOverallCoursesTab(),
-        ],
+                            ],
+                          ),
+                        );
+                      },
+                    ))
+            else
+              _buildOverallCoursesTab(),
+          ],
+        ),
       ),
-    ));
+    );
   }
 
   List<Map<String, dynamic>> _getOverallCourseStats() {
@@ -1841,7 +2252,10 @@ class _MainScreenState extends State<MainScreen> {
     for (final course in widget.studentSchedule) {
       final code = course['courseCode'].toString().toUpperCase();
       final name = course['courseName'].toString().toUpperCase();
-      final rate = (course['attendanceRate'] is num) ? (course['attendanceRate'] as num).toDouble() : (double.tryParse(course['attendanceRate']?.toString() ?? '') ?? 100.0);
+      final rate = (course['attendanceRate'] is num)
+          ? (course['attendanceRate'] as num).toDouble()
+          : (double.tryParse(course['attendanceRate']?.toString() ?? '') ??
+                100.0);
 
       if (!seenCodes.contains(code)) {
         seenCodes.add(code);
@@ -1867,7 +2281,9 @@ class _MainScreenState extends State<MainScreen> {
       final logs = entry.value;
       final name = logs.first['courseName'].toString().toUpperCase();
       final total = logs.length;
-      final attended = logs.where((l) => l['status'].toString().toLowerCase() == 'verified').length;
+      final attended = logs
+          .where((l) => l['status'].toString().toLowerCase() == 'verified')
+          .length;
       final percentage = total > 0 ? (attended / total) * 100.0 : 0.0;
 
       seenCodes.add(code);
@@ -1926,7 +2342,10 @@ class _MainScreenState extends State<MainScreen> {
           child: Center(
             child: Text(
               "No enrolled courses available.",
-              style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                color: const Color(0xFF94A3B8),
+              ),
             ),
           ),
         ),
@@ -1942,7 +2361,10 @@ class _MainScreenState extends State<MainScreen> {
         final course = overallStats[index];
         final courseCode = course['courseCode'].toString().toUpperCase();
         final courseName = course['courseName'].toString().toUpperCase();
-        final percentage = (course['percentage'] is num) ? (course['percentage'] as num).toDouble() : (double.tryParse(course['percentage']?.toString() ?? '') ?? 100.0);
+        final percentage = (course['percentage'] is num)
+            ? (course['percentage'] as num).toDouble()
+            : (double.tryParse(course['percentage']?.toString() ?? '') ??
+                  100.0);
 
         return GlassCard(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -1992,7 +2414,9 @@ class _MainScreenState extends State<MainScreen> {
           color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFEFF6FF),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? const Color(0xFF2563EB) : const Color(0xFFBFDBFE).withValues(alpha: 0.5),
+            color: isSelected
+                ? const Color(0xFF2563EB)
+                : const Color(0xFFBFDBFE).withValues(alpha: 0.5),
           ),
         ),
         child: Text(

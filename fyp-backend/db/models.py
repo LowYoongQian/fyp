@@ -28,6 +28,12 @@ class User(Base):
     email_notifications   = Column(Boolean, default=True, nullable=False)
     push_notifications    = Column(Boolean, default=True, nullable=False)
     in_app_notifications  = Column(Boolean, default=True, nullable=False)
+    recovery_email        = Column(String, nullable=True, unique=True)
+    recovery_email_verified = Column(Boolean, default=False, nullable=False)
+    recovery_code_hash    = Column(String, nullable=True)
+    recovery_code_expires_at = Column(DateTime, nullable=True)
+    password_reset_hash   = Column(String, nullable=True, index=True)
+    password_reset_expires_at = Column(DateTime, nullable=True)
     created_at            = Column(DateTime, server_default=func.now())
     
     student               = relationship("Student", back_populates="user", uselist=False)

@@ -20,10 +20,12 @@ logger = logging.getLogger(__name__)
 # deployment ever scales out, move this to an advisory lock or a row in the database.
 _last_sync_time = 0.0
 _is_syncing = False
+_force_pending = False
+_state_lock = threading.Lock()
 _SYNC_THROTTLE_SECONDS = 60.0 # Only sync once per minute max to prevent query storms
 
 
-def sync_class_sessions():
+def sync_class_sessions(*, force: bool = False):
     """Kick off a sync in the background and return immediately.
 
     This used to run inline, so once a minute some unlucky request paid its ~18
@@ -33,12 +35,18 @@ def sync_class_sessions():
     the result, so the request no longer waits for it. The trade is that a session
     opening this very second may not appear until the next poll.
     """
-    global _last_sync_time, _is_syncing
+    global _last_sync_time, _is_syncing, _force_pending
 
-    if _is_syncing or (time_module.time() - _last_sync_time < _SYNC_THROTTLE_SECONDS):
-        return # Skip to avoid query storms and database locks
-
-    _is_syncing = True
+    with _state_lock:
+        if _is_syncing:
+            # An admin edit must not disappear just because a routine sync was
+            # already in flight with the previous timetable snapshot.
+            if force:
+                _force_pending = True
+            return
+        if not force and time_module.time() - _last_sync_time < _SYNC_THROTTLE_SECONDS:
+            return # Skip to avoid query storms and database locks
+        _is_syncing = True
     threading.Thread(target=_sync_worker, daemon=True).start()
 
 
@@ -48,7 +56,7 @@ def _sync_worker():
     A Session is not thread-safe, so this cannot borrow the request's session --
     it opens and closes its own.
     """
-    global _last_sync_time, _is_syncing
+    global _last_sync_time, _is_syncing, _force_pending
     db = None
     try:
         db = SessionLocal()
@@ -61,8 +69,13 @@ def _sync_worker():
     finally:
         if db is not None:
             db.close()
-        _last_sync_time = time_module.time()
-        _is_syncing = False
+        with _state_lock:
+            _last_sync_time = time_module.time()
+            _is_syncing = False
+            run_again = _force_pending
+            _force_pending = False
+        if run_again:
+            sync_class_sessions(force=True)
 
 
 def _sync_class_sessions_now(db: Session):

@@ -1115,9 +1115,9 @@ export const LecturerDashboard: React.FC = () => {
           </div>
 
           {/* Announcements Card */}
-          <div className="uipro-card bg-white/75 p-5">
-            <div className="pb-3 border-b border-slate-100 mb-3">
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+          <div className="uipro-card bg-white p-5 min-w-0 overflow-hidden">
+            <div className="pb-3 border-b border-slate-200 mb-3">
+              <h4 className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
                 <Bell className="h-4 w-4 text-brand-blue" />
                 Administrative Notices
               </h4>
@@ -1125,15 +1125,17 @@ export const LecturerDashboard: React.FC = () => {
 
             <div className="space-y-3">
               {announcements.map((notice) => (
-                <div key={notice.id} className="p-3 bg-slate-50/50 border border-slate-100 rounded-xl space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[8.5px] font-extrabold text-brand-blue bg-brand-blue-light/50 px-2 py-0.2 rounded-full uppercase tracking-wider scale-95 origin-left">
+                <div key={notice.id} className="min-w-0 overflow-hidden p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between gap-3 min-w-0">
+                    <span className="text-[9px] font-extrabold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full uppercase tracking-wider truncate">
                       {notice.type}
                     </span>
-                    <span className="text-[8px] font-semibold text-slate-400">{notice.date}</span>
+                    <span className="text-[9px] font-bold text-slate-500 shrink-0">{notice.date}</span>
                   </div>
-                  <h5 className="text-[11px] font-extrabold text-slate-800 leading-tight">{notice.title}</h5>
-                  <p className="text-[9.5px] text-slate-450 leading-relaxed">{notice.body}</p>
+                  <h5 className="text-xs font-extrabold text-slate-900 leading-snug break-words">{notice.title}</h5>
+                  <p className="text-[10.5px] font-medium text-slate-600 leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                    {notice.body}
+                  </p>
                 </div>
               ))}
             </div>

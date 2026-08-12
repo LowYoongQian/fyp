@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen, X, Pencil, CalendarDays, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { useDialog } from '../../context/DialogContext';
@@ -184,6 +184,7 @@ export const Timetable: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<TimetableEvent | null>(null);
   const [editForm, setEditForm] = useState({ day: 'Monday', start: '08:00', end: '10:00', room: '' });
+  const [isDayDropdownOpen, setIsDayDropdownOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hoveredEventId, setHoveredEventId] = useState<number | string | null>(null);
   const [isLineHovered, setIsLineHovered] = useState(false);
@@ -245,6 +246,7 @@ export const Timetable: React.FC = () => {
 
   const openEdit = (ev: TimetableEvent) => {
     setEditForm({ day: ev.day, start: ev.startTime, end: ev.endTime, room: ev.room });
+    setIsDayDropdownOpen(false);
     setEditing(ev);
   };
 
@@ -606,32 +608,35 @@ export const Timetable: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Timetable Header / Note */}
-      <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 flex gap-3 text-xs text-sky-700 shadow-sm">
-        <AlertTriangle className="h-4.5 w-4.5 text-sky-500 shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <span className="font-bold uppercase tracking-wider block">Note:</span>
-          <span>Please approach your faculty for further assistance if there is any missing/clashed/incorrect class timetable.</span>
+      <div className="flex gap-3 rounded-2xl border border-blue-200/80 bg-blue-50/80 p-4 text-sm text-blue-900 shadow-sm dark:border-blue-900/70 dark:bg-blue-950/40 dark:text-blue-100">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-brand-blue shadow-sm ring-1 ring-blue-100 dark:bg-blue-950 dark:ring-blue-900">
+          <AlertTriangle className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 space-y-0.5">
+          <span className="block text-xs font-extrabold uppercase tracking-wider">Timetable assistance</span>
+          <span className="block text-xs font-medium leading-relaxed text-blue-700 dark:text-blue-200">Contact your faculty if a class is missing, clashes with another class, or contains incorrect details.</span>
         </div>
       </div>
 
       {/* Admin Programme & Course Selection Category Bar */}
       {user?.role === 'admin' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center gap-3 text-xs font-extrabold text-slate-800 dark:text-slate-100">
-            <div className="w-9 h-9 rounded-xl bg-sky-50 dark:bg-sky-950/80 border border-sky-100 dark:border-sky-900 flex items-center justify-center text-sky-600 dark:text-sky-400 shadow-2xs shrink-0">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-brand-blue shadow-sm dark:border-blue-900 dark:bg-blue-950/70 dark:text-blue-300">
               <Filter className="h-4.5 w-4.5" />
             </div>
             <div>
-              <span className="block font-bold text-slate-900 dark:text-white">Select Timetable Category</span>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">Filter timetable schedule by programme and course</span>
+              <span className="block text-sm font-extrabold text-slate-900 dark:text-white">Filter timetable</span>
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Choose a programme and course to narrow the schedule</span>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center gap-3">
+          <div className="grid w-full gap-3 sm:grid-cols-2 xl:w-auto xl:grid-cols-[minmax(240px,320px)_minmax(240px,320px)_auto]">
             {/* Custom Programme Dropdown */}
-            <div className="relative w-full sm:w-72 md:w-80">
+            <div className="relative min-w-0">
               <button
                 key={`prog-btn-${selectedProgramme}`}
                 type="button"
@@ -639,9 +644,9 @@ export const Timetable: React.FC = () => {
                   setIsProgDropdownOpen(!isProgDropdownOpen);
                   setIsCourseDropdownOpen(false);
                 }}
-                className={`w-full flex items-center justify-between gap-2 text-xs font-bold px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/90 border rounded-xl text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs ${
-                  isProgDropdownOpen 
-                    ? 'border-sky-500 ring-2 ring-sky-500/20 dark:border-sky-400' 
+                className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border bg-slate-50 px-3.5 py-2.5 text-left text-xs font-bold text-slate-800 shadow-sm transition-all hover:border-blue-300 hover:bg-white dark:bg-slate-800/90 dark:text-slate-100 dark:hover:bg-slate-800 ${
+                  isProgDropdownOpen
+                    ? 'border-brand-blue bg-white ring-2 ring-blue-500/15 dark:border-blue-400' 
                     : 'border-slate-200 dark:border-slate-700'
                 }`}
                 title={selectedProgrammeLabel}
@@ -652,7 +657,7 @@ export const Timetable: React.FC = () => {
                     {selectedProgrammeLabel}
                   </span>
                 </div>
-                <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${isProgDropdownOpen ? 'rotate-180 text-sky-600' : ''}`} />
+                <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${isProgDropdownOpen ? 'rotate-180 text-brand-blue' : ''}`} />
               </button>
 
               {/* Programme Floating Dropdown Menu */}
@@ -670,8 +675,8 @@ export const Timetable: React.FC = () => {
                         }}
                         className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                           selectedProgramme === ''
-                            ? 'bg-sky-600 text-white font-extrabold shadow-sm'
-                            : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                            ? 'bg-brand-blue text-white font-extrabold shadow-sm'
+                            : 'text-slate-800 dark:text-slate-100 hover:bg-blue-50 dark:hover:bg-slate-700/70 hover:text-brand-blue dark:hover:text-blue-300'
                         }`}
                       >
                         <span>-- Select Programme --</span>
@@ -691,8 +696,8 @@ export const Timetable: React.FC = () => {
                             }}
                             className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                               isSelected
-                                ? 'bg-sky-600 text-white font-extrabold shadow-sm'
-                                : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                                ? 'bg-brand-blue text-white font-extrabold shadow-sm'
+                                : 'text-slate-800 dark:text-slate-100 hover:bg-blue-50 dark:hover:bg-slate-700/70 hover:text-brand-blue dark:hover:text-blue-300'
                             }`}
                           >
                             <span className="truncate">{prog.label}</span>
@@ -707,7 +712,7 @@ export const Timetable: React.FC = () => {
             </div>
 
             {/* Custom Course Dropdown */}
-            <div className="relative w-full sm:w-72 md:w-80">
+            <div className="relative min-w-0">
               <button
                 key={`course-btn-${selectedCourseCode}`}
                 type="button"
@@ -715,9 +720,9 @@ export const Timetable: React.FC = () => {
                   setIsCourseDropdownOpen(!isCourseDropdownOpen);
                   setIsProgDropdownOpen(false);
                 }}
-                className={`w-full flex items-center justify-between gap-2 text-xs font-bold px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/90 border rounded-xl text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs ${
-                  isCourseDropdownOpen 
-                    ? 'border-sky-500 ring-2 ring-sky-500/20 dark:border-sky-400' 
+                className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-xl border bg-slate-50 px-3.5 py-2.5 text-left text-xs font-bold text-slate-800 shadow-sm transition-all hover:border-blue-300 hover:bg-white dark:bg-slate-800/90 dark:text-slate-100 dark:hover:bg-slate-800 ${
+                  isCourseDropdownOpen
+                    ? 'border-brand-blue bg-white ring-2 ring-blue-500/15 dark:border-blue-400' 
                     : 'border-slate-200 dark:border-slate-700'
                 }`}
                 title={selectedCourseLabel}
@@ -728,7 +733,7 @@ export const Timetable: React.FC = () => {
                     {selectedCourseLabel}
                   </span>
                 </div>
-                <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${isCourseDropdownOpen ? 'rotate-180 text-sky-600' : ''}`} />
+                <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${isCourseDropdownOpen ? 'rotate-180 text-brand-blue' : ''}`} />
               </button>
 
               {/* Course Floating Dropdown Menu */}
@@ -746,8 +751,8 @@ export const Timetable: React.FC = () => {
                         }}
                         className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                           selectedCourseCode === ''
-                            ? 'bg-sky-600 text-white font-extrabold shadow-sm'
-                            : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                            ? 'bg-brand-blue text-white font-extrabold shadow-sm'
+                            : 'text-slate-800 dark:text-slate-100 hover:bg-blue-50 dark:hover:bg-slate-700/70 hover:text-brand-blue dark:hover:text-blue-300'
                         }`}
                       >
                         <span>-- Select Course --</span>
@@ -763,8 +768,8 @@ export const Timetable: React.FC = () => {
                         }}
                         className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                           selectedCourseCode === 'ALL'
-                            ? 'bg-sky-600 text-white font-extrabold shadow-sm'
-                            : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                            ? 'bg-brand-blue text-white font-extrabold shadow-sm'
+                            : 'text-slate-800 dark:text-slate-100 hover:bg-blue-50 dark:hover:bg-slate-700/70 hover:text-brand-blue dark:hover:text-blue-300'
                         }`}
                       >
                         <span>All Courses</span>
@@ -784,8 +789,8 @@ export const Timetable: React.FC = () => {
                             }}
                             className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                               isSelected
-                                ? 'bg-sky-600 text-white font-extrabold shadow-sm'
-                                : 'text-slate-800 dark:text-slate-100 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                                ? 'bg-brand-blue text-white font-extrabold shadow-sm'
+                                : 'text-slate-800 dark:text-slate-100 hover:bg-blue-50 dark:hover:bg-slate-700/70 hover:text-brand-blue dark:hover:text-blue-300'
                             }`}
                           >
                             <div className="flex flex-col truncate pr-2">
@@ -814,20 +819,21 @@ export const Timetable: React.FC = () => {
                   setIsProgDropdownOpen(false);
                   setIsCourseDropdownOpen(false);
                 }}
-                className="px-3 py-2 text-xs font-extrabold text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300 transition-colors cursor-pointer whitespace-nowrap"
+                className="min-h-11 rounded-xl px-4 py-2 text-xs font-extrabold text-brand-blue transition-colors hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/50 sm:col-span-2 xl:col-span-1"
               >
-                Clear
+                Clear filters
               </button>
             )}
+          </div>
           </div>
         </div>
       )}
 
       {/* Main Timetable Card Container */}
-      <div className="uipro-card bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-800 shadow-sm rounded-2xl">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_12px_35px_rgba(15,23,42,0.06)] dark:border-slate-800 dark:bg-slate-900 sm:p-6">
         
         {/* Integrated Header Bar (Matching Reference Layout) */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 mb-5 border-b border-slate-200 dark:border-slate-800">
+        <div className="mb-5 flex flex-col gap-5 border-b border-slate-200 pb-5 dark:border-slate-800 xl:flex-row xl:items-center xl:justify-between">
           
           {/* Left Section: Calendar Date Badge (AUG 3) + Month Title & Semester Subtitle */}
           <div className="flex items-center gap-3.5">
@@ -860,10 +866,10 @@ export const Timetable: React.FC = () => {
           </div>
 
           {/* Right Section: Search with Auto Suggestions + Navigation (Today) + Week Dropdown */}
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex w-full flex-wrap items-center gap-2.5 xl:w-auto xl:justify-end">
             
             {/* Search Input with Auto Suggestions */}
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <div className="relative flex items-center">
                 <Search className="absolute left-3 h-4 w-4 text-slate-400 dark:text-slate-500" />
                 <input
@@ -873,15 +879,16 @@ export const Timetable: React.FC = () => {
                   onFocus={() => setIsSearchFocused(true)}
                   onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
                   placeholder="Search course, teacher, room..."
-                  className="w-48 sm:w-60 pl-9 pr-8 py-1.5 text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50 transition-all"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-9 text-xs font-semibold text-slate-800 shadow-sm transition-all placeholder:text-slate-400 focus:border-brand-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 sm:w-64"
                 />
                 {searchQuery && (
                   <button
                     type="button"
                     onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs font-bold"
+                    className="absolute right-2 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-white"
+                    aria-label="Clear search"
                   >
-                    ✕
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
@@ -935,11 +942,11 @@ export const Timetable: React.FC = () => {
             </div>
 
             {/* Navigation Control: [ ← ] [ Today ] [ → ] */}
-            <div className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-0.5 shadow-2xs">
+            <div className="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-slate-50 p-1 shadow-sm dark:border-slate-700 dark:bg-slate-800">
               <button
                 type="button"
                 onClick={handlePrevDay}
-                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 transition-all hover:bg-white hover:text-brand-blue hover:shadow-sm dark:text-slate-300 dark:hover:bg-slate-700"
                 title="Previous Day"
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -949,7 +956,7 @@ export const Timetable: React.FC = () => {
                 key={`today-nav-btn-${selectedDateStr}`}
                 type="button"
                 onClick={handleToday}
-                className={`px-3 py-1 text-xs font-bold transition-all cursor-pointer border-x border-slate-200 dark:border-slate-700 rounded-lg ${
+                className={`h-8 rounded-lg px-3 text-xs font-bold transition-all ${
                   selectedDateStr === formatDate(getMalaysiaDate())
                     ? 'text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-slate-700'
                     : 'text-sky-600 dark:text-sky-400 bg-sky-50/90 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900 font-extrabold shadow-2xs'
@@ -971,7 +978,7 @@ export const Timetable: React.FC = () => {
               <button
                 type="button"
                 onClick={handleNextDay}
-                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-600 transition-all hover:bg-white hover:text-brand-blue hover:shadow-sm dark:text-slate-300 dark:hover:bg-slate-700"
                 title="Next Day"
               >
                 <ChevronRight className="h-4 w-4" />
@@ -984,7 +991,7 @@ export const Timetable: React.FC = () => {
                 key={`week-dropdown-btn-${selectedWeekNum}`}
                 type="button"
                 onClick={() => setIsWeekDropdownOpen(!isWeekDropdownOpen)}
-                className="flex items-center gap-2 px-3.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700/80 cursor-pointer transition-all shadow-2xs"
+                className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-bold text-slate-800 shadow-sm transition-all hover:border-blue-300 hover:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700/80"
               >
                 <span key={`week-label-${selectedWeekNum}`}>Week {selectedWeekNum} View</span>
                 <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isWeekDropdownOpen ? 'rotate-180' : ''}`} />
@@ -1012,8 +1019,8 @@ export const Timetable: React.FC = () => {
                             onClick={() => handleSelectWeek(w)}
                             className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-all flex items-center justify-between cursor-pointer ${
                               isSelected
-                                ? 'bg-sky-600 text-white font-extrabold shadow-sm'
-                                : 'text-slate-700 dark:text-slate-200 hover:bg-sky-50 dark:hover:bg-slate-700/70 hover:text-sky-700 dark:hover:text-sky-300'
+                                ? 'bg-brand-blue text-white font-extrabold shadow-sm'
+                                : 'text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-slate-700/70 hover:text-brand-blue dark:hover:text-blue-300'
                             }`}
                           >
                             <span className="font-semibold">Week {w}</span>
@@ -1033,7 +1040,7 @@ export const Timetable: React.FC = () => {
             <button 
               type="button"
               onClick={() => customAlert('Preparing print layout... (Simulated PDF download)', 'Print Timetable')}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/80 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer transition-all shadow-2xs"
+              className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-bold text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-white hover:text-brand-blue dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700/80"
             >
               <Printer className="h-4 w-4 text-slate-500 dark:text-slate-400" />
               <span>Print</span>
@@ -1063,12 +1070,12 @@ export const Timetable: React.FC = () => {
             </div>
           </div>
         ) : (
-          <div key={`week-grid-${selectedWeekNum}`} className="w-full overflow-x-auto">
-              <div className="min-w-[860px]">
+          <div key={`week-grid-${selectedWeekNum}`} className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="min-w-[920px]">
 
                 {/* Top Day Headers (7 Columns: Mon - Sun) */}
-                <div className="grid grid-cols-[80px_repeat(7,_minmax(0,1fr))] border-b border-slate-200 pb-3">
-                  <div className="text-xs font-bold text-slate-400 flex items-center justify-center">
+                <div className="sticky top-0 z-20 grid grid-cols-[80px_repeat(7,_minmax(0,1fr))] border-b border-slate-200 bg-white px-0 py-2.5 dark:border-slate-800 dark:bg-slate-900">
+                  <div className="flex items-center justify-center text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
                     GMT+8
                   </div>
                   {days.map((day) => {
@@ -1078,9 +1085,9 @@ export const Timetable: React.FC = () => {
                         key={`header-${day.date}`} 
                         type="button"
                         onClick={() => setSelectedDateStr(day.date)}
-                        className={`flex items-center justify-center gap-1 text-xs font-semibold py-1.5 px-3 rounded-full transition-all cursor-pointer select-none whitespace-nowrap ${
+                        className={`mx-1 flex items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold transition-all select-none whitespace-nowrap ${
                           isSelectedDay 
-                            ? 'bg-sky-100/90 dark:bg-sky-900/80 text-sky-950 dark:text-sky-100 font-black ring-1.5 ring-sky-400 dark:ring-sky-500 shadow-2xs scale-105' 
+                            ? 'bg-blue-600 text-white font-black shadow-sm'
                             : day.isToday
                             ? 'bg-slate-200/90 dark:bg-slate-700 text-slate-800 dark:text-slate-100 font-extrabold ring-1 ring-slate-300 dark:ring-slate-600 hover:bg-sky-50'
                             : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
@@ -1228,7 +1235,7 @@ export const Timetable: React.FC = () => {
                             >
                               {/* Simple Pastel Container Card */}
                               <div
-                                className={`w-full h-full rounded-xl border p-2 flex flex-col justify-between transition-all duration-300 cursor-pointer shadow-2xs group relative ${palette.bg} ${palette.border} ${
+                                className={`group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border p-2.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${user?.role === 'admin' && ev.meetingId ? 'cursor-pointer' : 'cursor-default'} ${palette.bg} ${palette.border} ${
                                   isSearchActive
                                     ? isMatched
                                       ? 'opacity-100 ring-2 ring-sky-500 scale-[1.01]'
@@ -1238,12 +1245,12 @@ export const Timetable: React.FC = () => {
                               >
                                 <div className="space-y-0.5">
                                   <div className="flex items-center justify-between gap-1">
-                                    <span className={`text-[10.5px] tracking-wide ${palette.title}`}>
+                                    <span className={`text-[11px] tracking-wide ${palette.title}`}>
                                       {ev.courseCode}
                                     </span>
                                     <span className={`w-1.5 h-1.5 rounded-full ${palette.dot}`} />
                                   </div>
-                                  <h4 className={`text-[10px] leading-tight truncate ${palette.text}`}>
+                                  <h4 className={`truncate text-[10.5px] leading-snug ${palette.text}`}>
                                     {ev.courseName}
                                   </h4>
                                 </div>
@@ -1325,22 +1332,22 @@ export const Timetable: React.FC = () => {
         </div>
 
       {/* Timetable Colors Legend */}
-      <div className="uipro-card bg-white/75 p-5 border border-slate-200">
-        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pb-2 border-b border-slate-150">
-          Class Type & Interactive Color Legend
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h4 className="border-b border-slate-200 pb-3 text-xs font-extrabold uppercase tracking-wider text-slate-700 dark:border-slate-800 dark:text-slate-300">
+          Timetable legend
         </h4>
-        <div className="flex flex-wrap items-center gap-6 pt-3 text-xs font-semibold text-slate-700">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 pt-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded-md bg-sky-100 border border-sky-400 shadow-2xs" />
-            <span className="font-bold text-sky-950">Lecture Class (Light Blue)</span>
+            <span className="font-bold text-slate-700 dark:text-slate-300">Lecture</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded-md bg-emerald-100 border border-emerald-400 shadow-2xs" />
-            <span className="font-bold text-emerald-950">Tutorial Class (Soft Green)</span>
+            <span className="font-bold text-slate-700 dark:text-slate-300">Tutorial</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded-md bg-purple-100 border border-purple-400 shadow-2xs" />
-            <span className="font-bold text-purple-950">Practical / Lab (Purple)</span>
+            <span className="font-bold text-slate-700 dark:text-slate-300">Practical / Lab</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded-full bg-slate-900 text-white text-[9px] flex items-center justify-center font-bold">10</div>
@@ -1426,14 +1433,18 @@ export const Timetable: React.FC = () => {
       )}
 
       {user?.role === 'admin' && (
-        <div className="uipro-card bg-white/75 dark:bg-slate-900/75 p-5 border border-slate-200 dark:border-slate-800 shadow-premium space-y-4 rounded-2xl">
-          <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider pb-3 border-b border-slate-100 dark:border-slate-800">
-            Manage Class Times :
-          </h3>
-          <div className="overflow-x-auto">
+        <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-4 dark:border-slate-800">
+            <div>
+              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">Manage class times</h3>
+              <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">Select a class to update its day, time, or room.</p>
+            </div>
+            <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-extrabold text-brand-blue dark:bg-blue-950/60 dark:text-blue-300">{displayedEvents.length} classes</span>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200/60 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/70 dark:text-slate-400">
                   <th className="py-3 px-4">Course</th>
                   <th className="py-3 px-4">Type</th>
                   <th className="py-3 px-4">Day & Time</th>
@@ -1441,7 +1452,7 @@ export const Timetable: React.FC = () => {
                   <th className="py-3 px-4 text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-150/50 dark:divide-slate-800 text-xs text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900">
+              <tbody className="divide-y divide-slate-100 bg-white text-xs text-slate-700 dark:divide-slate-800 dark:bg-slate-900 dark:text-slate-200">
                 {displayedEvents.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-12 text-center text-slate-400 dark:text-slate-500 font-medium">
@@ -1450,7 +1461,7 @@ export const Timetable: React.FC = () => {
                   </tr>
                 ) : (
                   displayedEvents.map(ev => (
-                    <tr key={ev.id} className="hover:bg-slate-50/30 dark:hover:bg-slate-800/30 transition-colors">
+                    <tr key={ev.id} className="transition-colors hover:bg-blue-50/40 dark:hover:bg-slate-800/50">
                       <td className="py-3 px-4">
                         <span className="font-extrabold font-mono tracking-wider">{ev.courseCode}</span>
                         <span className="font-bold text-slate-500 dark:text-slate-400 ml-2">{ev.courseName}</span>
@@ -1460,7 +1471,8 @@ export const Timetable: React.FC = () => {
                       <td className="py-3 px-4 font-semibold">{ev.room}</td>
                       <td className="py-3 px-4 text-right">
                         <button onClick={() => openEdit(ev)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-800 dark:bg-slate-700 text-white text-[11px] font-bold hover:bg-slate-700 dark:hover:bg-slate-600 transition-colors cursor-pointer">
+                          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-blue px-3 text-[11px] font-bold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow-md">
+                          <Pencil className="h-3.5 w-3.5" />
                           Edit
                         </button>
                       </td>
@@ -1474,44 +1486,85 @@ export const Timetable: React.FC = () => {
       )}
 
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !saving && setEditing(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-bold text-slate-800">
-              Edit {editing.group} — {editing.courseCode}
-            </h3>
-            <div className="space-y-3 text-sm">
-              <label className="block">
-                <span className="text-xs font-bold text-slate-500 uppercase">Day</span>
-                <select value={editForm.day} onChange={e => setEditForm({ ...editForm, day: e.target.value })}
-                  className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2">
-                  {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </label>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm" onClick={() => !saving && setEditing(null)}>
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between border-b border-slate-200 p-5 dark:border-slate-800">
               <div className="flex gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-brand-blue dark:bg-blue-950/60 dark:text-blue-300"><CalendarDays className="h-5 w-5" /></div>
+                <div><h3 className="text-sm font-extrabold text-slate-900 dark:text-white">Edit class time</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{editing.courseCode} · {editing.group}</p></div>
+              </div>
+              <button type="button" onClick={() => setEditing(null)} disabled={saving} aria-label="Close edit dialog" className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-white"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-4 p-5 text-sm">
+              <div className="relative">
+                <span className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400">Day</span>
+                <button
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded={isDayDropdownOpen}
+                  onClick={() => setIsDayDropdownOpen(!isDayDropdownOpen)}
+                  className={`mt-1.5 flex h-11 w-full items-center justify-between rounded-xl border px-3.5 text-left text-sm font-semibold text-slate-800 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${
+                    isDayDropdownOpen
+                      ? 'border-brand-blue bg-white ring-2 ring-blue-500/15 dark:border-blue-400'
+                      : 'border-slate-300 bg-slate-50 hover:border-blue-300 hover:bg-white dark:border-slate-700'
+                  }`}
+                >
+                  <span>{editForm.day}</span>
+                  <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isDayDropdownOpen ? 'rotate-180 text-brand-blue' : ''}`} />
+                </button>
+                {isDayDropdownOpen && (
+                  <div role="listbox" className="absolute left-0 right-0 z-30 mt-2 space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
+                      const isSelected = editForm.day === day;
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          onClick={() => {
+                            setEditForm({ ...editForm, day });
+                            setIsDayDropdownOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-semibold transition-colors ${
+                            isSelected
+                              ? 'bg-brand-blue text-white shadow-sm'
+                              : 'text-slate-700 hover:bg-blue-50 hover:text-brand-blue dark:text-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          <span>{day}</span>
+                          {isSelected && <Check className="h-4 w-4" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
                 <label className="flex-1">
                   <span className="text-xs font-bold text-slate-500 uppercase">Start</span>
                   <input type="time" min="08:00" max="21:00" value={editForm.start}
                     onChange={e => setEditForm({ ...editForm, start: e.target.value })}
-                    className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+                    className="mt-1.5 h-11 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 focus:border-brand-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
                 </label>
                 <label className="flex-1">
                   <span className="text-xs font-bold text-slate-500 uppercase">End</span>
                   <input type="time" min="09:00" max="22:00" value={editForm.end}
                     onChange={e => setEditForm({ ...editForm, end: e.target.value })}
-                    className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+                    className="mt-1.5 h-11 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 focus:border-brand-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
                 </label>
               </div>
               <label className="block">
                 <span className="text-xs font-bold text-slate-500 uppercase">Room</span>
                 <input type="text" value={editForm.room} onChange={e => setEditForm({ ...editForm, room: e.target.value })}
-                  className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+                  className="mt-1.5 h-11 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 focus:border-brand-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
               </label>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-900">
               <button onClick={() => setEditing(null)} disabled={saving}
-                className="px-4 py-2 rounded-lg text-slate-600 font-bold hover:bg-slate-100">Cancel</button>
+                className="h-10 rounded-xl px-4 text-slate-600 font-bold hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
               <button onClick={saveEdit} disabled={saving}
-                className="px-4 py-2 rounded-lg bg-slate-800 text-white font-bold hover:bg-slate-700 disabled:opacity-50">
+                className="h-10 rounded-xl bg-brand-blue px-5 text-white font-bold shadow-sm hover:bg-blue-700 disabled:opacity-50">
                 {saving ? 'Saving...' : 'Save'}
               </button>
             </div>

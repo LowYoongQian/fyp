@@ -72,6 +72,7 @@ class TokenResponse(BaseModel):
     code: Optional[str] = None              # student_code or staff_id
     email: Optional[str] = None
     is_face_registered: Optional[bool] = None
+    recovery_email_verified: Optional[bool] = None
 
 # LLM Chatbot Schemas
 class QueryRequest(BaseModel):

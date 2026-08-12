@@ -45,11 +45,18 @@ class MainAppState extends State<MainApp> {
   Map<String, dynamic> _translations = const {
     'en': {
       'common': {
-        'dashboard': 'Dashboard', 'timetable': 'Timetable', 'attendance': 'Attendance',
-        'settings': 'Settings', 'logout': 'Sign Out', 'save': 'Save Preferences',
-        'cancel': 'Cancel', 'search': 'Search language or region...',
-        'language': 'Language & Locale', 'theme': 'Appearance Theme',
-        'notifications': 'Notifications', 'security': 'Security & Biometrics',
+        'dashboard': 'Dashboard',
+        'timetable': 'Timetable',
+        'attendance': 'Attendance',
+        'settings': 'Settings',
+        'logout': 'Sign Out',
+        'save': 'Save Preferences',
+        'cancel': 'Cancel',
+        'search': 'Search language or region...',
+        'language': 'Language & Locale',
+        'theme': 'Appearance Theme',
+        'notifications': 'Notifications',
+        'security': 'Security & Biometrics',
       },
     },
   };
@@ -143,7 +150,9 @@ class MainAppState extends State<MainApp> {
     final catalogue = await UserService.fetchSystemLanguages();
     if (!mounted) return;
     setState(() {
-      _languageCode = languageCode == 'zh_CN' || languageCode == 'zh_TW' ? 'zh' : languageCode;
+      _languageCode = languageCode == 'zh_CN' || languageCode == 'zh_TW'
+          ? 'zh'
+          : languageCode;
       final remoteTranslations = catalogue?['translations'];
       if (remoteTranslations is Map) {
         _translations = Map<String, dynamic>.from(remoteTranslations);
@@ -163,14 +172,17 @@ class MainAppState extends State<MainApp> {
       darkTheme: _darkThemeData,
       themeMode: _themeMode,
       builder: (context, child) {
-        final isDarkMode = _themeMode == ThemeMode.dark ||
+        final isDarkMode =
+            _themeMode == ThemeMode.dark ||
             (_themeMode == ThemeMode.system &&
                 MediaQuery.platformBrightnessOf(context) == Brightness.dark);
         return AppLocalizations(
           languageCode: _languageCode,
           translations: _translations,
           child: Directionality(
-            textDirection: _languageCode == 'ar' ? TextDirection.rtl : TextDirection.ltr,
+            textDirection: _languageCode == 'ar'
+                ? TextDirection.rtl
+                : TextDirection.ltr,
             child: AnimatedTheme(
               data: isDarkMode ? _darkThemeData : _lightThemeData,
               duration: const Duration(milliseconds: 350),
@@ -215,7 +227,9 @@ class ApiConfig {
   static String getEffectiveUrl() {
     // 1. Flutter Web -> ALWAYS use Production Railway HTTPS Backend
     if (kIsWeb) {
-      if (customUrl != null && customUrl!.trim().isNotEmpty && customUrl!.trim().startsWith('https://')) {
+      if (customUrl != null &&
+          customUrl!.trim().isNotEmpty &&
+          customUrl!.trim().startsWith('https://')) {
         String url = customUrl!.trim();
         if (url.endsWith('/')) url = url.substring(0, url.length - 1);
         return url;
@@ -296,7 +310,7 @@ class _AppRootState extends State<AppRoot> {
       try {
         final prefs = await SharedPreferences.getInstance();
         final savedCustomUrl = prefs.getString('custom_api_url');
-        
+
         // 1. Try saved/cached URL first if exists
         if (savedCustomUrl != null && savedCustomUrl.isNotEmpty) {
           final isAlive = await ServerDiscoveryService.checkUrl(savedCustomUrl);
@@ -305,7 +319,9 @@ class _AppRootState extends State<AppRoot> {
             debugPrint("Using working cached API Server: $savedCustomUrl");
           } else {
             // If cached URL is dead, run discovery
-            debugPrint("Cached API Server is unreachable. Initiating auto-discovery...");
+            debugPrint(
+              "Cached API Server is unreachable. Initiating auto-discovery...",
+            );
             final discovered = await ServerDiscoveryService.discoverServer();
             if (discovered != null) {
               ApiConfig.customUrl = discovered;
@@ -337,7 +353,9 @@ class _AppRootState extends State<AppRoot> {
         await prefs.remove('custom_api_url');
       } catch (_) {}
       ApiConfig.customUrl = null;
-      debugPrint("Remote backend configured (${AppConfig.productionApiUrl}); skipping LAN discovery.");
+      debugPrint(
+        "Remote backend configured (${AppConfig.productionApiUrl}); skipping LAN discovery.",
+      );
     }
 
     try {
@@ -357,24 +375,32 @@ class _AppRootState extends State<AppRoot> {
   Future<void> _performClockSync({int retries = 5}) async {
     try {
       final effectiveUrl = ApiConfig.getEffectiveUrl();
-      final serverTimeRes = await http.get(
-        Uri.parse('$effectiveUrl/auth/server-time'),
-        headers: {'Content-Type': 'application/json'},
-      ).timeout(const Duration(seconds: 5));
+      final serverTimeRes = await http
+          .get(
+            Uri.parse('$effectiveUrl/auth/server-time'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 5));
       if (serverTimeRes.statusCode == 200) {
         final serverTimeStr = jsonDecode(serverTimeRes.body)['server_time'];
         final serverTime = DateTime.parse(serverTimeStr).toLocal();
         final localTime = DateTime.now();
         ApiConfig.serverOffset = serverTime.difference(localTime);
-        debugPrint("Synced server time offset: ${ApiConfig.serverOffset.inMilliseconds} ms");
+        debugPrint(
+          "Synced server time offset: ${ApiConfig.serverOffset.inMilliseconds} ms",
+        );
         if (mounted) setState(() {});
       }
     } catch (e) {
       debugPrint("Clock sync failed ($retries retries left): $e");
-      
+
       // Fallback from localhost (adb reverse) to emulator host alias (10.0.2.2) if on Android and initial connection fails.
-      if (!kIsWeb && ApiConfig.useAdbReverse && defaultTargetPlatform == TargetPlatform.android) {
-        debugPrint("Android connection failed, switching adb-reverse tunnel off to use 10.0.2.2.");
+      if (!kIsWeb &&
+          ApiConfig.useAdbReverse &&
+          defaultTargetPlatform == TargetPlatform.android) {
+        debugPrint(
+          "Android connection failed, switching adb-reverse tunnel off to use 10.0.2.2.",
+        );
         ApiConfig.useAdbReverse = false;
       }
 
@@ -391,15 +417,25 @@ class _AppRootState extends State<AppRoot> {
   // Authenticated HTTP helpers. Every mobile read/write goes through the
   // FastAPI backend (no direct DB), sending the JWT as a Bearer token.
   // -------------------------------------------------------------------
+  final Map<String, Future<http.Response>> _pendingApiGets = {};
+
   Future<http.Response> _apiGet(String path, BuildContext context) {
+    final existing = _pendingApiGets[path];
+    if (existing != null) return existing;
     final apiUrl = ApiConfig.getEffectiveUrl();
-    return http.get(
-      Uri.parse('$apiUrl$path'),
-      headers: {
-        'Content-Type': 'application/json',
-        if (studentAuthToken.isNotEmpty) 'Authorization': 'Bearer $studentAuthToken',
-      },
-    ).timeout(const Duration(seconds: 12));
+    final request = http
+        .get(
+          Uri.parse('$apiUrl$path'),
+          headers: {
+            'Content-Type': 'application/json',
+            if (studentAuthToken.isNotEmpty)
+              'Authorization': 'Bearer $studentAuthToken',
+          },
+        )
+        .timeout(const Duration(seconds: 12))
+        .whenComplete(() => _pendingApiGets.remove(path));
+    _pendingApiGets[path] = request;
+    return request;
   }
 
   /// Maps a backend/HTTP failure to a short, user-friendly message.
@@ -415,7 +451,12 @@ class _AppRootState extends State<AppRoot> {
   }
 
   // Unified Multi-Portal Login Router (backend-only).
-  Future<void> handleLogin(String emailOrId, String password, String portalType, BuildContext context) async {
+  Future<void> handleLogin(
+    String emailOrId,
+    String password,
+    String portalType,
+    BuildContext context,
+  ) async {
     setState(() => isSyncing = true);
     try {
       final String rawInput = emailOrId.trim();
@@ -428,15 +469,25 @@ class _AppRootState extends State<AppRoot> {
       final apiUrl = ApiConfig.getEffectiveUrl();
       final http.Response response;
       try {
-        response = await http.post(
-          Uri.parse('$apiUrl/auth/login'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'identifier': rawInput, 'password': password, 'device_id': deviceId}),
-        ).timeout(const Duration(seconds: 12));
+        response = await http
+            .post(
+              Uri.parse('$apiUrl/auth/login'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'identifier': rawInput,
+                'password': password,
+                'device_id': deviceId,
+              }),
+            )
+            .timeout(const Duration(seconds: 12));
       } on TimeoutException {
-        throw Exception("The server took too long to respond. Check your connection and that the backend is running.");
+        throw Exception(
+          "The server took too long to respond. Check your connection and that the backend is running.",
+        );
       } catch (_) {
-        throw Exception("Cannot reach the server. Make sure the backend is running and the API address is correct.");
+        throw Exception(
+          "Cannot reach the server. Make sure the backend is running and the API address is correct.",
+        );
       }
 
       if (response.statusCode == 401) {
@@ -456,8 +507,14 @@ class _AppRootState extends State<AppRoot> {
       }
 
       final token = authData['access_token'] as String;
-      final sId = int.tryParse((authData['profile_id'] ?? authData['user_id']).toString()) ?? 0;
-      final name = (authData['name'] ?? (portalType == 'student' ? 'Student' : 'Staff')) as String;
+      final sId =
+          int.tryParse(
+            (authData['profile_id'] ?? authData['user_id']).toString(),
+          ) ??
+          0;
+      final name =
+          (authData['name'] ?? (portalType == 'student' ? 'Student' : 'Staff'))
+              as String;
       final code = (authData['code'] ?? rawInput) as String;
       final resolvedEmail = (authData['email'] ?? rawInput) as String;
       final faceReg = (authData['is_face_registered'] ?? false) as bool;
@@ -478,7 +535,8 @@ class _AppRootState extends State<AppRoot> {
           staffEmail = resolvedEmail;
           staffName = name;
           staffCode = code;
-          staffRole = (authData['staff_role'] ?? authData['role'] ?? 'Lecturer').toString();
+          staffRole = (authData['staff_role'] ?? authData['role'] ?? 'Lecturer')
+              .toString();
           if (staffRole.toLowerCase() == 'lecturer') staffRole = 'Lecturer';
           if (staffRole.toLowerCase() == 'admin') staffRole = 'Admin';
           if (staffRole.toLowerCase() == 'tutor') staffRole = 'Tutor';
@@ -487,7 +545,14 @@ class _AppRootState extends State<AppRoot> {
       });
 
       if (portalType == 'student') {
-        await syncData(context);
+        // Authentication is complete: reveal the cached/empty dashboard now and
+        // refresh its data in the background. A slow endpoint must not trap the
+        // user behind the full-screen login skeleton.
+        setState(() => isSyncing = false);
+        if (authData['recovery_email_verified'] != true) {
+          await _setupRecoveryEmail(context, token);
+        }
+        unawaited(syncData(context));
         if (!isFaceRegistered) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _showFaceRegistrationPrompt(context);
@@ -499,6 +564,127 @@ class _AppRootState extends State<AppRoot> {
     } finally {
       setState(() => isSyncing = false);
     }
+  }
+
+  Future<void> _setupRecoveryEmail(BuildContext context, String token) async {
+    final emailController = TextEditingController();
+    final codeController = TextEditingController();
+    String? error;
+    bool codeSent = false;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Text(codeSent ? 'Check your Gmail' : 'Add a recovery email'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                codeSent
+                    ? 'Enter the 6-digit code we sent.'
+                    : 'Use your personal Gmail for password resets.',
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: codeSent ? codeController : emailController,
+                keyboardType: codeSent
+                    ? TextInputType.number
+                    : TextInputType.emailAddress,
+                decoration: InputDecoration(
+                  labelText: codeSent ? 'Verification code' : 'Gmail address',
+                  hintText: codeSent ? '000000' : 'yourname@gmail.com',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  error!,
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                final leave = await showDialog<bool>(
+                  context: dialogContext,
+                  barrierDismissible: false,
+                  builder: (warningContext) => AlertDialog(
+                    icon: const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Color(0xFFDC2626),
+                      size: 44,
+                    ),
+                    title: const Text('Account recovery is not set'),
+                    content: const Text(
+                      'Without a verified Gmail, you cannot reset your password if you lose it. Add one as soon as possible.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(warningContext, false),
+                        child: const Text('Go Back'),
+                      ),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Color(0xFFDC2626),
+                        ),
+                        onPressed: () => Navigator.pop(warningContext, true),
+                        child: const Text('Skip for Now'),
+                      ),
+                    ],
+                  ),
+                );
+                if (leave == true && dialogContext.mounted) {
+                  Navigator.pop(dialogContext);
+                }
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                try {
+                  if (!codeSent) {
+                    final email = emailController.text.trim().toLowerCase();
+                    if (!email.endsWith('@gmail.com')) {
+                      throw Exception('Enter a Gmail address.');
+                    }
+                    await UserService.requestRecoveryEmail(email, token);
+                    setDialogState(() {
+                      codeSent = true;
+                      error = null;
+                    });
+                  } else {
+                    final code = codeController.text.trim();
+                    if (!RegExp(r'^\d{6}$').hasMatch(code)) {
+                      throw Exception('Enter the 6-digit code.');
+                    }
+                    await UserService.verifyRecoveryEmail(code, token);
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                  }
+                } catch (e) {
+                  setDialogState(
+                    () => error = e.toString().replaceAll('Exception: ', ''),
+                  );
+                }
+              },
+              child: Text(codeSent ? 'Verify Email' : 'Send Code'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Extract a backend error `detail` string, or fall back to [fallback].
@@ -513,10 +699,12 @@ class _AppRootState extends State<AppRoot> {
   Future<void> fetchPublicAnnouncements() async {
     try {
       final effectiveUrl = ApiConfig.getEffectiveUrl();
-      final response = await http.get(
-        Uri.parse('$effectiveUrl/public/announcements'),
-        headers: {'Content-Type': 'application/json'},
-      ).timeout(const Duration(seconds: 8));
+      final response = await http
+          .get(
+            Uri.parse('$effectiveUrl/public/announcements'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200) {
         final List<dynamic> raw = jsonDecode(response.body) as List<dynamic>;
@@ -545,34 +733,114 @@ class _AppRootState extends State<AppRoot> {
     }
   }
 
+  List<Map<String, dynamic>> _mapStudentSchedule(List<dynamic> courses) {
+    final schedule = <Map<String, dynamic>>[];
+    for (final c in courses) {
+      final day = c['schedule_day'] as String?;
+      final start = c['schedule_start'] as String?;
+      final end = c['schedule_end'] as String?;
+      final room = c['schedule_room'] as String?;
+      if (day == null || start == null || end == null) continue;
+
+      schedule.add({
+        'courseCode': c['course_code'] ?? 'Unknown',
+        'courseName': c['course_name'] ?? 'Unknown',
+        'group': c['role'] ?? 'Lecture',
+        'classGroup': c['class_group'] ?? 'All',
+        'day': day,
+        'startTime': start,
+        'endTime': end,
+        'room': room ?? 'Main Hall A',
+        'lecturerName': c['lecturer_name'] ?? 'TBA',
+        'attendanceRate': (c['attendance_rate'] as num?)?.toDouble() ?? 100.0,
+      });
+    }
+
+    const daysOrder = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    schedule.sort((a, b) {
+      final dayA = daysOrder.indexOf(a['day']);
+      final dayB = daysOrder.indexOf(b['day']);
+      if (dayA != dayB) return dayA.compareTo(dayB);
+      return a['startTime'].compareTo(b['startTime']);
+    });
+    return schedule;
+  }
+
+  Future<void> refreshStudentTimetable() async {
+    if (studentAuthToken.isEmpty) return;
+    try {
+      final response = await _apiGet('/students/me/courses', context);
+      if (response.statusCode != 200) return;
+
+      final courses = jsonDecode(response.body) as List<dynamic>;
+      final schedule = _mapStudentSchedule(courses);
+      if (!mounted) return;
+
+      setState(() => studentSchedule = schedule);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_student_schedule', jsonEncode(schedule));
+    } catch (e) {
+      debugPrint('Timetable refresh failed: $e');
+    }
+  }
+
   // Load attendance history + today's check-in status + course timetable from backend.
   Future<void> syncData(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    
+
     // 1. Try loading cached data first for instant user rendering
     final cachedHistory = await LocalCacheService.loadAttendanceCache();
     final cachedScheduleStr = prefs.getString('cached_student_schedule');
-    final cachedAnnouncementsStr = prefs.getString('cached_student_announcements');
-    
+    final cachedAnnouncementsStr = prefs.getString(
+      'cached_student_announcements',
+    );
+
     bool hasCachedData = false;
-    
-    if (cachedHistory.isNotEmpty || cachedScheduleStr != null || cachedAnnouncementsStr != null) {
+
+    if (cachedHistory.isNotEmpty ||
+        cachedScheduleStr != null ||
+        cachedAnnouncementsStr != null) {
       hasCachedData = true;
-      final months = const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      
+      final months = const [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
+
       // Load cached history
       final List<Map<String, dynamic>> mappedHistory = [];
       bool checkedIn = false;
       for (final r in cachedHistory) {
         final markedRaw = r['marked_at'] as String?;
-        final markedAt = markedRaw != null ? DateTime.tryParse(markedRaw)?.toLocal() : null;
+        final markedAt = markedRaw != null
+            ? DateTime.tryParse(markedRaw)?.toLocal()
+            : null;
         final status = (r['status'] ?? 'present') as String;
         String dateLabel = 'Unknown';
         if (markedAt != null) {
-          final isToday = markedAt.year == ApiConfig.now.year &&
+          final isToday =
+              markedAt.year == ApiConfig.now.year &&
               markedAt.month == ApiConfig.now.month &&
               markedAt.day == ApiConfig.now.day;
-          final timeStr = "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
+          final timeStr =
+              "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
           dateLabel = isToday
               ? 'Today, $timeStr'
               : "${months[markedAt.month - 1]} ${markedAt.day}, ${markedAt.year}, $timeStr";
@@ -594,7 +862,9 @@ class _AppRootState extends State<AppRoot> {
       if (cachedScheduleStr != null) {
         try {
           final List<dynamic> decoded = jsonDecode(cachedScheduleStr);
-          mappedSchedule = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          mappedSchedule = decoded
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
         } catch (_) {}
       }
 
@@ -603,7 +873,9 @@ class _AppRootState extends State<AppRoot> {
       if (cachedAnnouncementsStr != null) {
         try {
           final List<dynamic> decoded = jsonDecode(cachedAnnouncementsStr);
-          mappedAnnouncements = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          mappedAnnouncements = decoded
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
         } catch (_) {}
       }
 
@@ -629,63 +901,104 @@ class _AppRootState extends State<AppRoot> {
     }
 
     try {
-      // Sync clock with backend server time
-      try {
-        final serverTimeRes = await http.get(
-          Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/server-time'),
-          headers: {'Content-Type': 'application/json'},
-        ).timeout(const Duration(seconds: 4));
-        if (serverTimeRes.statusCode == 200) {
-          final serverTimeStr = jsonDecode(serverTimeRes.body)['server_time'];
-          final serverUtc = DateTime.parse(serverTimeStr).toUtc();
-          final localUtc = DateTime.now().toUtc();
-          ApiConfig.serverOffset = serverUtc.difference(localUtc);
-          debugPrint("Synced server UTC time offset: ${ApiConfig.serverOffset.inMilliseconds} ms");
+      // Clock synchronization runs beside data requests so it does not delay rendering.
+      final clockSync = () async {
+        try {
+          final serverTimeRes = await http
+              .get(
+                Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/server-time'),
+                headers: {'Content-Type': 'application/json'},
+              )
+              .timeout(const Duration(seconds: 4));
+          if (serverTimeRes.statusCode == 200) {
+            final serverTimeStr = jsonDecode(serverTimeRes.body)['server_time'];
+            final serverUtc = DateTime.parse(serverTimeStr).toUtc();
+            final localUtc = DateTime.now().toUtc();
+            ApiConfig.serverOffset = serverUtc.difference(localUtc);
+            debugPrint(
+              "Synced server UTC time offset: ${ApiConfig.serverOffset.inMilliseconds} ms",
+            );
+          }
+        } catch (e) {
+          debugPrint("Warning: could not sync server offset clock: $e");
         }
-      } catch (e) {
-        debugPrint("Warning: could not sync server offset clock: $e");
-      }
+      }();
+      unawaited(clockSync);
 
-      // Fetch attendance, courses, and announcements concurrently
+      // Fetch attendance, courses, announcements, and clock concurrently.
       final responses = await Future.wait([
         _apiGet('/students/me/attendance', context),
         _apiGet('/students/me/courses', context),
         _apiGet('/students/me/announcements', context),
       ]);
-
       final attendanceRes = responses[0];
       final coursesRes = responses[1];
       final announcementsRes = responses[2];
 
       if (attendanceRes.statusCode != 200) {
-        throw Exception(_detailOf(attendanceRes, 'Could not load attendance (${attendanceRes.statusCode}).'));
+        throw Exception(
+          _detailOf(
+            attendanceRes,
+            'Could not load attendance (${attendanceRes.statusCode}).',
+          ),
+        );
       }
       if (coursesRes.statusCode != 200) {
-        throw Exception(_detailOf(coursesRes, 'Could not load timetable (${coursesRes.statusCode}).'));
+        throw Exception(
+          _detailOf(
+            coursesRes,
+            'Could not load timetable (${coursesRes.statusCode}).',
+          ),
+        );
       }
       if (announcementsRes.statusCode != 200) {
-        throw Exception(_detailOf(announcementsRes, 'Could not load announcements (${announcementsRes.statusCode}).'));
+        throw Exception(
+          _detailOf(
+            announcementsRes,
+            'Could not load announcements (${announcementsRes.statusCode}).',
+          ),
+        );
       }
 
-      final List<dynamic> rows = jsonDecode(attendanceRes.body) as List<dynamic>;
+      final List<dynamic> rows =
+          jsonDecode(attendanceRes.body) as List<dynamic>;
       final List<Map<String, dynamic>> history = [];
       bool checkedIn = false;
-      final months = const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      final months = const [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
 
       for (final r in rows) {
         final markedRaw = r['marked_at'] as String?;
-        final markedAt = markedRaw != null ? DateTime.tryParse(markedRaw)?.toLocal() : null;
+        final markedAt = markedRaw != null
+            ? DateTime.tryParse(markedRaw)?.toLocal()
+            : null;
         final status = (r['status'] ?? 'present') as String;
         final verifyDetail = r['verify_detail'] as String?;
-        
+
         String dateLabel = 'Unknown';
-        if (status == 'absent' && verifyDetail != null && verifyDetail.isNotEmpty) {
+        if (status == 'absent' &&
+            verifyDetail != null &&
+            verifyDetail.isNotEmpty) {
           dateLabel = verifyDetail;
         } else if (markedAt != null) {
-          final isToday = markedAt.year == ApiConfig.now.year &&
+          final isToday =
+              markedAt.year == ApiConfig.now.year &&
               markedAt.month == ApiConfig.now.month &&
               markedAt.day == ApiConfig.now.day;
-          final timeStr = "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
+          final timeStr =
+              "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
           dateLabel = isToday
               ? 'Today, $timeStr'
               : "${months[markedAt.month - 1]} ${markedAt.day}, ${markedAt.year}, $timeStr";
@@ -704,40 +1017,12 @@ class _AppRootState extends State<AppRoot> {
         });
       }
 
-      final List<dynamic> rawCoursesList = jsonDecode(coursesRes.body) as List<dynamic>;
-      final List<Map<String, dynamic>> loadedSchedule = [];
+      final List<dynamic> rawCoursesList =
+          jsonDecode(coursesRes.body) as List<dynamic>;
+      final loadedSchedule = _mapStudentSchedule(rawCoursesList);
 
-      for (final c in rawCoursesList) {
-        final day = c['schedule_day'] as String?;
-        final start = c['schedule_start'] as String?;
-        final end = c['schedule_end'] as String?;
-        final room = c['schedule_room'] as String?;
-        if (day == null || start == null || end == null) continue;
-
-        loadedSchedule.add({
-          'courseCode': c['course_code'] ?? 'Unknown',
-          'courseName': c['course_name'] ?? 'Unknown',
-          'group': c['role'] ?? 'Lecture',
-          'classGroup': c['class_group'] ?? 'All',
-          'day': day,
-          'startTime': start,
-          'endTime': end,
-          'room': room ?? 'Main Hall A',
-          'lecturerName': c['lecturer_name'] ?? 'TBA',
-          'attendanceRate': (c['attendance_rate'] as num?)?.toDouble() ?? 100.0,
-        });
-      }
-
-      // Sort by day of week and start time
-      final daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-      loadedSchedule.sort((a, b) {
-        final dayA = daysOrder.indexOf(a['day']);
-        final dayB = daysOrder.indexOf(b['day']);
-        if (dayA != dayB) return dayA.compareTo(dayB);
-        return a['startTime'].compareTo(b['startTime']);
-      });
-
-      final List<dynamic> rawAnnouncementsList = jsonDecode(announcementsRes.body) as List<dynamic>;
+      final List<dynamic> rawAnnouncementsList =
+          jsonDecode(announcementsRes.body) as List<dynamic>;
       final List<Map<String, dynamic>> loadedAnnouncements = [];
       for (final a in rawAnnouncementsList) {
         loadedAnnouncements.add({
@@ -769,12 +1054,18 @@ class _AppRootState extends State<AppRoot> {
       // Persist to local cache
       final rawRecords = rows.cast<Map<String, dynamic>>();
       await LocalCacheService.saveAttendanceCache(rawRecords);
-      await prefs.setString('cached_student_schedule', jsonEncode(loadedSchedule));
-      await prefs.setString('cached_student_announcements', jsonEncode(loadedAnnouncements));
+      await prefs.setString(
+        'cached_student_schedule',
+        jsonEncode(loadedSchedule),
+      );
+      await prefs.setString(
+        'cached_student_announcements',
+        jsonEncode(loadedAnnouncements),
+      );
     } catch (e) {
       final msg = e.toString();
       debugPrint("Attendance sync failed: $e");
-      
+
       if (!msg.contains("Not authenticated")) {
         setState(() => isDatabaseOffline = true);
 
@@ -837,20 +1128,24 @@ class _AppRootState extends State<AppRoot> {
         'device_id': deviceId,
       };
       try {
-        response = await http.post(
-          Uri.parse('$apiUrl/sessions/$sessionId/attend'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $studentAuthToken',
-          },
-          body: jsonEncode(checkInPayload),
-        ).timeout(const Duration(seconds: 15));
+        response = await http
+            .post(
+              Uri.parse('$apiUrl/sessions/$sessionId/attend'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $studentAuthToken',
+              },
+              body: jsonEncode(checkInPayload),
+            )
+            .timeout(const Duration(seconds: 15));
       } on TimeoutException {
         await LocalCacheService.enqueueCheckIn(sessionId, checkInPayload);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("Server unreachable — check-in queued and will sync when back online."),
+              content: Text(
+                "Server unreachable — check-in queued and will sync when back online.",
+              ),
               backgroundColor: Color(0xFFF59E0B),
             ),
           );
@@ -861,7 +1156,9 @@ class _AppRootState extends State<AppRoot> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("No connection — check-in queued and will sync when back online."),
+              content: Text(
+                "No connection — check-in queued and will sync when back online.",
+              ),
               backgroundColor: Color(0xFFF59E0B),
             ),
           );
@@ -876,7 +1173,8 @@ class _AppRootState extends State<AppRoot> {
         } catch (_) {
           error = 'Server error ${response.statusCode}.';
         }
-        if (response.statusCode == 400 && error.toLowerCase().contains('already registered')) {
+        if (response.statusCode == 400 &&
+            error.toLowerCase().contains('already registered')) {
           await syncData(context);
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -900,14 +1198,18 @@ class _AppRootState extends State<AppRoot> {
 
       if (!mounted) return;
 
-      final bool wifiVerified = resJson['wifi_verified'] == true || (resJson['attendance_record']?['wifi_verified'] == true);
-      final bool liveVerified = resJson['liveness_passed'] == true || livenessPassed;
+      final bool wifiVerified =
+          resJson['wifi_verified'] == true ||
+          (resJson['attendance_record']?['wifi_verified'] == true);
+      final bool liveVerified =
+          resJson['liveness_passed'] == true || livenessPassed;
 
       _showCheckInSuccessModalDialog(
         context,
         courseCode: courseCode,
         courseName: courseName,
-        timeSlot: extraDetails?['timeSlot']?.toString() ?? 'Active Class Session',
+        timeSlot:
+            extraDetails?['timeSlot']?.toString() ?? 'Active Class Session',
         room: extraDetails?['room']?.toString() ?? 'Main Hall A',
         classGroup: extraDetails?['classGroup']?.toString() ?? 'Tut Group G2',
         lecturerName: extraDetails?['lecturerName']?.toString() ?? 'Dr. Low',
@@ -915,7 +1217,6 @@ class _AppRootState extends State<AppRoot> {
         wifiVerified: wifiVerified,
         livenessPassed: liveVerified,
       );
-
     } catch (e) {
       showErrorDialog(e.toString().replaceAll("Exception: ", ""), context);
     } finally {
@@ -941,13 +1242,37 @@ class _AppRootState extends State<AppRoot> {
       builder: (ctx) {
         final isDark = Theme.of(ctx).brightness == Brightness.dark;
         final now = DateTime.now();
-        final daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        final daysOrder = [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday',
+        ];
         final dayName = daysOrder[now.weekday - 1];
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        final formattedDate = "$dayName, ${now.day.toString().padLeft(2, '0')} ${months[now.month - 1]} ${now.year}";
+        const months = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
+        final formattedDate =
+            "$dayName, ${now.day.toString().padLeft(2, '0')} ${months[now.month - 1]} ${now.year}";
 
         return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
           backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
           elevation: 12,
           child: Padding(
@@ -984,7 +1309,9 @@ class _AppRootState extends State<AppRoot> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 12,
-                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+                    color: isDark
+                        ? const Color(0xFF94A3B8)
+                        : const Color(0xFF475569),
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -994,10 +1321,14 @@ class _AppRootState extends State<AppRoot> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                    color: isDark
+                        ? const Color(0xFF0F172A)
+                        : const Color(0xFFF8FAFC),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                      color: isDark
+                          ? const Color(0xFF1E293B)
+                          : const Color(0xFFE2E8F0),
                     ),
                   ),
                   child: Column(
@@ -1013,7 +1344,11 @@ class _AppRootState extends State<AppRoot> {
                               color: const Color(0xFF2563EB).withOpacity(0.1),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.school_rounded, color: Color(0xFF2563EB), size: 20),
+                            child: const Icon(
+                              Icons.school_rounded,
+                              color: Color(0xFF2563EB),
+                              size: 20,
+                            ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
@@ -1025,16 +1360,21 @@ class _AppRootState extends State<AppRoot> {
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 14,
-                                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                                    color: isDark
+                                        ? Colors.white
+                                        : const Color(0xFF0F172A),
                                   ),
                                 ),
-                                if (classGroup.isNotEmpty || room.isNotEmpty) ...[
+                                if (classGroup.isNotEmpty ||
+                                    room.isNotEmpty) ...[
                                   const SizedBox(height: 2),
                                   Text(
                                     "$classGroup • $room",
                                     style: TextStyle(
                                       fontSize: 11,
-                                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                      color: isDark
+                                          ? const Color(0xFF94A3B8)
+                                          : const Color(0xFF64748B),
                                     ),
                                   ),
                                 ],
@@ -1076,7 +1416,10 @@ class _AppRootState extends State<AppRoot> {
                   children: [
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 8,
+                          horizontal: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: wifiVerified
                               ? const Color(0xFF10B981).withOpacity(0.1)
@@ -1094,7 +1437,9 @@ class _AppRootState extends State<AppRoot> {
                             Icon(
                               Icons.wifi_rounded,
                               size: 14,
-                              color: wifiVerified ? const Color(0xFF10B981) : const Color(0xFFD97706),
+                              color: wifiVerified
+                                  ? const Color(0xFF10B981)
+                                  : const Color(0xFFD97706),
                             ),
                             const SizedBox(width: 6),
                             Text(
@@ -1102,7 +1447,9 @@ class _AppRootState extends State<AppRoot> {
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: wifiVerified ? const Color(0xFF059669) : const Color(0xFFD97706),
+                                color: wifiVerified
+                                    ? const Color(0xFF059669)
+                                    : const Color(0xFFD97706),
                               ),
                             ),
                           ],
@@ -1112,7 +1459,10 @@ class _AppRootState extends State<AppRoot> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 8,
+                          horizontal: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: livenessPassed
                               ? const Color(0xFF10B981).withOpacity(0.1)
@@ -1130,15 +1480,21 @@ class _AppRootState extends State<AppRoot> {
                             Icon(
                               Icons.face_rounded,
                               size: 14,
-                              color: livenessPassed ? const Color(0xFF10B981) : const Color(0xFFD97706),
+                              color: livenessPassed
+                                  ? const Color(0xFF10B981)
+                                  : const Color(0xFFD97706),
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              livenessPassed ? "Liveness Passed" : "Liveness Alert",
+                              livenessPassed
+                                  ? "Liveness Passed"
+                                  : "Liveness Alert",
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: livenessPassed ? const Color(0xFF059669) : const Color(0xFFD97706),
+                                color: livenessPassed
+                                    ? const Color(0xFF059669)
+                                    : const Color(0xFFD97706),
                               ),
                             ),
                           ],
@@ -1158,12 +1514,17 @@ class _AppRootState extends State<AppRoot> {
                       backgroundColor: const Color(0xFF10B981),
                       foregroundColor: Colors.white,
                       elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                     onPressed: () => Navigator.pop(ctx),
                     child: const Text(
                       "Done",
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
                     ),
                   ),
                 ),
@@ -1196,7 +1557,9 @@ class _AppRootState extends State<AppRoot> {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  color: isDark
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
                 ),
               ),
               const SizedBox(height: 1),
@@ -1205,7 +1568,9 @@ class _AppRootState extends State<AppRoot> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
+                  color: isDark
+                      ? const Color(0xFFE2E8F0)
+                      : const Color(0xFF1E293B),
                 ),
               ),
             ],
@@ -1236,7 +1601,9 @@ class _AppRootState extends State<AppRoot> {
             if (imageBase64 == null || imageBase64.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text("Face registration cancelled: no selfie captured."),
+                  content: Text(
+                    "Face registration cancelled: no selfie captured.",
+                  ),
                   backgroundColor: Color(0xFFDC2626),
                 ),
               );
@@ -1245,7 +1612,9 @@ class _AppRootState extends State<AppRoot> {
             if (!livenessPassed) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text("Liveness check not completed. Please try the gesture challenge again."),
+                  content: Text(
+                    "Liveness check not completed. Please try the gesture challenge again.",
+                  ),
                   backgroundColor: Color(0xFFDC2626),
                 ),
               );
@@ -1258,22 +1627,33 @@ class _AppRootState extends State<AppRoot> {
               final apiUrl = ApiConfig.getEffectiveUrl();
               final http.Response response;
               try {
-                response = await http.post(
-                  Uri.parse('$apiUrl/students/me/face'),
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer $studentAuthToken',
-                  },
-                  body: jsonEncode({'image_base64': imageBase64}),
-                ).timeout(const Duration(seconds: 15));
+                response = await http
+                    .post(
+                      Uri.parse('$apiUrl/students/me/face'),
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer $studentAuthToken',
+                      },
+                      body: jsonEncode({'image_base64': imageBase64}),
+                    )
+                    .timeout(const Duration(seconds: 15));
               } on TimeoutException {
-                throw Exception("The server took too long to respond. Please try again.");
+                throw Exception(
+                  "The server took too long to respond. Please try again.",
+                );
               } catch (_) {
-                throw Exception("Cannot reach the server. Make sure the backend is running.");
+                throw Exception(
+                  "Cannot reach the server. Make sure the backend is running.",
+                );
               }
 
               if (response.statusCode != 200) {
-                throw Exception(_detailOf(response, 'Face registration failed (${response.statusCode}).'));
+                throw Exception(
+                  _detailOf(
+                    response,
+                    'Face registration failed (${response.statusCode}).',
+                  ),
+                );
               }
 
               if (!mounted) return;
@@ -1324,22 +1704,33 @@ class _AppRootState extends State<AppRoot> {
               final apiUrl = ApiConfig.getEffectiveUrl();
               final http.Response response;
               try {
-                response = await http.post(
-                  Uri.parse('$apiUrl/students/me/face/verify'),
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer $studentAuthToken',
-                  },
-                  body: jsonEncode({'image_base64': imageBase64}),
-                ).timeout(const Duration(seconds: 20));
+                response = await http
+                    .post(
+                      Uri.parse('$apiUrl/students/me/face/verify'),
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer $studentAuthToken',
+                      },
+                      body: jsonEncode({'image_base64': imageBase64}),
+                    )
+                    .timeout(const Duration(seconds: 20));
               } on TimeoutException {
-                throw Exception("The server took too long to respond. Please try again.");
+                throw Exception(
+                  "The server took too long to respond. Please try again.",
+                );
               } catch (_) {
-                throw Exception("Cannot reach the server. Make sure the backend is running.");
+                throw Exception(
+                  "Cannot reach the server. Make sure the backend is running.",
+                );
               }
 
               if (response.statusCode != 200) {
-                throw Exception(_detailOf(response, 'Face match test failed (${response.statusCode}).'));
+                throw Exception(
+                  _detailOf(
+                    response,
+                    'Face match test failed (${response.statusCode}).',
+                  ),
+                );
               }
 
               final result = jsonDecode(response.body) as Map<String, dynamic>;
@@ -1354,8 +1745,12 @@ class _AppRootState extends State<AppRoot> {
                   title: Row(
                     children: [
                       Icon(
-                        matched ? Icons.verified_user : Icons.report_gmailerrorred,
-                        color: matched ? const Color(0xFF10B981) : const Color(0xFFDC2626),
+                        matched
+                            ? Icons.verified_user
+                            : Icons.report_gmailerrorred,
+                        color: matched
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFDC2626),
                       ),
                       const SizedBox(width: 8),
                       Text(matched ? "Face Matched" : "No Match"),
@@ -1364,10 +1759,10 @@ class _AppRootState extends State<AppRoot> {
                   content: Text(
                     matched
                         ? "Identity confirmed as ${result['student_name']}.\n\n"
-                          "Distance $distance (threshold $threshold).\n"
-                          "Lower is a closer match."
+                              "Distance $distance (threshold $threshold).\n"
+                              "Lower is a closer match."
                         : "This face does not match the registered profile.\n\n"
-                          "Distance $distance exceeds the threshold of $threshold.",
+                              "Distance $distance exceeds the threshold of $threshold.",
                     style: GoogleFonts.inter(fontSize: 12.5),
                   ),
                   actions: [
@@ -1395,10 +1790,16 @@ class _AppRootState extends State<AppRoot> {
       barrierDismissible: false,
       builder: (BuildContext ctx) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Row(
             children: [
-              const Icon(Icons.face_retouching_natural, color: Color(0xFF2563EB), size: 28),
+              const Icon(
+                Icons.face_retouching_natural,
+                color: Color(0xFF2563EB),
+                size: 28,
+              ),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(
@@ -1414,12 +1815,18 @@ class _AppRootState extends State<AppRoot> {
             children: [
               Text(
                 "Welcome, $studentName!",
-                style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 14),
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
               const SizedBox(height: 8),
               Text(
                 "To enable attendance check-in and biometric verification, you need to register your face profile.",
-                style: GoogleFonts.inter(color: const Color(0xFF475569), fontSize: 13),
+                style: GoogleFonts.inter(
+                  color: const Color(0xFF475569),
+                  fontSize: 13,
+                ),
               ),
               const SizedBox(height: 12),
               Container(
@@ -1431,12 +1838,20 @@ class _AppRootState extends State<AppRoot> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.light_mode, color: Color(0xFF16A34A), size: 16),
+                    const Icon(
+                      Icons.light_mode,
+                      color: Color(0xFF16A34A),
+                      size: 16,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         "Please take the selfie in a well-lit area.",
-                        style: GoogleFonts.inter(color: const Color(0xFF15803D), fontSize: 11.5, fontWeight: FontWeight.w500),
+                        style: GoogleFonts.inter(
+                          color: const Color(0xFF15803D),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                   ],
@@ -1449,7 +1864,10 @@ class _AppRootState extends State<AppRoot> {
               onPressed: () => Navigator.pop(ctx),
               child: Text(
                 "Later",
-                style: GoogleFonts.inter(color: const Color(0xFF64748B), fontWeight: FontWeight.w600),
+                style: GoogleFonts.inter(
+                  color: const Color(0xFF64748B),
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             ElevatedButton(
@@ -1460,7 +1878,9 @@ class _AppRootState extends State<AppRoot> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2563EB),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
               child: Text(
                 "Register Now",
@@ -1481,44 +1901,68 @@ class _AppRootState extends State<AppRoot> {
       attendanceHistory = [];
       studentAnnouncements = [];
     });
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.remove('cached_student_schedule');
-      prefs.remove('cached_student_announcements');
-      prefs.remove('cached_active_sessions');
-    }).catchError((e) {
-      debugPrint("Failed to clear logout cache: $e");
-    });
+    SharedPreferences.getInstance()
+        .then((prefs) {
+          prefs.remove('cached_student_schedule');
+          prefs.remove('cached_student_announcements');
+          prefs.remove('cached_active_sessions');
+        })
+        .catchError((e) {
+          debugPrint("Failed to clear logout cache: $e");
+        });
   }
 
   void handleStaffLogout() {
+    final previousStaffId = staffId;
     setState(() {
       staffAuthToken = "";
       isStaffLoggedIn = false;
     });
+    SharedPreferences.getInstance()
+        .then((prefs) async {
+          await prefs.remove('cached_staff_${previousStaffId}_timetable');
+          await prefs.remove('cached_staff_${previousStaffId}_courses');
+        })
+        .catchError((e) {
+          debugPrint("Failed to clear staff logout cache: $e");
+        });
   }
 
   String _friendlyStudentError(String rawMsg) {
     final lower = rawMsg.toLowerCase();
 
-    if (lower.contains('face') && (lower.contains('not match') || lower.contains('mismatch') || lower.contains('no match') || lower.contains('failed'))) {
+    if (lower.contains('face') &&
+        (lower.contains('not match') ||
+            lower.contains('mismatch') ||
+            lower.contains('no match') ||
+            lower.contains('failed'))) {
       return "Face Match Failed: Your face does not match your registered profile. Please make sure your face is clearly visible and try again.";
     }
-    if (lower.contains('liveness') || lower.contains('blink') || lower.contains('nod') || lower.contains('suspicious')) {
+    if (lower.contains('liveness') ||
+        lower.contains('blink') ||
+        lower.contains('nod') ||
+        lower.contains('suspicious')) {
       return "Liveness Verification Failed: We couldn't detect your blink or head movement. Please look directly at the camera and perform the prompt.";
     }
     if (lower.contains('not registered') || lower.contains('register face')) {
       return "Face Registration Required: Please complete your one-time selfie profile registration first.";
     }
-    if (lower.contains('wifi') || lower.contains('network') || lower.contains('bssid') || lower.contains('subnet')) {
+    if (lower.contains('wifi') ||
+        lower.contains('network') ||
+        lower.contains('bssid') ||
+        lower.contains('subnet')) {
       return "Off-Campus Network: You are not connected to the approved campus Wi-Fi network.";
     }
-    if (lower.contains('already registered') || lower.contains('already checked in')) {
+    if (lower.contains('already registered') ||
+        lower.contains('already checked in')) {
       return "Already Checked In: Your attendance for this class session is already verified today.";
     }
     if (lower.contains('closed') || lower.contains('expired')) {
       return "Session Closed: This attendance window has expired or has been closed by your lecturer.";
     }
-    if (lower.contains('socketexception') || lower.contains('connection') || lower.contains('timeout')) {
+    if (lower.contains('socketexception') ||
+        lower.contains('connection') ||
+        lower.contains('timeout')) {
       return "Connection Error: Cannot reach the server. Please check your internet connection.";
     }
     return rawMsg.replaceAll("Exception: ", "").trim();
@@ -1531,13 +1975,22 @@ class _AppRootState extends State<AppRoot> {
       builder: (ctx) {
         final isDark = Theme.of(ctx).brightness == Brightness.dark;
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
           title: const Row(
             children: [
-              Icon(Icons.error_outline_rounded, color: Color(0xFFEF4444), size: 26),
+              Icon(
+                Icons.error_outline_rounded,
+                color: Color(0xFFEF4444),
+                size: 26,
+              ),
               SizedBox(width: 10),
-              Text("Verification Failed", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              Text(
+                "Verification Failed",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
             ],
           ),
           content: Text(
@@ -1553,10 +2006,15 @@ class _AppRootState extends State<AppRoot> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFEF4444),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () => Navigator.pop(ctx),
-              child: const Text("Got It", style: TextStyle(fontWeight: FontWeight.bold)),
+              child: const Text(
+                "Got It",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -1598,14 +2056,36 @@ class _AppRootState extends State<AppRoot> {
                 isSyncing: isSyncing,
                 onLogout: handleStudentLogout,
                 onSyncRequested: () => syncData(context),
-                onCheckInComplete: (sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, {int? challengeMs, Map<String, dynamic>? extraDetails}) => submitAttendance(sessId, ssid, courseCode, courseName, imageBase64, livenessPassed, context, challengeMs: challengeMs, extraDetails: extraDetails),
+                onTimetableRefresh: refreshStudentTimetable,
+                onCheckInComplete:
+                    (
+                      sessId,
+                      ssid,
+                      courseCode,
+                      courseName,
+                      imageBase64,
+                      livenessPassed, {
+                      int? challengeMs,
+                      Map<String, dynamic>? extraDetails,
+                    }) => submitAttendance(
+                      sessId,
+                      ssid,
+                      courseCode,
+                      courseName,
+                      imageBase64,
+                      livenessPassed,
+                      context,
+                      challengeMs: challengeMs,
+                      extraDetails: extraDetails,
+                    ),
                 onRegisterFace: () => registerFace(context),
                 onTestFaceMatch: () => testFaceMatch(context),
               )
             : LoginScreen(
                 portalType: 'student',
                 isSyncing: isSyncing,
-                onLogin: (emailOrId, pass, portal) => handleLogin(emailOrId, pass, portal, context),
+                onLogin: (emailOrId, pass, portal) =>
+                    handleLogin(emailOrId, pass, portal, context),
                 onBackPressed: () => setState(() => selectedTab = 0),
               );
         break;
@@ -1622,12 +2102,14 @@ class _AppRootState extends State<AppRoot> {
                 isDatabaseOffline: isDatabaseOffline,
                 isSyncing: isSyncing,
                 onLogout: handleStaffLogout,
-                onSyncRequested: () => syncData(context), // Reuses direct check syncs
+                onSyncRequested: () =>
+                    syncData(context), // Reuses direct check syncs
               )
             : LoginScreen(
                 portalType: 'staff',
                 isSyncing: isSyncing,
-                onLogin: (emailOrId, pass, portal) => handleLogin(emailOrId, pass, portal, context),
+                onLogin: (emailOrId, pass, portal) =>
+                    handleLogin(emailOrId, pass, portal, context),
                 onBackPressed: () => setState(() => selectedTab = 0),
               );
         break;
@@ -1651,20 +2133,24 @@ class _AppRootState extends State<AppRoot> {
       body: Stack(
         children: [
           const AuroraBackground(),
-          
+
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
             child: KeyedSubtree(
-              key: ValueKey('tab_${selectedTab}_logged_${isStudentLoggedIn || isStaffLoggedIn}'),
+              key: ValueKey(
+                'tab_${selectedTab}_logged_${isStudentLoggedIn || isStaffLoggedIn}',
+              ),
               child: bodyContent,
             ),
           ),
 
           // Loading Overlay (Shimmer Skeleton Screen)
-          if (isSyncing)
+          if (isSyncing && !isStudentLoggedIn && !isStaffLoggedIn)
             Positioned.fill(
               child: Container(
-                color: isDarkMode ? const Color(0xFF121212) : const Color(0xFFF8FAFC),
+                color: isDarkMode
+                    ? const Color(0xFF121212)
+                    : const Color(0xFFF8FAFC),
                 child: const SafeArea(
                   child: ShimmerLoading(
                     isLoading: true,
@@ -1686,10 +2172,12 @@ class _AppRootState extends State<AppRoot> {
       decoration: BoxDecoration(
         boxShadow: [
           BoxShadow(
-            color: isDarkMode ? Colors.black.withValues(alpha: 0.25) : const Color(0xFF94A3B8).withValues(alpha: 0.08),
+            color: isDarkMode
+                ? Colors.black.withValues(alpha: 0.25)
+                : const Color(0xFF94A3B8).withValues(alpha: 0.08),
             blurRadius: 16,
             offset: const Offset(0, 4),
-          )
+          ),
         ],
       ),
       child: ClipRRect(
@@ -1699,10 +2187,14 @@ class _AppRootState extends State<AppRoot> {
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 4),
             decoration: BoxDecoration(
-              color: isDarkMode ? const Color(0xFF1E1E1E).withValues(alpha: 0.8) : Colors.white.withValues(alpha: 0.8),
+              color: isDarkMode
+                  ? const Color(0xFF1E1E1E).withValues(alpha: 0.8)
+                  : Colors.white.withValues(alpha: 0.8),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: isDarkMode ? const Color(0xFF334155).withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.4),
+                color: isDarkMode
+                    ? const Color(0xFF334155).withValues(alpha: 0.4)
+                    : Colors.white.withValues(alpha: 0.4),
                 width: 1.2,
               ),
             ),
@@ -1715,23 +2207,41 @@ class _AppRootState extends State<AppRoot> {
               selectedFontSize: 10,
               unselectedFontSize: 10,
               selectedItemColor: const Color(0xFF2563EB), // deep branding blue
-              unselectedItemColor: isDarkMode ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
-              selectedLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold),
-              unselectedLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.w500),
+              unselectedItemColor: isDarkMode
+                  ? const Color(0xFF64748B)
+                  : const Color(0xFF94A3B8),
+              selectedLabelStyle: GoogleFonts.inter(
+                fontWeight: FontWeight.bold,
+              ),
+              unselectedLabelStyle: GoogleFonts.inter(
+                fontWeight: FontWeight.w500,
+              ),
               items: const [
                 BottomNavigationBarItem(
                   icon: Icon(Icons.home_outlined, size: 18),
-                  activeIcon: Icon(Icons.home, size: 18, color: Color(0xFF2563EB)),
+                  activeIcon: Icon(
+                    Icons.home,
+                    size: 18,
+                    color: Color(0xFF2563EB),
+                  ),
                   label: 'Home',
                 ),
                 BottomNavigationBarItem(
                   icon: Icon(Icons.person_outline, size: 18),
-                  activeIcon: Icon(Icons.person, size: 18, color: Color(0xFF2563EB)),
+                  activeIcon: Icon(
+                    Icons.person,
+                    size: 18,
+                    color: Color(0xFF2563EB),
+                  ),
                   label: 'Student',
                 ),
                 BottomNavigationBarItem(
                   icon: Icon(Icons.people_outline, size: 18),
-                  activeIcon: Icon(Icons.people, size: 18, color: Color(0xFF2563EB)),
+                  activeIcon: Icon(
+                    Icons.people,
+                    size: 18,
+                    color: Color(0xFF2563EB),
+                  ),
                   label: 'Staff',
                 ),
               ],

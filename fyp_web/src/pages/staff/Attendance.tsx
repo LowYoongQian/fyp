@@ -395,6 +395,26 @@ export const Attendance: React.FC = () => {
     absent: records.filter(r => r.status === 'absent').length,
   };
 
+  const selectedCourseLabel = React.useMemo(() => {
+    if (!selectedCourseId) return '---Select Subject Course---';
+    const matchedCourse = courses.find(c =>
+      String(c.id) === String(selectedCourseId) || c.course_code === selectedCourseId
+    );
+    return matchedCourse
+      ? `${matchedCourse.course_code} - ${matchedCourse.course_name}`
+      : selectedCourseId;
+  }, [courses, selectedCourseId]);
+
+  const selectedDateLabel = React.useMemo(() => {
+    if (!selectedDate) return '---Select Session Date---';
+    return new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-MY', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  }, [selectedDate]);
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
@@ -448,20 +468,14 @@ export const Attendance: React.FC = () => {
               
               <div className={`relative ${isCourseDropdownOpen ? 'z-50' : 'z-45'}`}>
                 <button
+                  key={`attendance-course-trigger-${selectedCourseId}`}
                   type="button"
                   onClick={() => setIsCourseDropdownOpen(!isCourseDropdownOpen)}
                   className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
+                  title={selectedCourseLabel}
                 >
-                  <span className="truncate">
-                    {(() => {
-                      const matchedCourse = courses.find(c => 
-                        String(c.id) === String(selectedCourseId) || c.course_code === selectedCourseId
-                      );
-                      if (matchedCourse) {
-                        return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
-                      }
-                      return selectedCourseId ? selectedCourseId : '---Select Subject Course---';
-                    })()}
+                  <span key={`attendance-course-label-${selectedCourseId}`} className="truncate">
+                    {selectedCourseLabel}
                   </span>
                   <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                 </button>
@@ -569,15 +583,15 @@ export const Attendance: React.FC = () => {
 
                 <div className={`relative ${isCalendarOpen ? 'z-50' : 'z-45'}`}>
                   <button
+                    key={`attendance-date-trigger-${selectedDate || 'empty'}`}
                     type="button"
                     onClick={() => setIsCalendarOpen(!isCalendarOpen)}
                     className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
+                    title={selectedDateLabel}
                   >
-                    <span className="truncate flex items-center gap-2">
+                    <span key={`attendance-date-label-${selectedDate || 'empty'}`} className="truncate flex items-center gap-2">
                       <Calendar className="h-3.5 w-3.5 text-slate-450 shrink-0" />
-                      {selectedDate
-                        ? new Date(selectedDate + 'T00:00:00').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-                        : '---Select Session Date---'}
+                      {selectedDateLabel}
                     </span>
                     <div className="flex items-center gap-1.5">
                       {selectedDate && (
