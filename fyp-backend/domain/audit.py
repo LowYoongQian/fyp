@@ -1,6 +1,18 @@
 from sqlalchemy.orm import Session
 from db.models import AuditLog, User
 from typing import Optional
+from contextvars import ContextVar
+
+
+_request_client_ip: ContextVar[Optional[str]] = ContextVar("audit_client_ip", default=None)
+
+
+def set_audit_client_ip(ip_address: str):
+    return _request_client_ip.set(ip_address)
+
+
+def reset_audit_client_ip(token) -> None:
+    _request_client_ip.reset(token)
 
 
 def log_admin_action(db: Session, current_user: User, action: str, details: str) -> Optional[AuditLog]:
@@ -30,7 +42,7 @@ def log_audit_event(
     category: str = "admin",  # 'admin' | 'staff'
     action: str,
     details: Optional[str] = None,
-    ip_address: Optional[str] = "127.0.0.1"
+    ip_address: Optional[str] = None
 ) -> AuditLog:
     """Helper function to insert a real-time audit log into Supabase audit_logs table."""
     try:
@@ -41,7 +53,7 @@ def log_audit_event(
             category=category.lower(),
             action=action,
             details=details,
-            ip_address=ip_address or "127.0.0.1"
+            ip_address=ip_address or _request_client_ip.get() or "127.0.0.1"
         )
         db.add(log)
         db.commit()

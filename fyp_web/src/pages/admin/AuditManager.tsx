@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
 import type { AuditLogEntry } from '../../services/api';
+import { AuditLocationMap } from '../../components/AuditLocationMap';
 import {
   ShieldCheck,
   Search,
@@ -9,7 +11,8 @@ import {
   Eye,
   ChevronLeft,
   ChevronRight,
-  Activity
+  Activity,
+  X
 } from 'lucide-react';
 
 export const AuditManager: React.FC = () => {
@@ -18,14 +21,11 @@ export const AuditManager: React.FC = () => {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [search, setSearch] = useState('');
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
+  const auditDialogRef = useRef<HTMLDivElement>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage] = useState(10);
-
-  useEffect(() => {
-    loadAuditLogs();
-  }, [activeCategory]);
 
   const loadAuditLogs = async () => {
     setLoading(true);
@@ -39,10 +39,75 @@ export const AuditManager: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    // Initial/category fetch intentionally owns this page's loading state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadAuditLogs();
+    // Search remains submit-based; changing tabs is the only automatic reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCategory]);
+
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     loadAuditLogs();
   };
+
+  const closeAuditDialog = () => setSelectedLog(null);
+
+  useEffect(() => {
+    if (!selectedLog) return;
+
+    const dialog = auditDialogRef.current;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    const focusableSelector = [
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[href]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+
+    document.body.style.overflow = 'hidden';
+    const focusFrame = window.requestAnimationFrame(() => {
+      (dialog?.querySelector<HTMLElement>(focusableSelector) || dialog)?.focus();
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAuditDialog();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [selectedLog]);
 
   // Local filtering
   const filteredLogs = logs.filter(log =>
@@ -223,16 +288,30 @@ export const AuditManager: React.FC = () => {
       </div>
 
       {/* AUDIT LOG DETAILS MODAL */}
-      {selectedLog && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl animate-fade-in font-sans">
+      {selectedLog && createPortal((
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-950/55 backdrop-blur-md" onClick={closeAuditDialog} />
+          <div
+            ref={auditDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="audit-details-title"
+            tabIndex={-1}
+            className="relative z-10 flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl outline-none animate-in zoom-in-95 fade-in duration-200 dark:border-slate-700 dark:bg-slate-900 font-sans"
+          >
+            <div className="overflow-y-auto p-6 space-y-5">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <h3 id="audit-details-title" className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-brand-blue" />
                 Audit Log Details
               </h3>
-              <button onClick={() => setSelectedLog(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
-                &times;
+              <button
+                type="button"
+                onClick={closeAuditDialog}
+                aria-label="Close audit details"
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-white"
+              >
+                <X className="h-4 w-4" />
               </button>
             </div>
 
@@ -252,7 +331,7 @@ export const AuditManager: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400">Client IP Address</span>
-                  <span className="font-mono text-slate-700 dark:text-slate-300">{selectedLog.ip_address}</span>
+                  <span className="rounded-lg bg-white px-2 py-1 font-mono font-semibold text-slate-700 shadow-sm dark:bg-slate-900 dark:text-slate-300">{selectedLog.ip_address || 'Unavailable'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400">Timestamp</span>
@@ -268,17 +347,21 @@ export const AuditManager: React.FC = () => {
               </div>
             </div>
 
+            <AuditLocationMap ipAddress={selectedLog.ip_address} />
+
             <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
-                onClick={() => setSelectedLog(null)}
-                className="px-5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold rounded-xl text-xs transition-all cursor-pointer"
+                type="button"
+                onClick={closeAuditDialog}
+                className="uipro-button uipro-button-primary px-6 py-2.5 text-xs"
               >
                 Close
               </button>
             </div>
+            </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 };

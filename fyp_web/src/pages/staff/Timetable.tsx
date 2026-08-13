@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen, X, Pencil, CalendarDays, Check } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen, X, Pencil, CalendarDays, Check, FileText, Download, CheckCircle2, Move } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
-import { useDialog } from '../../context/DialogContext';
 import { swalError, swalSuccess } from '../../utils/swal';
 import type { Course, Programme } from '../../services/api';
 
@@ -50,6 +50,7 @@ interface TimetableEvent {
   courseCode: string;
   courseName: string;
   group: string;
+  classGroup?: string | null;
   day: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
   startTime: string;
   endTime: string;
@@ -163,10 +164,39 @@ const getClassPalette = (group: string) => {
 };
 
 const HOURLY_ROW_HEIGHT = 72; // px height per hour slot
+type PrintStatus = 'ready' | 'preparing' | 'rendering' | 'downloading' | 'success' | 'error';
+
+interface TimetableDragState {
+  eventId: number | string;
+  pointerStartX: number;
+  pointerStartY: number;
+  grabOffsetX: number;
+  grabOffsetY: number;
+  cardWidth: number;
+  durationMinutes: number;
+  targetDayIndex: number;
+  targetStartMinutes: number;
+  targetEndMinutes: number;
+  translateX: number;
+  translateY: number;
+  isInsideGrid: boolean;
+  isSettling: boolean;
+  moved: boolean;
+}
+
+const minutesToTime = (minutes: number) => {
+  const safeMinutes = Math.max(0, Math.min(23 * 60 + 59, minutes));
+  return `${String(Math.floor(safeMinutes / 60)).padStart(2, '0')}:${String(safeMinutes % 60).padStart(2, '0')}`;
+};
+
+const getRequestError = (error: unknown, fallback: string) => {
+  if (!error || typeof error !== 'object') return fallback;
+  const response = (error as { response?: { data?: { detail?: unknown } } }).response;
+  return typeof response?.data?.detail === 'string' ? response.data.detail : fallback;
+};
 
 export const Timetable: React.FC = () => {
   const { user } = useAuth();
-  const { alert: customAlert } = useDialog();
   const [selectedDateStr, setSelectedDateStr] = useState<string>(() => formatDate(getMalaysiaDate()));
 
   const selectedWeekNum = React.useMemo(() => {
@@ -190,6 +220,74 @@ export const Timetable: React.FC = () => {
   const [isLineHovered, setIsLineHovered] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [isPrintOpen, setIsPrintOpen] = useState(false);
+  const [printStatus, setPrintStatus] = useState<PrintStatus>('ready');
+  const [printProgress, setPrintProgress] = useState(0);
+  const [successCountdown, setSuccessCountdown] = useState(3);
+  const [dragState, setDragState] = useState<TimetableDragState | null>(null);
+  const [dragSavingIds, setDragSavingIds] = useState<Set<number | string>>(() => new Set());
+  const scheduleGridRef = useRef<HTMLDivElement>(null);
+  const dragStateRef = useRef<TimetableDragState | null>(null);
+  const pendingPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
+  const suppressCardClickRef = useRef(false);
+  const moveVersionsRef = useRef<Map<string, number>>(new Map());
+  const moveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const confirmedPositionsRef = useRef<Map<string, Pick<TimetableEvent, 'day' | 'startTime' | 'endTime'>>>(new Map());
+
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) window.cancelAnimationFrame(dragFrameRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!isPrintOpen || printStatus !== 'success') return;
+    const deadline = Date.now() + 3000;
+    setSuccessCountdown(3);
+    const countdownTimer = window.setInterval(() => {
+      const timeLeft = deadline - Date.now();
+      if (timeLeft <= 0) {
+        setIsPrintOpen(false);
+        return;
+      }
+      setSuccessCountdown(Math.max(1, Math.ceil(timeLeft / 1000)));
+    }, 100);
+    return () => {
+      window.clearInterval(countdownTimer);
+    };
+  }, [isPrintOpen, printStatus]);
+
+  useEffect(() => {
+    if (!isPrintOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && printStatus !== 'preparing' && printStatus !== 'rendering' && printStatus !== 'downloading') {
+        setIsPrintOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isPrintOpen, printStatus]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) {
+        setIsDayDropdownOpen(false);
+        setEditing(null);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [editing, saving]);
 
   // Admin Timetable Category Filters
   const [dbProgrammes, setDbProgrammes] = useState<Programme[]>([]);
@@ -245,6 +343,11 @@ export const Timetable: React.FC = () => {
   };
 
   const openEdit = (ev: TimetableEvent) => {
+    // Remove the event's elevated hover layer before mounting the dialog. Without
+    // this, the pointer remains over the card and its z-100 preview can sit above
+    // the old z-50 modal for one or more renders.
+    setHoveredEventId(null);
+    setIsLineHovered(false);
     setEditForm({ day: ev.day, start: ev.startTime, end: ev.endTime, room: ev.room });
     setIsDayDropdownOpen(false);
     setEditing(ev);
@@ -257,7 +360,10 @@ export const Timetable: React.FC = () => {
       await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
       setEditing(null);
       await loadTimetable();
-      swalSuccess('Timetable slot updated', `${editForm.day} ${editForm.start}-${editForm.end}`);
+      swalSuccess(
+        'Timetable slot updated',
+        `${editing.classGroup || 'All groups'} · ${editForm.day} ${editForm.start}-${editForm.end}`
+      );
     } catch (err: any) {
       swalError('Failed to update slot', err.response?.data?.detail || 'Please try again.');
     } finally {
@@ -269,8 +375,8 @@ export const Timetable: React.FC = () => {
     loadTimetable();
   }, [user]);
 
-  const loadTimetable = async () => {
-    setLoading(true);
+  const loadTimetable = async (showLoader = true) => {
+    if (showLoader) setLoading(true);
     try {
       let mappedEvents: TimetableEvent[] = [];
 
@@ -290,6 +396,7 @@ export const Timetable: React.FC = () => {
             courseCode: slot.course_code,
             courseName: slot.course_name,
             group: slot.role || 'Lecture',
+            classGroup: slot.class_group ?? null,
             day: (slot.schedule_day as any) || 'Monday',
             startTime: slot.schedule_start || '08:00',
             endTime: slot.schedule_end || '10:00',
@@ -308,6 +415,7 @@ export const Timetable: React.FC = () => {
             courseCode: slot.course_code,
             courseName: slot.course_name,
             group: slot.role || 'Lecture',
+            classGroup: slot.class_group ?? null,
             day: (slot.schedule_day as any) || 'Monday',
             startTime: slot.schedule_start || '08:00',
             endTime: slot.schedule_end || '10:00',
@@ -327,6 +435,7 @@ export const Timetable: React.FC = () => {
           courseCode: course.course_code,
           courseName: course.course_name,
           group: course.role || 'Lecture',
+          classGroup: course.class_group ?? null,
           day: (course.schedule_day as any) || 'Monday',
           startTime: course.schedule_start || '08:00',
           endTime: course.schedule_end || '10:00',
@@ -342,6 +451,7 @@ export const Timetable: React.FC = () => {
           courseCode: slot.course_code,
           courseName: slot.course_name,
           group: slot.role || 'Lecture',
+          classGroup: slot.class_group ?? null,
           day: (slot.schedule_day as any) || 'Monday',
           startTime: slot.schedule_start || '08:00',
           endTime: slot.schedule_end || '10:00',
@@ -355,7 +465,7 @@ export const Timetable: React.FC = () => {
     } catch (err) {
       console.error("Failed to load timetable events:", err);
     } finally {
-      setLoading(false);
+      if (showLoader) setLoading(false);
     }
   };
 
@@ -521,6 +631,400 @@ export const Timetable: React.FC = () => {
     }
   };
 
+  const updateDragPosition = (clientX: number, clientY: number) => {
+    const current = dragStateRef.current;
+    const grid = scheduleGridRef.current;
+    if (!current || !grid) return;
+
+    const bounds = grid.getBoundingClientRect();
+    const dayWidth = (bounds.width - 80) / 7;
+    if (dayWidth <= 0) return;
+
+    const freeTranslateX = clientX - current.pointerStartX;
+    const freeTranslateY = clientY - current.pointerStartY;
+    const cardLeft = clientX - current.grabOffsetX;
+    const cardCenterX = cardLeft + current.cardWidth / 2;
+    const cardTop = clientY - current.grabOffsetY;
+    const cardCenterY = cardTop + (current.durationMinutes / 60 * HOURLY_ROW_HEIGHT) / 2;
+    const isInsideGrid = cardCenterX >= bounds.left + 80 && cardCenterX <= bounds.right
+      && cardCenterY >= bounds.top && cardCenterY <= bounds.bottom;
+    const targetDayIndex = Math.max(0, Math.min(6, Math.floor((cardCenterX - bounds.left - 80) / dayWidth)));
+    const rawTop = cardTop - bounds.top;
+    const rawMinutes = 8 * 60 + (rawTop / HOURLY_ROW_HEIGHT) * 60;
+    // The card follows the pointer freely. Five-minute precision is applied only
+    // to the proposed landing time shown to the user and committed on release.
+    const landingMinutes = Math.round(rawMinutes / 5) * 5;
+    const latestStart = 22 * 60 - current.durationMinutes;
+    const targetStartMinutes = Math.max(8 * 60, Math.min(latestStart, landingMinutes));
+    const moved = current.moved || Math.hypot(
+      clientX - current.pointerStartX,
+      clientY - current.pointerStartY
+    ) > 5;
+
+    const next: TimetableDragState = {
+      ...current,
+      targetDayIndex,
+      targetStartMinutes,
+      targetEndMinutes: targetStartMinutes + current.durationMinutes,
+      translateX: freeTranslateX,
+      translateY: freeTranslateY,
+      isInsideGrid,
+      isSettling: false,
+      moved,
+    };
+    dragStateRef.current = next;
+    setDragState(next);
+  };
+
+  const handleClassPointerDown = (pointerEvent: React.PointerEvent<HTMLDivElement>, timetableEvent: TimetableEvent) => {
+    if (user?.role !== 'admin' || !timetableEvent.meetingId || pointerEvent.button !== 0) return;
+    const grid = scheduleGridRef.current;
+    if (!grid) return;
+
+    const moveKey = String(timetableEvent.meetingId);
+    if (!moveQueuesRef.current.has(moveKey)) {
+      confirmedPositionsRef.current.set(moveKey, {
+        day: timetableEvent.day,
+        startTime: timetableEvent.startTime,
+        endTime: timetableEvent.endTime,
+      });
+    }
+
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+    pointerEvent.preventDefault();
+    setHoveredEventId(null);
+    setIsLineHovered(false);
+
+    const cardBounds = pointerEvent.currentTarget.getBoundingClientRect();
+    const startMinutes = toMinutes(timetableEvent.startTime);
+    const endMinutes = toMinutes(timetableEvent.endTime);
+    const state: TimetableDragState = {
+      eventId: timetableEvent.id,
+      pointerStartX: pointerEvent.clientX,
+      pointerStartY: pointerEvent.clientY,
+      grabOffsetX: pointerEvent.clientX - cardBounds.left,
+      grabOffsetY: pointerEvent.clientY - cardBounds.top,
+      cardWidth: cardBounds.width,
+      durationMinutes: Math.max(30, endMinutes - startMinutes),
+      targetDayIndex: Math.max(0, DAY_NAMES.indexOf(timetableEvent.day)),
+      targetStartMinutes: startMinutes,
+      targetEndMinutes: endMinutes,
+      translateX: 0,
+      translateY: 0,
+      isInsideGrid: true,
+      isSettling: false,
+      moved: false,
+    };
+    dragStateRef.current = state;
+    setDragState(state);
+  };
+
+  const handleClassPointerMove = (pointerEvent: React.PointerEvent<HTMLDivElement>, timetableEvent: TimetableEvent) => {
+    if (dragStateRef.current?.eventId !== timetableEvent.id) return;
+    pointerEvent.preventDefault();
+    pendingPointerRef.current = { x: pointerEvent.clientX, y: pointerEvent.clientY };
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = window.requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      const point = pendingPointerRef.current;
+      if (point) updateDragPosition(point.x, point.y);
+    });
+  };
+
+  const handleClassPointerCancel = () => {
+    if (dragFrameRef.current !== null) window.cancelAnimationFrame(dragFrameRef.current);
+    dragFrameRef.current = null;
+    pendingPointerRef.current = null;
+    dragStateRef.current = null;
+    setDragState(null);
+  };
+
+  const handleClassPointerUp = async (pointerEvent: React.PointerEvent<HTMLDivElement>, timetableEvent: TimetableEvent) => {
+    if (dragStateRef.current?.eventId !== timetableEvent.id) return;
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+    }
+    updateDragPosition(pointerEvent.clientX, pointerEvent.clientY);
+    const completedDrag = dragStateRef.current;
+    pendingPointerRef.current = null;
+    if (!completedDrag?.moved || !timetableEvent.meetingId) {
+      dragStateRef.current = null;
+      setDragState(null);
+      return;
+    }
+
+    suppressCardClickRef.current = true;
+    window.setTimeout(() => { suppressCardClickRef.current = false; }, 80);
+    if (!completedDrag.isInsideGrid) {
+      dragStateRef.current = null;
+      setDragState(null);
+      return;
+    }
+    const nextDay = DAY_NAMES[completedDrag.targetDayIndex];
+    const nextStart = minutesToTime(completedDrag.targetStartMinutes);
+    const nextEnd = minutesToTime(completedDrag.targetEndMinutes);
+    if (nextDay === timetableEvent.day && nextStart === timetableEvent.startTime && nextEnd === timetableEvent.endTime) {
+      dragStateRef.current = null;
+      setDragState(null);
+      return;
+    }
+
+    const gridBounds = scheduleGridRef.current?.getBoundingClientRect();
+    if (gridBounds) {
+      const dayWidth = (gridBounds.width - 80) / 7;
+      const originDayIndex = Math.max(0, DAY_NAMES.indexOf(timetableEvent.day));
+      const originTop = ((toMinutes(timetableEvent.startTime) - 8 * 60) / 60) * HOURLY_ROW_HEIGHT;
+      const targetTop = ((completedDrag.targetStartMinutes - 8 * 60) / 60) * HOURLY_ROW_HEIGHT;
+      const settlingDrag: TimetableDragState = {
+        ...completedDrag,
+        translateX: (completedDrag.targetDayIndex - originDayIndex) * dayWidth,
+        translateY: targetTop - originTop,
+        isSettling: true,
+      };
+      dragStateRef.current = settlingDrag;
+      setDragState(settlingDrag);
+      await new Promise<void>(resolve => window.setTimeout(resolve, 170));
+    }
+    dragStateRef.current = null;
+    setDragState(null);
+
+    setEvents(current => current.map(item => item.id === timetableEvent.id ? {
+      ...item,
+      day: nextDay,
+      startTime: nextStart,
+      endTime: nextEnd,
+    } : item).sort(byDayThenStart));
+    setSelectedDateStr(days[completedDrag.targetDayIndex]?.date || selectedDateStr);
+    setDragSavingIds(current => new Set(current).add(timetableEvent.id));
+    const moveKey = String(timetableEvent.meetingId);
+    const moveVersion = (moveVersionsRef.current.get(moveKey) || 0) + 1;
+    moveVersionsRef.current.set(moveKey, moveVersion);
+    const earlierMove = moveQueuesRef.current.get(moveKey) || Promise.resolve();
+    const request = earlierMove.catch(() => undefined).then(async () => {
+      await apiService.adminUpdateTimetableSlot(timetableEvent.meetingId!, {
+        day: nextDay,
+        start: nextStart,
+        end: nextEnd,
+        room: timetableEvent.room,
+      });
+    });
+    moveQueuesRef.current.set(moveKey, request);
+    try {
+      await request;
+      confirmedPositionsRef.current.set(moveKey, { day: nextDay, startTime: nextStart, endTime: nextEnd });
+      if (moveVersionsRef.current.get(moveKey) === moveVersion) {
+        void swalSuccess('Class moved', `${nextDay} · ${format12Hour(nextStart)}-${format12Hour(nextEnd)}`);
+      }
+    } catch (err: unknown) {
+      if (moveVersionsRef.current.get(moveKey) === moveVersion) {
+        const confirmed = confirmedPositionsRef.current.get(moveKey);
+        if (confirmed) {
+          setEvents(current => current.map(item => item.id === timetableEvent.id ? {
+            ...item,
+            ...confirmed,
+          } : item).sort(byDayThenStart));
+        }
+        void swalError('Move rejected', getRequestError(err, 'Slot unavailable.'));
+      }
+    } finally {
+      if (moveQueuesRef.current.get(moveKey) === request) moveQueuesRef.current.delete(moveKey);
+      if (moveVersionsRef.current.get(moveKey) === moveVersion) {
+        setDragSavingIds(current => {
+          const next = new Set(current);
+          next.delete(timetableEvent.id);
+          return next;
+        });
+      }
+    }
+  };
+
+  const openPrintPreview = () => {
+    if (user?.role === 'admin' && !selectedProgramme && !selectedCourseCode) {
+      void swalError('Select timetable', 'Choose a filter.');
+      return;
+    }
+    setPrintStatus('ready');
+    setPrintProgress(0);
+    setSuccessCountdown(3);
+    setIsPrintOpen(true);
+  };
+
+  const animatePrintProgress = (from: number, to: number, duration: number) => new Promise<void>(resolve => {
+    const startedAt = performance.now();
+    const updateProgress = (now: number) => {
+      const elapsed = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - elapsed, 3);
+      setPrintProgress(Math.round(from + (to - from) * eased));
+      if (elapsed < 1) {
+        window.requestAnimationFrame(updateProgress);
+      } else {
+        resolve();
+      }
+    };
+    window.requestAnimationFrame(updateProgress);
+  });
+
+  const handlePrintTimetable = async () => {
+    if (printStatus === 'preparing' || printStatus === 'rendering' || printStatus === 'downloading') return;
+
+    const cleanPdfText = (value: string) => value
+      .normalize('NFKD')
+      .replace(/[^\x20-\x7E]/g, '')
+      .trim();
+
+    try {
+      setPrintStatus('preparing');
+      setPrintProgress(0);
+      await animatePrintProgress(0, 18, 360);
+
+      const { jsPDF } = await import('jspdf');
+      await animatePrintProgress(18, 36, 300);
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
+      const weekStart = days[0]?.fullDateObj;
+      const weekEnd = days[6]?.fullDateObj;
+      const dateRange = weekStart && weekEnd
+        ? `${weekStart.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} - ${weekEnd.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`
+        : `Week ${selectedWeekNum}`;
+      const filterLabel = user?.role === 'admin'
+        ? `${selectedProgrammeLabel} | ${selectedCourseLabel}`
+        : `${user?.email || 'My timetable'}`;
+      const printableEvents = [...displayedEvents].sort(byDayThenStart);
+      const rowHeight = 14;
+      const startY = 52;
+      const bottomY = 190;
+      let y = startY;
+
+      const drawHeader = (continued = false) => {
+        doc.setFillColor(37, 99, 235);
+        doc.rect(0, 0, 297, 32, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(18);
+        doc.text(continued ? 'Class Timetable - Continued' : 'Class Timetable', 14, 15);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text(`Semester 1, 2026  |  Week ${selectedWeekNum}  |  ${dateRange}`, 14, 23);
+        doc.setTextColor(51, 65, 85);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text(cleanPdfText(filterLabel).slice(0, 100), 14, 41);
+
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(14, 45, 269, 8, 1.5, 1.5, 'F');
+        doc.setTextColor(71, 85, 105);
+        doc.setFontSize(7.5);
+        doc.text('DAY', 17, 50.5);
+        doc.text('TIME', 45, 50.5);
+        doc.text('COURSE', 82, 50.5);
+        doc.text('TYPE', 167, 50.5);
+        doc.text('ROOM', 199, 50.5);
+        doc.text('LECTURER', 241, 50.5);
+        y = startY + 4;
+      };
+
+      drawHeader();
+      setPrintStatus('rendering');
+      await animatePrintProgress(36, 48, 260);
+
+      if (printableEvents.length === 0) {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineDashPattern([2, 2], 0);
+        doc.roundedRect(14, 62, 269, 48, 3, 3, 'S');
+        doc.setLineDashPattern([], 0);
+        doc.setTextColor(100, 116, 139);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.text('No classes scheduled', 148.5, 82, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text('This timetable has no class entries for the selected week.', 148.5, 91, { align: 'center' });
+      } else {
+        printableEvents.forEach((event, index) => {
+          if (y + rowHeight > bottomY) {
+            doc.addPage('a4', 'landscape');
+            drawHeader(true);
+          }
+
+          if (index % 2 === 0) {
+            doc.setFillColor(248, 250, 252);
+            doc.rect(14, y - 3, 269, rowHeight, 'F');
+          }
+
+          const group = event.group.toLowerCase();
+          const accent: [number, number, number] = group.includes('tutor')
+            ? [16, 185, 129]
+            : group.includes('practic') || group.includes('lab')
+              ? [168, 85, 247]
+              : [14, 165, 233];
+          doc.setFillColor(...accent);
+          doc.roundedRect(14, y - 3, 1.5, rowHeight, 0.7, 0.7, 'F');
+          doc.setTextColor(30, 41, 59);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.text(event.day.slice(0, 3), 18, y + 3);
+          doc.text(`${format12Hour(event.startTime)} -`, 45, y + 1.5);
+          doc.text(format12Hour(event.endTime), 45, y + 6);
+          doc.text(cleanPdfText(event.courseCode).slice(0, 18), 82, y + 1.5);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.5);
+          const courseLines = doc.splitTextToSize(cleanPdfText(event.courseName), 78).slice(0, 2);
+          doc.text(courseLines, 82, y + 6);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          const typeAndGroup = event.classGroup ? `${event.group} (${event.classGroup})` : event.group;
+          doc.text(cleanPdfText(typeAndGroup).slice(0, 24), 167, y + 3);
+          doc.setFont('helvetica', 'normal');
+          doc.text(doc.splitTextToSize(cleanPdfText(event.room), 36).slice(0, 2), 199, y + 2);
+          doc.text(doc.splitTextToSize(cleanPdfText(event.lecturerName), 39).slice(0, 2), 241, y + 2);
+          y += rowHeight;
+        });
+      }
+
+      const pageCount = doc.getNumberOfPages();
+      for (let page = 1; page <= pageCount; page += 1) {
+        doc.setPage(page);
+        doc.setDrawColor(226, 232, 240);
+        doc.line(14, 198, 283, 198);
+        doc.setTextColor(148, 163, 184);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.text('Smart Attendance System', 14, 204);
+        doc.text(`Page ${page} of ${pageCount}`, 283, 204, { align: 'right' });
+      }
+
+      doc.setProperties({
+        title: `Class Timetable - Week ${selectedWeekNum}`,
+        subject: dateRange,
+        author: 'Smart Attendance System',
+        creator: 'Smart Attendance System'
+      });
+      await animatePrintProgress(48, 82, 520);
+
+      setPrintStatus('downloading');
+      await animatePrintProgress(82, 94, 280);
+      const pdfBlob = doc.output('blob');
+      const downloadUrl = URL.createObjectURL(pdfBlob);
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = `class-timetable-week-${selectedWeekNum}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      await animatePrintProgress(94, 100, 300);
+
+      setPrintProgress(100);
+      setPrintStatus('success');
+      void swalSuccess('Print successful', 'PDF downloaded.');
+    } catch (error) {
+      console.error('Failed to create timetable PDF:', error);
+      setPrintStatus('error');
+      setPrintProgress(0);
+      void swalError('Print failed', 'Try again.');
+    }
+  };
+
   const groupedCourses = React.useMemo(() => {
     if (user?.role !== 'student' || studentCourses.length === 0) return [];
     
@@ -603,9 +1107,21 @@ export const Timetable: React.FC = () => {
       ev.courseName.toLowerCase().includes(q) ||
       ev.room.toLowerCase().includes(q) ||
       ev.lecturerName.toLowerCase().includes(q) ||
-      ev.group.toLowerCase().includes(q)
+      ev.group.toLowerCase().includes(q) ||
+      (ev.classGroup || '').toLowerCase().includes(q)
     );
   };
+
+  const printCopy: Record<PrintStatus, { title: string; text: string }> = {
+    ready: { title: 'PDF ready', text: 'Review the preview, then print.' },
+    preparing: { title: 'Preparing PDF', text: 'Setting up your timetable.' },
+    rendering: { title: 'Creating PDF', text: 'Adding classes and details.' },
+    downloading: { title: 'Saving PDF', text: 'Sending the file to Downloads.' },
+    success: { title: 'Print successful', text: 'Your PDF is downloaded.' },
+    error: { title: 'Print failed', text: 'Please try again.' }
+  };
+  const isPrinting = printStatus === 'preparing' || printStatus === 'rendering' || printStatus === 'downloading';
+  const previewEvents = displayedEvents.slice(0, 6);
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -1039,7 +1555,7 @@ export const Timetable: React.FC = () => {
             {/* Print Button */}
             <button 
               type="button"
-              onClick={() => customAlert('Preparing print layout... (Simulated PDF download)', 'Print Timetable')}
+              onClick={openPrintPreview}
               className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-bold text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-white hover:text-brand-blue dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700/80"
             >
               <Printer className="h-4 w-4 text-slate-500 dark:text-slate-400" />
@@ -1048,6 +1564,25 @@ export const Timetable: React.FC = () => {
 
           </div>
         </div>
+
+        {user?.role === 'admin' && (selectedProgramme || selectedCourseCode) && (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs dark:border-blue-900/60 dark:bg-blue-950/30">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-blue shadow-sm dark:bg-blue-950 dark:text-blue-300">
+                <Move className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="font-extrabold text-slate-800 dark:text-slate-100">Drag to reschedule</p>
+                <p className="mt-0.5 font-medium text-slate-500 dark:text-slate-400">Move freely. The card centre chooses the day on release.</p>
+              </div>
+            </div>
+            {dragSavingIds.size > 0 && (
+              <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-bold text-brand-blue shadow-sm dark:bg-slate-900 dark:text-blue-300">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving {dragSavingIds.size}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Timetable Grid Schedule */}
         {loading ? (
@@ -1103,7 +1638,7 @@ export const Timetable: React.FC = () => {
                 </div>
 
                 {/* Weekly Grid Area with Time Rows */}
-                <div className="relative grid grid-cols-[80px_repeat(7,_minmax(0,1fr))] divide-x divide-slate-100 dark:divide-slate-800">
+                <div ref={scheduleGridRef} className={`relative grid grid-cols-[80px_repeat(7,_minmax(0,1fr))] divide-x divide-slate-100 dark:divide-slate-800 ${dragState ? 'select-none' : ''}`}>
 
                   {/* Current Time Indicator Line with Continuous Dashed Line and Dark Mode Sync */}
                   {showCurrentTimeLine && (
@@ -1167,7 +1702,11 @@ export const Timetable: React.FC = () => {
                     return (
                       <div 
                         key={`col-${day.date}`} 
-                        className={`relative divide-y divide-slate-100 dark:divide-slate-800 transition-colors ${
+                        className={`relative divide-y divide-slate-100 dark:divide-slate-800 transition-colors duration-200 ${
+                          dragState?.isInsideGrid && dragState.targetDayIndex === DAY_NAMES.indexOf(day.name)
+                            ? 'bg-blue-100/75 ring-2 ring-inset ring-brand-blue/35 dark:bg-blue-950/55 '
+                            : ''
+                        }${
                           isSelectedDay 
                             ? 'bg-sky-50/90 dark:bg-sky-950/40 border-x border-sky-100/60 dark:border-sky-900/30' 
                             : day.isToday 
@@ -1188,7 +1727,9 @@ export const Timetable: React.FC = () => {
                           const topPx = ((startMin - 8 * 60) / 60) * HOURLY_ROW_HEIGHT;
                           const durMin = Math.max(30, endMin - startMin);
                           const heightPx = (durMin / 60) * HOURLY_ROW_HEIGHT;
-                          const isHovered = hoveredEventId === ev.id;
+                          const isDragging = dragState?.eventId === ev.id;
+                          const isSavingDrag = dragSavingIds.has(ev.id);
+                          const isHovered = !dragState && editing === null && hoveredEventId === ev.id;
 
                           // Smart popover position to prevent clipping at top/left/right boundaries
                           const isTopSlot = startMin < 11 * 60; // 8 AM, 9 AM, 10 AM slots
@@ -1225,17 +1766,32 @@ export const Timetable: React.FC = () => {
                                 height: `${heightPx}px`,
                                 left: '3px',
                                 right: '3px',
+                                transform: isDragging ? `translate3d(${dragState.translateX}px, ${dragState.translateY}px, 0) scale(1.035)` : 'translate3d(0, 0, 0) scale(1)',
+                                transition: isDragging
+                                  ? dragState.isSettling
+                                    ? 'transform 170ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 170ms ease'
+                                    : 'box-shadow 160ms ease, opacity 160ms ease'
+                                  : 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 200ms ease',
+                                touchAction: user?.role === 'admin' ? 'none' : 'auto',
+                                willChange: isDragging ? 'transform' : 'auto',
                               }}
-                              className={`absolute p-0.5 transition-all ${isHovered ? 'z-[100]' : 'z-10'}`}
-                              onMouseEnter={() => setHoveredEventId(ev.id)}
+                              className={`absolute p-0.5 ${isDragging ? `z-[160] cursor-grabbing drop-shadow-2xl ${dragState.isInsideGrid ? 'opacity-95' : 'opacity-75'}` : isHovered ? 'z-[100]' : 'z-10'}`}
+                              onMouseEnter={() => {
+                                if (!editing && !dragState) setHoveredEventId(ev.id);
+                              }}
                               onMouseLeave={() => setHoveredEventId(null)}
+                              onPointerDown={(pointerEvent) => handleClassPointerDown(pointerEvent, ev)}
+                              onPointerMove={(pointerEvent) => handleClassPointerMove(pointerEvent, ev)}
+                              onPointerUp={(pointerEvent) => void handleClassPointerUp(pointerEvent, ev)}
+                              onPointerCancel={handleClassPointerCancel}
                               onClick={() => {
-                                if (user?.role === 'admin' && ev.meetingId) openEdit(ev);
+                                if (!suppressCardClickRef.current && user?.role === 'admin' && ev.meetingId) openEdit(ev);
                               }}
+                              aria-label={`${ev.courseCode} ${ev.group} ${ev.classGroup || 'all groups'}, ${ev.day} ${format12Hour(ev.startTime)} to ${format12Hour(ev.endTime)}${user?.role === 'admin' ? '. Drag to reschedule.' : ''}`}
                             >
                               {/* Simple Pastel Container Card */}
                               <div
-                                className={`group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border p-2.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${user?.role === 'admin' && ev.meetingId ? 'cursor-pointer' : 'cursor-default'} ${palette.bg} ${palette.border} ${
+                                className={`group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border p-2.5 shadow-sm transition-[box-shadow,filter] duration-200 ${isDragging ? 'cursor-grabbing ring-2 ring-white/90 shadow-2xl brightness-[1.03] dark:ring-slate-700' : user?.role === 'admin' && ev.meetingId ? 'cursor-grab hover:shadow-md' : 'cursor-default'} ${palette.bg} ${palette.border} ${
                                   isSearchActive
                                     ? isMatched
                                       ? 'opacity-100 ring-2 ring-sky-500 scale-[1.01]'
@@ -1243,12 +1799,34 @@ export const Timetable: React.FC = () => {
                                     : 'opacity-100'
                                 }`}
                               >
+                                {isDragging && (
+                                  <div className="absolute inset-x-1 top-1 z-20 flex justify-center pointer-events-none">
+                                    <span className={`flex items-center gap-1 rounded-full px-2 py-1 text-[8px] font-black text-white shadow-lg backdrop-blur-sm animate-in fade-in zoom-in-95 duration-150 ${dragState.isInsideGrid ? 'bg-slate-950/90' : 'bg-rose-600/95'}`}>
+                                      <Move className="h-2.5 w-2.5" />
+                                      {dragState.isInsideGrid
+                                        ? `${DAY_NAMES[dragState.targetDayIndex].slice(0, 3)} · ${format12Hour(minutesToTime(dragState.targetStartMinutes))}`
+                                        : 'Release to cancel'}
+                                    </span>
+                                  </div>
+                                )}
+                                {isSavingDrag && (
+                                  <span className="absolute bottom-1 right-1 z-30 flex h-5 w-5 items-center justify-center rounded-full bg-white/90 text-brand-blue shadow-md dark:bg-slate-900/90 dark:text-blue-300" title="Saving change">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  </span>
+                                )}
                                 <div className="space-y-0.5">
                                   <div className="flex items-center justify-between gap-1">
                                     <span className={`text-[11px] tracking-wide ${palette.title}`}>
                                       {ev.courseCode}
                                     </span>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${palette.dot}`} />
+                                    <div className="flex items-center gap-1">
+                                      {ev.classGroup && (
+                                        <span className={`rounded px-1 py-0.5 text-[8px] font-black leading-none ${palette.badge}`}>
+                                          {ev.classGroup}
+                                        </span>
+                                      )}
+                                      <span className={`w-1.5 h-1.5 rounded-full ${palette.dot}`} />
+                                    </div>
                                   </div>
                                   <h4 className={`truncate text-[10.5px] leading-snug ${palette.text}`}>
                                     {ev.courseName}
@@ -1262,7 +1840,7 @@ export const Timetable: React.FC = () => {
                                 </div>
 
                                 {/* Floating Hover Popover / Tooltip with Authentic Frosted Glassmorphism Effect */}
-                                {isHovered && (
+                                {isHovered && !editing && (
                                   <div 
                                     className={`absolute w-80 bg-white/55 dark:bg-slate-900/65 text-slate-900 dark:text-white rounded-2xl p-4 shadow-[0_16px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_16px_40px_rgba(0,0,0,0.5)] border border-white/80 dark:border-white/20 backdrop-blur-xl z-[100] animate-in fade-in zoom-in-95 duration-150 pointer-events-none ${positionClass} ${alignClass}`}
                                   >
@@ -1270,7 +1848,7 @@ export const Timetable: React.FC = () => {
                                       {/* Top Row: Course Code & Role Tag */}
                                       <div className="flex items-center justify-between border-b border-slate-900/10 dark:border-white/10 pb-2">
                                         <span className="font-extrabold text-xs text-sky-700 dark:text-sky-300 font-mono tracking-tight">
-                                          {ev.courseCode} ({ev.group})
+                                          {ev.courseCode} · {ev.group}{ev.classGroup ? ` · ${ev.classGroup}` : ' · All groups'}
                                         </span>
                                         <span className="text-[9.5px] font-bold uppercase tracking-wider bg-white/70 dark:bg-white/10 text-slate-800 dark:text-slate-200 px-2.5 py-0.5 rounded-md border border-white/90 dark:border-white/10 shadow-2xs backdrop-blur-xs">
                                           {ev.type}
@@ -1311,6 +1889,15 @@ export const Timetable: React.FC = () => {
                                           </div>
                                           <span className="font-extrabold text-purple-700 dark:text-purple-300 text-xs truncate">
                                             {ev.lecturerName}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-2.5 whitespace-nowrap">
+                                          <div className="flex min-w-[95px] shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                                            <span className="text-xs">👥</span>
+                                            <span>Students:</span>
+                                          </div>
+                                          <span className="text-xs font-extrabold text-brand-blue dark:text-blue-300">
+                                            {ev.classGroup || 'All groups'}
                                           </span>
                                         </div>
                                       </div>
@@ -1447,6 +2034,7 @@ export const Timetable: React.FC = () => {
                 <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/70 dark:text-slate-400">
                   <th className="py-3 px-4">Course</th>
                   <th className="py-3 px-4">Type</th>
+                  <th className="py-3 px-4">Group</th>
                   <th className="py-3 px-4">Day & Time</th>
                   <th className="py-3 px-4">Room</th>
                   <th className="py-3 px-4 text-right">Action</th>
@@ -1455,7 +2043,7 @@ export const Timetable: React.FC = () => {
               <tbody className="divide-y divide-slate-100 bg-white text-xs text-slate-700 dark:divide-slate-800 dark:bg-slate-900 dark:text-slate-200">
                 {displayedEvents.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-12 text-center text-slate-400 dark:text-slate-500 font-medium">
+                    <td colSpan={6} className="py-12 text-center text-slate-400 dark:text-slate-500 font-medium">
                       No class slots to manage. Please select a programme and course category above.
                     </td>
                   </tr>
@@ -1467,6 +2055,11 @@ export const Timetable: React.FC = () => {
                         <span className="font-bold text-slate-500 dark:text-slate-400 ml-2">{ev.courseName}</span>
                       </td>
                       <td className="py-3 px-4 font-semibold">{ev.group}</td>
+                      <td className="py-3 px-4">
+                        <span className={`inline-flex rounded-lg px-2 py-1 text-[10px] font-extrabold ${ev.classGroup ? 'bg-blue-50 text-brand-blue dark:bg-blue-950/60 dark:text-blue-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300'}`}>
+                          {ev.classGroup || 'All groups'}
+                        </span>
+                      </td>
                       <td className="py-3 px-4 font-semibold">{ev.day.substring(0, 3)} {ev.startTime}-{ev.endTime}</td>
                       <td className="py-3 px-4 font-semibold">{ev.room}</td>
                       <td className="py-3 px-4 text-right">
@@ -1485,13 +2078,181 @@ export const Timetable: React.FC = () => {
         </div>
       )}
 
-      {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm" onClick={() => !saving && setEditing(null)}>
-          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" onClick={e => e.stopPropagation()}>
+      {isPrintOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-5"
+          onClick={() => !isPrinting && setIsPrintOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="print-timetable-title"
+            className={`flex max-h-[94vh] w-full flex-col overflow-hidden rounded-3xl border border-white/20 bg-white shadow-2xl transition-[max-width] duration-500 dark:border-slate-700 dark:bg-slate-900 ${printStatus === 'success' ? 'max-w-md' : 'max-w-3xl'}`}
+            onClick={event => event.stopPropagation()}
+          >
+            {printStatus === 'success' ? (
+              <div className="flex min-h-[440px] flex-col items-center justify-center px-6 py-10 text-center animate-in fade-in zoom-in-95 duration-500 sm:px-10">
+                <div className="relative flex h-28 w-28 items-center justify-center">
+                  <div className="absolute inset-0 animate-ping rounded-full bg-emerald-400/15 [animation-duration:1.8s]" />
+                  <div className="absolute inset-2 rounded-full bg-emerald-50 ring-1 ring-emerald-100 dark:bg-emerald-950/60 dark:ring-emerald-900" />
+                  <CheckCircle2 className="relative h-14 w-14 text-emerald-500 animate-in zoom-in-50 duration-500" strokeWidth={2.2} />
+                </div>
+                <p className="mt-6 text-[11px] font-extrabold uppercase tracking-[0.2em] text-emerald-600 dark:text-emerald-400">Download complete</p>
+                <h3 id="print-timetable-title" className="mt-2 text-2xl font-black leading-tight text-slate-900 dark:text-white">
+                  Download Week {selectedWeekNum} timetable successful
+                </h3>
+                <p className="mt-3 max-w-xs text-sm font-medium leading-relaxed text-slate-500 dark:text-slate-400">
+                  Your PDF is saved in Downloads.
+                </p>
+
+                <div className="mt-7 flex min-w-60 items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 dark:border-slate-800 dark:bg-slate-950/50" aria-live="assertive" aria-atomic="true">
+                  <div key={`count-${successCountdown}`} className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-sm font-black tabular-nums text-brand-blue shadow-sm ring-1 ring-slate-200 animate-in zoom-in-75 fade-in duration-200 dark:bg-slate-800 dark:text-blue-300 dark:ring-slate-700">
+                    {successCountdown}
+                  </div>
+                  <span key={`count-text-${successCountdown}`} className="text-xs font-bold text-slate-600 animate-in fade-in slide-in-from-bottom-1 duration-200 dark:text-slate-300">
+                    Closing in {successCountdown} {successCountdown === 1 ? 'second' : 'seconds'}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPrintOpen(false)}
+                  className="mt-7 h-11 min-w-36 rounded-xl border border-slate-200 bg-white px-6 text-sm font-bold text-slate-600 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:text-brand-blue hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-blue-300"
+                >
+                  Close now
+                </button>
+              </div>
+            ) : (
+              <>
+            <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800 sm:px-6 sm:py-5">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${printStatus === 'error' ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400' : 'bg-blue-50 text-brand-blue dark:bg-blue-950/60 dark:text-blue-300'}`}>
+                  {isPrinting ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
+                </div>
+                <div className="min-w-0" aria-live="polite">
+                  <h3 id="print-timetable-title" className="text-base font-extrabold text-slate-900 dark:text-white sm:text-lg">
+                    {printCopy[printStatus].title}
+                  </h3>
+                  <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400 sm:text-sm">
+                    {printCopy[printStatus].text}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPrintOpen(false)}
+                disabled={isPrinting}
+                aria-label="Close PDF preview"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-slate-800 dark:hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/95 p-3 shadow-inner sm:p-5">
+                <div className="mx-auto min-h-[285px] max-w-2xl overflow-hidden rounded-xl bg-white shadow-2xl">
+                  <div className="bg-gradient-to-r from-blue-700 to-blue-500 px-5 py-4 text-white sm:px-6">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4" />
+                          <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-blue-100">PDF Preview</p>
+                        </div>
+                        <h4 className="mt-1 text-base font-black sm:text-lg">Class Timetable</h4>
+                        <p className="mt-0.5 text-[10px] font-semibold text-blue-100 sm:text-xs">Semester 1, 2026 · Week {selectedWeekNum}</p>
+                      </div>
+                      <span className="rounded-full bg-white/15 px-3 py-1 text-[10px] font-extrabold backdrop-blur-sm">{displayedEvents.length} classes</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5 p-4 sm:p-5">
+                    {user?.role === 'admin' && (
+                      <p className="truncate border-b border-slate-100 pb-2.5 text-[10px] font-bold text-slate-500">
+                        {selectedProgrammeLabel} · {selectedCourseLabel}
+                      </p>
+                    )}
+                    {previewEvents.length === 0 ? (
+                      <div className="flex min-h-40 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 text-center">
+                        <CalendarX2 className="h-7 w-7 text-slate-300" />
+                        <p className="mt-2 text-xs font-extrabold text-slate-600">No classes scheduled</p>
+                        <p className="mt-1 text-[10px] text-slate-400">The PDF will show an empty timetable.</p>
+                      </div>
+                    ) : (
+                      previewEvents.map(event => (
+                        <div key={`pdf-preview-${event.id}`} className="grid grid-cols-[48px_1fr_auto] items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                          <div className="text-center">
+                            <p className="text-[10px] font-black uppercase text-brand-blue">{event.day.slice(0, 3)}</p>
+                            <p className="mt-0.5 text-[8px] font-bold text-slate-400">{format12Hour(event.startTime)}</p>
+                          </div>
+                          <div className="min-w-0 border-l border-slate-200 pl-3">
+                            <p className="truncate text-[10px] font-black text-slate-800">{event.courseCode} · {event.courseName}</p>
+                            <p className="mt-0.5 truncate text-[9px] font-medium text-slate-500">{event.group} · {event.classGroup || 'All groups'} · {event.room} · {event.lecturerName}</p>
+                          </div>
+                          <p className="hidden text-[9px] font-bold text-slate-500 sm:block">{format12Hour(event.endTime)}</p>
+                        </div>
+                      ))
+                    )}
+                    {displayedEvents.length > previewEvents.length && (
+                      <p className="text-center text-[9px] font-bold text-slate-400">+{displayedEvents.length - previewEvents.length} more in PDF</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {isPrinting && <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 animate-in fade-in slide-in-from-bottom-2 duration-300 dark:border-slate-800 dark:bg-slate-950/40">
+                <div className="mb-2 flex items-center justify-between text-xs font-bold">
+                  <span className="text-slate-600 dark:text-slate-300">{printCopy[printStatus].title}</span>
+                  <span key={printProgress} className="min-w-10 text-right font-black tabular-nums text-brand-blue animate-in fade-in duration-100 dark:text-blue-300">{printProgress}%</span>
+                </div>
+                <div className="h-2.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800" role="progressbar" aria-label="PDF progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={printProgress}>
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-blue-600 via-blue-500 to-sky-400 transition-[width] duration-150 ease-out"
+                    style={{ width: `${printProgress}%` }}
+                  />
+                </div>
+              </div>}
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50/80 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/40 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setIsPrintOpen(false)}
+                disabled={isPrinting}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handlePrintTimetable}
+                disabled={isPrinting}
+                className="flex h-11 min-w-36 items-center justify-center gap-2 rounded-xl bg-brand-blue px-6 text-sm font-extrabold text-white shadow-lg shadow-blue-500/20 transition-all duration-200 hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-xl disabled:cursor-wait disabled:translate-y-0 disabled:opacity-70"
+              >
+                {isPrinting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {isPrinting ? `${printProgress}%` : printStatus === 'error' ? 'Try again' : 'Print'}
+              </button>
+            </div>
+              </>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {editing && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm isolate" onClick={() => !saving && setEditing(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="edit-class-time-title" className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" onClick={e => e.stopPropagation()}>
             <div className="flex items-start justify-between border-b border-slate-200 p-5 dark:border-slate-800">
               <div className="flex gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-brand-blue dark:bg-blue-950/60 dark:text-blue-300"><CalendarDays className="h-5 w-5" /></div>
-                <div><h3 className="text-sm font-extrabold text-slate-900 dark:text-white">Edit class time</h3><p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{editing.courseCode} · {editing.group}</p></div>
+                <div>
+                  <h3 id="edit-class-time-title" className="text-sm font-extrabold text-slate-900 dark:text-white">Edit class time</h3>
+                  <p className="mt-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">{editing.courseCode} · {editing.group}</p>
+                  <span className="mt-2 inline-flex rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-extrabold text-brand-blue dark:bg-blue-950/60 dark:text-blue-300">
+                    Students: {editing.classGroup || 'All groups'}
+                  </span>
+                </div>
               </div>
               <button type="button" onClick={() => setEditing(null)} disabled={saving} aria-label="Close edit dialog" className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-white"><X className="h-4 w-4" /></button>
             </div>
@@ -1569,7 +2330,8 @@ export const Timetable: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

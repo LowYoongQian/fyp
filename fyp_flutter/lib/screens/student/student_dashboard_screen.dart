@@ -10,6 +10,8 @@ import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import 'face_scanner_screen.dart';
 import 'full_timetable_screen.dart';
+import 'attendance_center_screen.dart';
+import 'overall_attendance_screen.dart';
 import '../system/profile_screen.dart';
 
 // -----------------------------------------------------------------
@@ -31,7 +33,7 @@ class MainScreen extends StatefulWidget {
 
   final VoidCallback onLogout;
   final Future<void> Function() onSyncRequested;
-  final Future<void> Function() onTimetableRefresh;
+  final Future<List<Map<String, dynamic>>> Function() onTimetableRefresh;
   final Function(
     dynamic,
     String,
@@ -86,12 +88,14 @@ class _MainScreenState extends State<MainScreen> {
 
   Timer? _refreshTimer;
   bool _refreshInProgress = false;
+  final Set<String> _shownNotificationIds = {};
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _activeTabIndex);
     fetchActiveSessions();
+    unawaited(_fetchLiveNotifications());
     _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       unawaited(_refreshDashboardData());
     });
@@ -202,6 +206,24 @@ class _MainScreenState extends State<MainScreen> {
     }).length;
   }
 
+  List<Map<String, dynamic>> getClassesForDate(DateTime date) {
+    final dayName = _dayOfWeekName(date.weekday);
+    final unique = <String, Map<String, dynamic>>{};
+    for (final item in widget.studentSchedule.where(
+      (meeting) => meeting['day'] == dayName,
+    )) {
+      final key =
+          item['meetingId']?.toString() ??
+          '${item['courseCode']}|${item['classGroup']}|${item['group']}|${item['startTime']}';
+      unique[key] = item;
+    }
+    final classes = unique.values.toList();
+    classes.sort(
+      (a, b) => a['startTime'].toString().compareTo(b['startTime'].toString()),
+    );
+    return classes;
+  }
+
   String getTodayCheckInTime() {
     final todayLog = widget.attendanceHistory.firstWhere((log) {
       final logDate = log['date'].toString().toLowerCase();
@@ -240,14 +262,8 @@ class _MainScreenState extends State<MainScreen> {
   // else the next upcoming today, else the last finished one. Null = no class.
   Map<String, dynamic>? getTodaySessionWindow() {
     final now = ApiConfig.now;
-    final todayName = _dayOfWeekName(now.weekday);
-    final todays = widget.studentSchedule
-        .where((s) => s['day'] == todayName)
-        .toList();
+    final todays = getClassesForDate(now);
     if (todays.isEmpty) return null;
-    todays.sort(
-      (a, b) => (a['startTime'] as String).compareTo(b['startTime'] as String),
-    );
 
     Map<String, dynamic>? active;
     Map<String, dynamic>? upcoming;
@@ -298,7 +314,11 @@ class _MainScreenState extends State<MainScreen> {
     if (!mounted || _refreshInProgress) return;
     _refreshInProgress = true;
     try {
-      await Future.wait([widget.onTimetableRefresh(), fetchActiveSessions()]);
+      await Future.wait([
+        widget.onTimetableRefresh(),
+        fetchActiveSessions(),
+        _fetchLiveNotifications(),
+      ]);
     } finally {
       _refreshInProgress = false;
     }
@@ -480,8 +500,10 @@ class _MainScreenState extends State<MainScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) =>
-                    FullTimetableScreen(schedule: widget.studentSchedule),
+                builder: (context) => FullTimetableScreen(
+                  schedule: widget.studentSchedule,
+                  onRefresh: widget.onTimetableRefresh,
+                ),
               ),
             );
           },
@@ -980,6 +1002,8 @@ class _MainScreenState extends State<MainScreen> {
           children: [
             _buildFaceVerificationNotice(),
             _buildFaceMatchTestButton(),
+            _buildAttendanceCenterCard(),
+            const SizedBox(height: 20),
             // Active Lectures from backend
             Text(
               "Available Session Windows",
@@ -1640,6 +1664,204 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  Future<void> _fetchLiveNotifications() async {
+    try {
+      final response = await _authedGet('/notifications');
+      if (!mounted || response.statusCode != 200) return;
+      final items = jsonDecode(response.body) as List<dynamic>;
+      final unread = items.cast<Map<String, dynamic>>().where(
+        (item) =>
+            item['is_read'] != true &&
+            !_shownNotificationIds.contains(item['id']),
+      );
+      if (unread.isEmpty) return;
+      final item = unread.first;
+      _shownNotificationIds.add(item['id'].toString());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+          content: Row(
+            children: [
+              const Icon(
+                Icons.notifications_active_rounded,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      item['title'] ?? 'Attendance update',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      item['body'] ?? '',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'View',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => AttendanceCenterScreen(
+                  authToken: widget.authToken,
+                  apiBaseUrl: ApiConfig.getEffectiveUrl(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    } catch (_) {
+      // Live alerts are additive; a failed poll must not disturb the dashboard.
+    }
+  }
+
+  Widget _buildAttendanceCenterCard() {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AttendanceCenterScreen(
+            authToken: widget.authToken,
+            apiBaseUrl: ApiConfig.getEffectiveUrl(),
+          ),
+        ),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: dark ? const Color(0xFF172554) : const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFF93C5FD)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF2563EB), Color(0xFF3B82F6)],
+                ),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.insights_rounded, color: Colors.white),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Attendance Center',
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: dark ? Colors.white : const Color(0xFF0F172A),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Readiness, targets, requests and live updates',
+                    style: GoogleFonts.inter(
+                      fontSize: 10.5,
+                      color: dark
+                          ? const Color(0xFFBFDBFE)
+                          : const Color(0xFF475569),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 16,
+              color: Color(0xFF2563EB),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTodayTimeline(List<Map<String, dynamic>> classes) {
+    if (classes.isEmpty) return const SizedBox.shrink();
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: classes.map((meeting) {
+        final start = _parseTodayTime(meeting['startTime']);
+        final end = _parseTodayTime(meeting['endTime']);
+        final now = ApiConfig.now;
+        final active =
+            start != null &&
+            end != null &&
+            !now.isBefore(start) &&
+            now.isBefore(end);
+        final finished = end != null && !now.isBefore(end);
+        final color = active
+            ? const Color(0xFF2563EB)
+            : finished
+            ? const Color(0xFF10B981)
+            : const Color(0xFFCBD5E1);
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: Column(
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 260),
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  meeting['courseCode']?.toString() ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w800,
+                    color: active || finished
+                        ? color
+                        : dark
+                        ? const Color(0xFF94A3B8)
+                        : const Color(0xFF64748B),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _formatDisplayTime(meeting['startTime']),
+                  maxLines: 1,
+                  style: GoogleFonts.inter(
+                    fontSize: 8,
+                    color: const Color(0xFF94A3B8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildHistoryTab() {
     final now = ApiConfig.now;
     final dayAbbrev = const [
@@ -1660,16 +1882,35 @@ class _MainScreenState extends State<MainScreen> {
     final reportDateLabelStr =
         "$reportDayOfWeek, $reportMonthName ${now.day}, ${now.year}";
 
-    final todayCheckInTime = getTodayCheckInTime();
-    final hasCheckedInToday = todayCheckInTime != "-";
+    final todayClasses = getClassesForDate(now);
+    final todayClassCount = todayClasses.length;
+    final rawMarkedCount = getMarkedCountForDate(now);
+    final markedCount = rawMarkedCount > todayClassCount
+        ? todayClassCount
+        : rawMarkedCount;
+    final remainingCount = todayClassCount - markedCount;
+    final hasRemainingClasses = remainingCount > 0;
 
     // Today's scheduled class window (drives the Live Attendance times + button gating).
     final todaySession = getTodaySessionWindow();
     final sessionStatus = windowStatus(todaySession);
     final sessionStartLabel = _formatDisplayTime(todaySession?['startTime']);
     final sessionEndLabel = _formatDisplayTime(todaySession?['endTime']);
-    // Clock-in only allowed inside the window, and only if not already done.
-    final canClockIn = sessionStatus == 'active' && !hasCheckedInToday;
+    final matchingOpenSession = activeSessions.where((session) {
+      if (todaySession == null) return false;
+      final sameCourse = session['courseCode'] == todaySession['courseCode'];
+      final sessionGroup = session['classGroup']?.toString() ?? 'All';
+      final classGroup = todaySession['classGroup']?.toString() ?? 'All';
+      return sameCourse &&
+          (sessionGroup == 'All' || sessionGroup == classGroup);
+    }).firstOrNull;
+    final hasCheckedInToday = matchingOpenSession?['alreadyCheckedIn'] == true;
+    final todayCheckInTime = hasCheckedInToday ? getTodayCheckInTime() : "-";
+    // A previous class check-in must not block the next class today.
+    final canClockIn =
+        sessionStatus == 'active' &&
+        matchingOpenSession != null &&
+        !hasCheckedInToday;
 
     final filteredLogs = widget.attendanceHistory.where((log) {
       if (_attendanceFilterIndex == 0) {
@@ -1743,7 +1984,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          "${getMarkedCountForDate(now)}",
+                          "$markedCount",
                           style: GoogleFonts.spaceGrotesk(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
@@ -1751,6 +1992,15 @@ class _MainScreenState extends State<MainScreen> {
                                 Theme.of(context).brightness == Brightness.dark
                                 ? Colors.white
                                 : const Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "of $todayClassCount today",
+                          style: GoogleFonts.inter(
+                            fontSize: 9,
+                            color: const Color(0xFF64748B),
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -1775,23 +2025,33 @@ class _MainScreenState extends State<MainScreen> {
                     child: Column(
                       children: [
                         Text(
-                          "Enrolled",
+                          "Remaining",
                           style: GoogleFonts.inter(
                             fontSize: 11,
-                            color: const Color(0xFF2563EB),
+                            color: hasRemainingClasses
+                                ? const Color(0xFFF59E0B)
+                                : const Color(0xFF10B981),
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          "26",
+                          "$remainingCount",
                           style: GoogleFonts.spaceGrotesk(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
-                            color:
-                                Theme.of(context).brightness == Brightness.dark
-                                ? Colors.white
-                                : const Color(0xFF0F172A),
+                            color: hasRemainingClasses
+                                ? const Color(0xFFF59E0B)
+                                : const Color(0xFF10B981),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          hasRemainingClasses ? "still to attend" : "all done",
+                          style: GoogleFonts.inter(
+                            fontSize: 9,
+                            color: const Color(0xFF64748B),
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -1799,6 +2059,72 @@ class _MainScreenState extends State<MainScreen> {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+              decoration: BoxDecoration(
+                color:
+                    (hasRemainingClasses
+                            ? const Color(0xFFF59E0B)
+                            : const Color(0xFF10B981))
+                        .withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color:
+                      (hasRemainingClasses
+                              ? const Color(0xFFF59E0B)
+                              : const Color(0xFF10B981))
+                          .withValues(alpha: .22),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    hasRemainingClasses
+                        ? Icons.notifications_active_rounded
+                        : Icons.task_alt_rounded,
+                    color: hasRemainingClasses
+                        ? const Color(0xFFF59E0B)
+                        : const Color(0xFF10B981),
+                    size: 19,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          todayClassCount == 0
+                              ? "No classes today"
+                              : hasRemainingClasses
+                              ? "$remainingCount ${remainingCount == 1 ? 'class' : 'classes'} left today"
+                              : "All classes marked",
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
+                                ? Colors.white
+                                : const Color(0xFF1E293B),
+                          ),
+                        ),
+                        if (hasRemainingClasses) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            "Check the next class time.",
+                            style: GoogleFonts.inter(
+                              fontSize: 9.5,
+                              color: const Color(0xFF64748B),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 24),
 
@@ -1827,128 +2153,155 @@ class _MainScreenState extends State<MainScreen> {
                         color: Color(0xFF64748B),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        todayLabelStr,
-                        style: GoogleFonts.inter(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                          color: const Color(0xFF1E293B),
+                      Expanded(
+                        child: Text(
+                          todayLabelStr,
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
+                                ? Colors.white
+                                : const Color(0xFF1E293B),
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              (sessionStatus == 'active'
+                                      ? const Color(0xFF2563EB)
+                                      : const Color(0xFF64748B))
+                                  .withValues(alpha: .1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          sessionStatus == 'active'
+                              ? 'Current class'
+                              : sessionStatus == 'before'
+                              ? 'Next class'
+                              : sessionStatus == 'after'
+                              ? 'Classes finished'
+                              : 'No class',
+                          style: GoogleFonts.inter(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            color: sessionStatus == 'active'
+                                ? const Color(0xFF2563EB)
+                                : const Color(0xFF64748B),
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 22.0),
-                    child: Text(
-                      todaySession != null
-                          ? "${todaySession['courseCode']} · ${todaySession['group']} ($sessionStartLabel - $sessionEndLabel)"
-                          : "No scheduled class today",
-                      style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "Start time",
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              color: const Color(0xFF94A3B8),
-                              fontWeight: FontWeight.bold,
-                            ),
+                  const SizedBox(height: 12),
+                  const _CurrentTime(),
+                  const SizedBox(height: 14),
+                  if (todaySession != null) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFF2563EB,
+                            ).withValues(alpha: .1),
+                            borderRadius: BorderRadius.circular(13),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            sessionStartLabel,
-                            style: GoogleFonts.spaceGrotesk(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: const Color(0xFF1E293B),
-                            ),
+                          child: const Icon(
+                            Icons.school_rounded,
+                            color: Color(0xFF2563EB),
+                            size: 21,
                           ),
-                        ],
-                      ),
-                      Expanded(
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Row(
+                        ),
+                        const SizedBox(width: 11),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFFCBD5E1),
-                                  shape: BoxShape.circle,
+                              Text(
+                                todaySession['courseCode']?.toString() ?? '',
+                                style: GoogleFonts.spaceGrotesk(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
                                 ),
                               ),
-                              Expanded(
-                                child: Container(
-                                  height: 1,
-                                  color: const Color(0xFFCBD5E1),
-                                ),
-                              ),
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFFCBD5E1),
-                                  shape: BoxShape.circle,
+                              Text(
+                                todaySession['courseName']?.toString() ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.inter(
+                                  fontSize: 10,
+                                  color: const Color(0xFF64748B),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            "End time",
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              color: const Color(0xFF94A3B8),
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            sessionEndLabel,
-                            style: GoogleFonts.spaceGrotesk(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: const Color(0xFF1E293B),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        "Time is  ",
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: [
+                        _LiveDetailChip(
+                          icon: Icons.category_outlined,
+                          label: todaySession['group']?.toString() ?? 'Class',
+                        ),
+                        _LiveDetailChip(
+                          icon: Icons.groups_2_outlined,
+                          label: todaySession['classGroup'] == 'All'
+                              ? 'All students'
+                              : todaySession['classGroup']?.toString() ?? '-',
+                        ),
+                        _LiveDetailChip(
+                          icon: Icons.location_on_outlined,
+                          label: todaySession['room']?.toString() ?? '-',
+                        ),
+                        _LiveDetailChip(
+                          icon: Icons.schedule_rounded,
+                          label: '$sessionStartLabel – $sessionEndLabel',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _LiveCountdown(
+                      startTime: todaySession['startTime']?.toString(),
+                      endTime: todaySession['endTime']?.toString(),
+                    ),
+                    const SizedBox(height: 16),
+                  ] else
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No scheduled class today',
+                        textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 11,
                           color: const Color(0xFF64748B),
                         ),
                       ),
-                      const _LiveClock(),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                    ),
+                  if (todayClasses.isNotEmpty) ...[
+                    Text(
+                      'Today’s progress',
+                      style: GoogleFonts.inter(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                    _buildTodayTimeline(todayClasses),
+                    const SizedBox(height: 16),
+                  ],
 
                   ElevatedButton.icon(
                     onPressed: (!hasCheckedInToday && !canClockIn)
@@ -2009,7 +2362,9 @@ class _MainScreenState extends State<MainScreen> {
                                           );
                                           return;
                                         }
-                                        final session = activeSessions.first;
+                                        final session =
+                                            matchingOpenSession ??
+                                            activeSessions.first;
                                         widget.onCheckInComplete(
                                           session['sessionId'],
                                           "Campus-Staff-WiFi",
@@ -2035,8 +2390,13 @@ class _MainScreenState extends State<MainScreen> {
                     label: Text(
                       hasCheckedInToday
                           ? "Clocked In Successfully"
-                          : sessionStatus == 'active'
+                          : sessionStatus == 'active' &&
+                                matchingOpenSession != null
                           ? "Clock in"
+                          : sessionStatus == 'active' && isLoadingSessions
+                          ? "Checking session..."
+                          : sessionStatus == 'active'
+                          ? "Session unavailable"
                           : sessionStatus == 'before'
                           ? "Opens at $sessionStartLabel"
                           : sessionStatus == 'after'
@@ -2366,37 +2726,66 @@ class _MainScreenState extends State<MainScreen> {
             : (double.tryParse(course['percentage']?.toString() ?? '') ??
                   100.0);
 
-        return GlassCard(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      courseName,
-                      style: GoogleFonts.spaceGrotesk(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF1E293B),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      "($courseCode)",
-                      style: GoogleFonts.inter(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-                  ],
-                ),
+        return InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => OverallAttendanceScreen(
+                authToken: widget.authToken,
+                apiBaseUrl: ApiConfig.getEffectiveUrl(),
+                courseCode: courseCode,
+                courseName: courseName,
+                courseSchedule: widget.studentSchedule
+                    .where(
+                      (meeting) =>
+                          meeting['courseCode']?.toString().toUpperCase() ==
+                          courseCode,
+                    )
+                    .toList(),
               ),
-              const SizedBox(width: 16),
-              _buildCircularPercentage(percentage),
-            ],
+            ),
+          ),
+          child: GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        courseName,
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white
+                              : const Color(0xFF1E293B),
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        courseCode,
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF2563EB),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                _buildCircularPercentage(percentage),
+                const SizedBox(width: 7),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFF94A3B8),
+                  size: 20,
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -2434,25 +2823,58 @@ class _MainScreenState extends State<MainScreen> {
   int min(int a, int b) => a < b ? a : b;
 }
 
-// Isolated clock widget — owns its own 1-second timer so it never triggers
-// a rebuild of the parent StudentDashboard.
-class _LiveClock extends StatefulWidget {
-  const _LiveClock();
+class _LiveDetailChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _LiveDetailChip({required this.icon, required this.label});
 
   @override
-  State<_LiveClock> createState() => _LiveClockState();
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: dark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: dark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: const Color(0xFF2563EB)),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              color: dark ? const Color(0xFFE2E8F0) : const Color(0xFF475569),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _LiveClockState extends State<_LiveClock> {
+class _CurrentTime extends StatefulWidget {
+  const _CurrentTime();
+
+  @override
+  State<_CurrentTime> createState() => _CurrentTimeState();
+}
+
+class _CurrentTimeState extends State<_CurrentTime> {
   late Timer _timer;
-  late String _timeStr;
 
   @override
   void initState() {
     super.initState();
-    _timeStr = _format(ApiConfig.now);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _timeStr = _format(ApiConfig.now));
+      if (mounted) setState(() {});
     });
   }
 
@@ -2462,20 +2884,153 @@ class _LiveClockState extends State<_LiveClock> {
     super.dispose();
   }
 
-  String _format(DateTime t) {
-    final hour = t.hour == 0 ? 12 : (t.hour > 12 ? t.hour - 12 : t.hour);
-    final amPm = t.hour >= 12 ? 'PM' : 'AM';
-    return "${hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')} $amPm";
+  String _format(DateTime time) {
+    final hour = time.hour == 0
+        ? 12
+        : time.hour > 12
+        ? time.hour - 12
+        : time.hour;
+    final period = time.hour >= 12 ? 'PM' : 'AM';
+    return '${hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}:'
+        '${time.second.toString().padLeft(2, '0')} $period';
   }
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      _timeStr,
-      style: GoogleFonts.spaceGrotesk(
-        fontSize: 24,
-        fontWeight: FontWeight.bold,
-        color: const Color(0xFF2563EB),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2563EB).withValues(alpha: dark ? .13 : .06),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(
+          color: const Color(0xFF2563EB).withValues(alpha: .14),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.access_time_rounded,
+            color: Color(0xFF2563EB),
+            size: 16,
+          ),
+          const SizedBox(width: 7),
+          Text(
+            'Time is',
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(width: 7),
+          Text(
+            _format(ApiConfig.now),
+            style: GoogleFonts.spaceGrotesk(
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF2563EB),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveCountdown extends StatefulWidget {
+  final String? startTime;
+  final String? endTime;
+
+  const _LiveCountdown({required this.startTime, required this.endTime});
+
+  @override
+  State<_LiveCountdown> createState() => _LiveCountdownState();
+}
+
+class _LiveCountdownState extends State<_LiveCountdown> {
+  late Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  DateTime? _parse(String? value) {
+    if (value == null) return null;
+    final parts = value.split(':');
+    if (parts.length < 2) return null;
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) return null;
+    final now = ApiConfig.now;
+    return DateTime(now.year, now.month, now.day, hour, minute);
+  }
+
+  String _duration(Duration value) {
+    final seconds = value.inSeconds.clamp(0, 86400);
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final remainingSeconds = seconds % 60;
+    return hours > 0
+        ? '${hours}h ${minutes}m'
+        : '${minutes}m ${remainingSeconds.toString().padLeft(2, '0')}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final start = _parse(widget.startTime);
+    final end = _parse(widget.endTime);
+    final now = ApiConfig.now;
+    final active =
+        start != null &&
+        end != null &&
+        !now.isBefore(start) &&
+        now.isBefore(end);
+    final upcoming = start != null && now.isBefore(start);
+    final color = active ? const Color(0xFF2563EB) : const Color(0xFF64748B);
+    final label = upcoming
+        ? 'Starts in ${_duration(start.difference(now))}'
+        : active
+        ? 'Ends in ${_duration(end.difference(now))}'
+        : 'Class ended';
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: color.withValues(alpha: .18)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            active ? Icons.radio_button_checked_rounded : Icons.timer_outlined,
+            color: color,
+            size: 17,
+          ),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: GoogleFonts.spaceGrotesk(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

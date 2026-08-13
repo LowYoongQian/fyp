@@ -9,6 +9,7 @@ import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../../main.dart';
 import '../system/profile_screen.dart';
+import 'attendance_request_screen.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 3: Lecturer/Staff Dashboard widget
@@ -1305,10 +1306,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         const SizedBox(width: 8),
                         IconButton(
                           onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text("No new staff notifications."),
-                                duration: Duration(seconds: 2),
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AttendanceRequestScreen(
+                                  authToken: widget.authToken,
+                                  apiBaseUrl: widget.apiBaseUrl,
+                                ),
                               ),
                             );
                           },

@@ -354,6 +354,10 @@ def get_global_timetable(db: Session = Depends(get_db), current_user: User = Dep
             "schedule_room": m.room,
             "lecturer_name": m.lecturer.name if m.lecturer else "TBA",
             "role": m.role,
+            # Required by the admin UI: tutorial/practical rows are group-specific.
+            # Hiding this made G1 and G2 cards look identical and admins edited the
+            # wrong group while the mobile app correctly filtered it back out.
+            "class_group": m.class_group,
         })
     return result
 
@@ -423,6 +427,8 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     course_code = meeting.course.course_code if meeting.course else meeting.course_id
 
     meeting.day, meeting.start, meeting.end, meeting.room = body.day, body.start, body.end, body.room
+    from routers.attendance_features import notify_timetable_change
+    notify_timetable_change(db, meeting, was)
     db.commit()
 
     # Timetable edits can make a class eligible to open immediately. Bypass the

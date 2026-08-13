@@ -17,7 +17,8 @@ import {
   Search,
   X,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  AlertCircle
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
 
@@ -41,6 +42,7 @@ export const AcademicManager: React.FC = () => {
   // Form states - Programme
   const [progName, setProgName] = useState('');
   const [progCode, setProgCode] = useState('');
+  const [programmeErrors, setProgrammeErrors] = useState<{ code?: string; name?: string }>({});
 
   // Form states - Course
   const [courseName, setCourseName] = useState('');
@@ -178,15 +180,28 @@ export const AcademicManager: React.FC = () => {
   // CRUD Actions
   const handleAddProgramme = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!progName || !progCode) return;
+    const nextErrors: { code?: string; name?: string } = {};
+    if (!progCode.trim()) nextErrors.code = 'Code required';
+    if (!progName.trim()) nextErrors.name = 'Name required';
+    setProgrammeErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
     try {
-      await apiService.adminCreateProgramme({ name: progName, code: progCode });
+      await apiService.adminCreateProgramme({ name: progName.trim(), code: progCode.trim() });
       setProgName('');
       setProgCode('');
+      setProgrammeErrors({});
       loadAllData();
       await swalSuccess('Programme Registered', 'Study programme added successfully.');
     } catch (err: any) {
-      await swalError('Error', err.response?.data?.detail || err.message || 'Operation failed');
+      const detail = String(err.response?.data?.detail || err.message || '').toLowerCase();
+      if (err.response?.status === 409 || detail.includes('exist') || detail.includes('duplicate')) {
+        setProgrammeErrors({ code: 'Code exists' });
+      } else if (err.response?.status === 422) {
+        await swalError('Invalid data', 'Check fields.');
+      } else {
+        await swalError('Save failed', 'Try again.');
+      }
     }
   };
 
@@ -471,28 +486,46 @@ export const AcademicManager: React.FC = () => {
           </div>
 
           {activeSubTab === 'programmes' && (
-            <form onSubmit={handleAddProgramme} className="space-y-4 font-sans text-xs">
+            <form noValidate onSubmit={handleAddProgramme} className="space-y-4 font-sans text-xs">
               <div className="space-y-1">
                 <label className="text-slate-500 font-semibold uppercase tracking-wider text-[9px]">Programme Code</label>
                 <input
                   type="text"
-                  required
                   placeholder="e.g. BCSF"
                   value={progCode}
-                  onChange={e => setProgCode(e.target.value.toUpperCase())}
-                  className="w-full uipro-input"
+                  onChange={e => {
+                    setProgCode(e.target.value.toUpperCase());
+                    if (programmeErrors.code) setProgrammeErrors(current => ({ ...current, code: undefined }));
+                  }}
+                  aria-invalid={Boolean(programmeErrors.code)}
+                  aria-describedby={programmeErrors.code ? 'programme-code-error' : undefined}
+                  className={`w-full uipro-input ${programmeErrors.code ? '!border-rose-400 !ring-2 !ring-rose-100' : ''}`}
                 />
+                {programmeErrors.code && (
+                  <p id="programme-code-error" role="alert" className="flex items-center gap-1 text-[10px] font-semibold text-rose-600">
+                    <AlertCircle className="h-3 w-3" /> {programmeErrors.code}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-slate-500 font-semibold uppercase tracking-wider text-[9px]">Programme Description Name</label>
                 <input
                   type="text"
-                  required
                   placeholder="e.g. Bachelor of Computer Science (Honours)"
                   value={progName}
-                  onChange={e => setProgName(e.target.value)}
-                  className="w-full uipro-input"
+                  onChange={e => {
+                    setProgName(e.target.value);
+                    if (programmeErrors.name) setProgrammeErrors(current => ({ ...current, name: undefined }));
+                  }}
+                  aria-invalid={Boolean(programmeErrors.name)}
+                  aria-describedby={programmeErrors.name ? 'programme-name-error' : undefined}
+                  className={`w-full uipro-input ${programmeErrors.name ? '!border-rose-400 !ring-2 !ring-rose-100' : ''}`}
                 />
+                {programmeErrors.name && (
+                  <p id="programme-name-error" role="alert" className="flex items-center gap-1 text-[10px] font-semibold text-rose-600">
+                    <AlertCircle className="h-3 w-3" /> {programmeErrors.name}
+                  </p>
+                )}
               </div>
               <button type="submit" className="w-full uipro-button uipro-button-primary mt-2">
                 Save Programme

@@ -79,7 +79,7 @@ class UserService {
   static Future<bool> updateUserSettings(Map<String, dynamic> settings) async {
     try {
       final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.baseUrl}/auth/settings');
+      final url = Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/me/settings');
       final response = await http.put(
         url,
         headers: headers,
@@ -98,32 +98,37 @@ class UserService {
     }
   }
 
-  static Future<bool> uploadAvatar(
-    String avatarUrl, {
+  static Future<String> uploadAvatar(
+    Uint8List imageBytes, {
+    required String filename,
     String? authToken,
     String? apiBaseUrl,
   }) async {
-    try {
-      final headers = await _getHeaders(authToken);
-      final url = Uri.parse(
-        '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/avatar',
-      );
-      final response = await http.put(
-        url,
-        headers: headers,
-        body: jsonEncode({'avatar_url': avatarUrl}),
-      );
+    final headers = await _getHeaders(authToken);
+    headers.remove('Content-Type');
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse(
+        '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/avatar/upload',
+      ),
+    )..headers.addAll(headers);
+    request.files.add(
+      http.MultipartFile.fromBytes('file', imageBytes, filename: filename),
+    );
 
-      if (response.statusCode == 200) {
-        return true;
-      } else {
-        debugPrint('Failed to update avatar: ${response.body}');
-        return false;
-      }
-    } catch (e) {
-      debugPrint('Error uploading avatar: $e');
-      return false;
+    final streamed = await request.send().timeout(const Duration(seconds: 25));
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return (jsonDecode(response.body) as Map<String, dynamic>)['avatar_url']
+          as String;
     }
+
+    String detail = 'Could not save profile image';
+    try {
+      final error = jsonDecode(response.body) as Map<String, dynamic>;
+      detail = error['detail']?.toString() ?? detail;
+    } catch (_) {}
+    throw Exception(detail);
   }
 
   static Future<void> requestRecoveryEmail(

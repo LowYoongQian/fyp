@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
 import type { AdminSession, AdminAttendanceRecord } from '../../services/api';
 import { swalSuccess, swalError } from '../../utils/swal';
@@ -46,6 +47,7 @@ export const AttendanceManager: React.FC = () => {
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [modalStatusFilter, setModalStatusFilter] = useState<'all' | 'present' | 'absent'>('all');
   const [submittingStudentId, setSubmittingStudentId] = useState<number | string | null>(null);
+  const attendanceDialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchSessions();
@@ -177,6 +179,63 @@ export const AttendanceManager: React.FC = () => {
     setAttendanceList([]);
     setModalError(null);
   };
+
+  useEffect(() => {
+    if (!selectedSession) return;
+
+    const dialog = attendanceDialogRef.current;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const focusableSelector = [
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[href]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+
+    const focusDialog = window.requestAnimationFrame(() => {
+      const firstFocusable = dialog?.querySelector<HTMLElement>(focusableSelector);
+      (firstFocusable || dialog)?.focus();
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAttendanceModal();
+        return;
+      }
+
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusDialog);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [selectedSession]);
 
   const handleToggleStatus = async (record: AdminAttendanceRecord) => {
     if (!selectedSession) return;
@@ -595,14 +654,21 @@ export const AttendanceManager: React.FC = () => {
       </div>
 
       {/* Modal Dialog: AUDIT / MANAGE ATTENDANCE */}
-      {selectedSession && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {selectedSession && createPortal((
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4" role="presentation">
           <div className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm" onClick={closeAttendanceModal} />
           
-          <div className="max-w-4xl w-full uipro-card bg-white relative z-10 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh]">
+          <div
+            ref={attendanceDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="attendance-audit-title"
+            tabIndex={-1}
+            className="max-w-4xl w-full uipro-card bg-white relative z-10 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh] outline-none"
+          >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="space-y-1">
-                <h3 className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
+                <h3 id="attendance-audit-title" className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
                   <UserCheck className="h-4.5 w-4.5 text-brand-blue" />
                   Audit Attendance Directory
                 </h3>
@@ -611,7 +677,9 @@ export const AttendanceManager: React.FC = () => {
                 </p>
               </div>
               <button
+                type="button"
                 onClick={closeAttendanceModal}
+                aria-label="Close audit panel"
                 className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
                 <X className="h-4.5 w-4.5" />
@@ -803,7 +871,7 @@ export const AttendanceManager: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 };

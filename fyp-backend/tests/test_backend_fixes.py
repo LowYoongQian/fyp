@@ -530,6 +530,31 @@ def check_group_slots_isolated():
         db.close()
 
 
+def check_admin_timetable_exposes_group():
+    """Admin must see which group a timetable row affects.
+
+    The mobile endpoint correctly excludes another group's tutorial. The admin
+    timetable once omitted class_group, making G1 and G2 cards indistinguishable
+    and causing an admin to edit G1 while expecting a G2 student's app to change.
+    """
+    from db.database import SessionLocal
+    from db.models import ClassMeeting
+    from routers.admin_academic import get_global_timetable
+
+    db = SessionLocal()
+    try:
+        meetings = {str(row.id): row for row in db.query(ClassMeeting).all()}
+        payload = get_global_timetable(db=db, current_user=object())
+        assert len(payload) == len(meetings), "admin timetable dropped meetings"
+        for item in payload:
+            meeting = meetings[str(item["meeting_id"])]
+            assert "class_group" in item, f"meeting {meeting.id} hides its group"
+            assert item["class_group"] == meeting.class_group, (
+                f"meeting {meeting.id}: {item['class_group']} != {meeting.class_group}")
+    finally:
+        db.close()
+
+
 def check_face_verify_is_read_only():
     """/students/me/face/verify compares and reports. It must never write.
 
@@ -634,6 +659,7 @@ NEEDS_DB = [
     check_duplicate_checkin_rejected,
     check_override_enrolment_rule,
     check_group_slots_isolated,
+    check_admin_timetable_exposes_group,
     check_face_verify_is_read_only,
     check_no_5xx_on_reads,
 ]

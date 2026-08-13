@@ -5,7 +5,8 @@ import '../../widgets/glass_card.dart';
 class LoginScreen extends StatefulWidget {
   final String portalType; // 'student' or 'staff'
   final bool isSyncing;
-  final Function(String, String, String) onLogin; // (emailOrId, password, portalType)
+  final Function(String, String, String)
+  onLogin; // (emailOrId, password, portalType)
   final VoidCallback onBackPressed;
 
   const LoginScreen({
@@ -24,6 +25,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailOrIdController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  bool _hidePassword = true;
 
   @override
   void dispose() {
@@ -47,15 +49,29 @@ class _LoginScreenState extends State<LoginScreen> {
     final bool isStudent = widget.portalType == 'student';
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    final Color primaryColor = isStudent ? const Color(0xFF2563EB) : const Color(0xFF800000);
+    final Color primaryColor = isStudent
+        ? const Color(0xFF2563EB)
+        : const Color(0xFF800000);
     final String portalTitle = isStudent ? "Student Login" : "Staff Login";
-    final String idLabel = isStudent ? "Student ID / Email Address" : "Staff ID / Email Address";
-    final String idHint = isStudent ? "eg. ST2510091 or email" : "eg. T000001 or email";
+    final String idLabel = isStudent
+        ? "Student ID / Email Address"
+        : "Staff ID / Email Address";
+    final String idHint = isStudent
+        ? "eg. ST2510091 or email"
+        : "eg. T000001 or email";
 
-    final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
-    final secondaryTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-    final cardBgColor = isDarkMode ? const Color(0xFF1E293B).withValues(alpha: 0.9) : Colors.white.withValues(alpha: 0.85);
-    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final primaryTextColor = isDarkMode
+        ? Colors.white
+        : const Color(0xFF0F172A);
+    final secondaryTextColor = isDarkMode
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF64748B);
+    final cardBgColor = isDarkMode
+        ? const Color(0xFF1E293B).withValues(alpha: 0.9)
+        : Colors.white.withValues(alpha: 0.85);
+    final borderColor = isDarkMode
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
 
     return Center(
       child: SingleChildScrollView(
@@ -68,7 +84,11 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 IconButton(
                   onPressed: widget.onBackPressed,
-                  icon: Icon(Icons.arrow_back, color: primaryTextColor, size: 20),
+                  icon: Icon(
+                    Icons.arrow_back,
+                    color: primaryTextColor,
+                    size: 20,
+                  ),
                   style: IconButton.styleFrom(
                     backgroundColor: cardBgColor,
                     padding: const EdgeInsets.all(8),
@@ -103,10 +123,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 border: Border.all(color: borderColor),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: isDarkMode ? 0.2 : 0.04),
+                    color: Colors.black.withValues(
+                      alpha: isDarkMode ? 0.2 : 0.04,
+                    ),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
-                  )
+                  ),
                 ],
               ),
               child: Column(
@@ -117,11 +139,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     decoration: BoxDecoration(
                       color: primaryColor.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
-                      border: Border.all(color: primaryColor.withValues(alpha: 0.3), width: 1.5),
+                      border: Border.all(
+                        color: primaryColor.withValues(alpha: 0.3),
+                        width: 1.5,
+                      ),
                     ),
                     child: Center(
                       child: Icon(
-                        isStudent ? Icons.lock_person : Icons.admin_panel_settings,
+                        isStudent
+                            ? Icons.lock_person
+                            : Icons.admin_panel_settings,
                         color: primaryColor,
                         size: 26,
                       ),
@@ -172,15 +199,22 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 6),
                     TextFormField(
                       controller: _emailOrIdController,
-                      style: GoogleFonts.inter(fontSize: 12, color: primaryTextColor),
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: primaryTextColor,
+                      ),
                       decoration: _buildInputDecoration(
                         context: context,
                         hintText: idHint,
-                        prefixIcon: isStudent ? Icons.school_outlined : Icons.badge_outlined,
+                        prefixIcon: isStudent
+                            ? Icons.school_outlined
+                            : Icons.badge_outlined,
                       ),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) {
-                          return isStudent ? "Student ID or Email is required" : "Staff ID or Email is required";
+                          return isStudent
+                              ? "Student ID or Email is required"
+                              : "Staff ID or Email is required";
                         }
                         return null;
                       },
@@ -198,12 +232,38 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 6),
                     TextFormField(
                       controller: _passwordController,
-                      obscureText: true,
-                      style: GoogleFonts.inter(fontSize: 12, color: primaryTextColor),
+                      obscureText: _hidePassword,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      autofillHints: const [AutofillHints.password],
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) {
+                        if (!widget.isSyncing) submit();
+                      },
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: primaryTextColor,
+                      ),
                       decoration: _buildInputDecoration(
                         context: context,
                         hintText: "••••••••",
                         prefixIcon: Icons.key_outlined,
+                        suffixIcon: IconButton(
+                          onPressed: widget.isSyncing
+                              ? null
+                              : () => setState(
+                                  () => _hidePassword = !_hidePassword,
+                                ),
+                          tooltip: _hidePassword
+                              ? 'Show password'
+                              : 'Hide password',
+                          icon: Icon(
+                            _hidePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                            size: 19,
+                          ),
+                        ),
                       ),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) {
@@ -229,7 +289,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           ? const SizedBox(
                               height: 18,
                               width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
                             )
                           : Text(
                               "LOGIN",
@@ -254,11 +317,18 @@ class _LoginScreenState extends State<LoginScreen> {
     required BuildContext context,
     required String hintText,
     required IconData prefixIcon,
+    Widget? suffixIcon,
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final inputBg = isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
-    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-    final iconColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+    final inputBg = isDarkMode
+        ? const Color(0xFF0F172A)
+        : const Color(0xFFF8FAFC);
+    final borderColor = isDarkMode
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
+    final iconColor = isDarkMode
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF64748B);
 
     return InputDecoration(
       hintText: hintText,
@@ -268,6 +338,13 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Icon(prefixIcon, color: iconColor, size: 18),
       ),
       prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0),
+      suffixIcon: suffixIcon == null
+          ? null
+          : IconTheme(
+              data: IconThemeData(color: iconColor),
+              child: suffixIcon,
+            ),
+      suffixIconConstraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       filled: true,
       fillColor: inputBg,
       contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
@@ -282,7 +359,9 @@ class _LoginScreenState extends State<LoginScreen> {
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(
-          color: widget.portalType == 'student' ? const Color(0xFF2563EB) : const Color(0xFF800000),
+          color: widget.portalType == 'student'
+              ? const Color(0xFF2563EB)
+              : const Color(0xFF800000),
           width: 1.5,
         ),
       ),

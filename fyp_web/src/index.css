@@ -474,6 +474,62 @@ html.dark ::-webkit-scrollbar-thumb:hover {
   background: #64748b;
 }
 
+/* Announcement dialogs have two independent scroll areas. Keep each rail inside
+   its own rounded surface so the textarea thumb never appears attached to the
+   modal thumb, and neither rail overlaps labels, fields, or the fixed footer. */
+.announcement-modal-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  overscroll-behavior: contain;
+  background-clip: padding-box;
+}
+
+.announcement-modal-scroll::-webkit-scrollbar,
+.announcement-content-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.announcement-modal-scroll::-webkit-scrollbar-track,
+.announcement-content-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.announcement-modal-scroll::-webkit-scrollbar-thumb,
+.announcement-content-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  min-height: 36px;
+}
+
+.announcement-modal-scroll::-webkit-scrollbar-thumb:hover,
+.announcement-content-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: padding-box;
+}
+
+.announcement-content-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  overscroll-behavior: contain;
+  padding-right: 0.875rem !important;
+}
+
+html.dark .announcement-modal-scroll::-webkit-scrollbar-thumb,
+html.dark .announcement-content-scroll::-webkit-scrollbar-thumb {
+  background: #475569;
+  background-clip: padding-box;
+}
+
+html.dark .announcement-modal-scroll,
+html.dark .announcement-content-scroll {
+  scrollbar-color: #475569 transparent;
+}
+
 /* Shimmer Loading Animations (Smooth Left-to-Right Moving Wave) */
 @keyframes shimmerWave {
   0% {
@@ -1386,6 +1442,78 @@ div[class*="fixed inset-0"][class*="bg-slate"] {
   margin: 1.4rem 0 0 !important;
 }
 
+.recovery-email-popup {
+  width: min(31rem, calc(100vw - 2rem)) !important;
+}
+
+.recovery-email-intro {
+  max-width: 23rem;
+  margin: 0 auto;
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.recovery-email-benefit {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 0.85rem;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.recovery-email-benefit svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: #2563eb;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.recovery-email-form {
+  margin-top: 1rem;
+}
+
+.recovery-email-actions {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+}
+
+.recovery-email-actions button {
+  min-height: 2.75rem;
+  margin: 0 !important;
+}
+
+.recovery-warning-popup {
+  width: min(29rem, calc(100vw - 2rem)) !important;
+  border-color: #fecaca !important;
+  background: #fff !important;
+}
+
+.recovery-warning-skip {
+  border: 1px solid #fecaca !important;
+  background: #fff1f2 !important;
+  color: #be123c !important;
+}
+
+.recovery-warning-skip:hover {
+  border-color: #fda4af !important;
+  background: #ffe4e6 !important;
+}
+
 html.dark .password-reset-intro,
 html.dark .password-reset-help {
   color: #94a3b8;
@@ -1416,6 +1544,31 @@ html.dark .password-reset-field.is-invalid {
 
 html.dark .password-reset-input {
   color: #f8fafc;
+}
+
+html.dark .recovery-email-intro {
+  color: #94a3b8;
+}
+
+html.dark .recovery-email-benefit {
+  border-color: #1e40af;
+  background: rgba(30, 58, 138, 0.25);
+  color: #bfdbfe;
+}
+
+html.dark .recovery-email-benefit svg {
+  stroke: #60a5fa;
+}
+
+html.dark .recovery-warning-popup {
+  border-color: #7f1d1d !important;
+  background: #1e293b !important;
+}
+
+html.dark .recovery-warning-skip {
+  border-color: #7f1d1d !important;
+  background: rgba(127, 29, 29, 0.3) !important;
+  color: #fda4af !important;
 }
 
 @media (max-width: 480px) {

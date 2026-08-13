@@ -68,6 +68,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>This app uses the camera for face recognition attendance.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app uses your photo library so you can choose and crop a profile picture.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>This app uses your location to verify you are on campus Wi-Fi.</string>
 	<key>NSAppTransportSecurity</key>

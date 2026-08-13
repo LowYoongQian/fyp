@@ -131,6 +131,7 @@ export interface Course {
   schedule_end?: string | null;
   schedule_room?: string | null;
   role?: string | null;
+  class_group?: string | null;
   course_id?: number | string | null;
   attendance_rate?: number | null;
 }
@@ -715,6 +716,16 @@ export const apiService = {
     const response = await api.get<AuditLogEntry[]>(`/admin/audit/logs?${params.toString()}`);
     return response.data;
   },
+  getAuditIPLocation: async (ipAddress: string) => {
+    const response = await api.get<AuditIPLocation>('/admin/audit/ip-location', {
+      params: { ip: ipAddress },
+    });
+    return response.data;
+  },
+  getAuditMapConfig: async () => {
+    const response = await api.get<{ api_key: string }>('/admin/audit/map-config');
+    return response.data;
+  },
   createAdminAuditLog: async (data: { category: string; action: string; details?: string; ip_address?: string }) => {
     const response = await api.post<AuditLogEntry>('/admin/audit/logs', data);
     return response.data;
@@ -757,4 +768,18 @@ export interface AuditLogEntry {
   details?: string;
   ip_address?: string;
   created_at: string;
+}
+
+export interface AuditIPLocation {
+  available: boolean;
+  latitude?: number;
+  longitude?: number;
+  city?: string;
+  region?: string;
+  country?: string;
+  resolved_ip?: string;
+  network?: string;
+  is_approximate: boolean;
+  source_kind: 'public' | 'local_egress' | 'local' | 'invalid';
+  message?: string;
 }

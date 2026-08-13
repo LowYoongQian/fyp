@@ -300,6 +300,8 @@ def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depend
     )
     return [
         {
+            "session_id": s.id,
+            "course_id": c.id,
             "course_code": c.course_code,
             "course_name": c.course_name,
             "class_group": s.class_group,

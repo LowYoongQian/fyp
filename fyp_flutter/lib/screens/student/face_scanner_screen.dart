@@ -17,7 +17,8 @@ import '../../widgets/glass_card.dart';
 // -----------------------------------------------------------------
 class FaceScannerScreen extends StatefulWidget {
   final String title;
-  final Function(String? imageBase64, bool livenessPassed, {int? challengeMs}) onScanComplete;
+  final Function(String? imageBase64, bool livenessPassed, {int? challengeMs})
+  onScanComplete;
 
   const FaceScannerScreen({
     super.key,
@@ -32,7 +33,7 @@ class FaceScannerScreen extends StatefulWidget {
 class _FaceScannerScreenState extends State<FaceScannerScreen>
     with TickerProviderStateMixin {
   late AnimationController _scannerAnimController;
-  
+
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
   bool _isCameraInitialized = false;
@@ -64,12 +65,20 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
 
   late final FaceDetector _faceDetector;
   bool _isProcessingImage = false;
+  Rect? _trackedFaceRect;
+  Size? _trackingImageSize;
+  InputImageRotation _trackingRotation = InputImageRotation.rotation0deg;
+  bool _faceDetected = false;
+  bool _captureReady = false;
+  String _trackingMessage = "Move your face into view";
+  DateTime _lastDetectionAt = DateTime.fromMillisecondsSinceEpoch(0);
   int _completedTasksCount = 0;
   List<String> _selectedChallenges = [];
   // Behavioral biometrics: when the user clicked "Detect Face"
   DateTime? _scanStartedAt;
-  // Frame skipping: only run face detection every 3rd camera frame.
-  int _frameSkipCount = 0;
+  // ML Kit stays below the camera preview rate so frames never queue. The native
+  // preview remains fluid while detection updates the target roughly 12-15 times/s.
+  static const Duration _detectionInterval = Duration(milliseconds: 70);
 
   @override
   void initState() {
@@ -79,14 +88,14 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
       options: FaceDetectorOptions(
         enableClassification: true,
         enableTracking: true,
-        performanceMode: FaceDetectorMode.accurate,
+        performanceMode: FaceDetectorMode.fast,
       ),
     );
     _scannerAnimController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
-    
+
     _initializeCamera();
   }
 
@@ -99,25 +108,28 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
         });
         return;
       }
-      
+
       // Select front camera or fallback to first available
       final frontCamera = _cameras!.firstWhere(
         (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => _cameras!.first,
       );
-      
+
       _cameraController = CameraController(
         frontCamera,
         ResolutionPreset.medium,
         enableAudio: false,
-        imageFormatGroup: Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
+        imageFormatGroup: Platform.isIOS
+            ? ImageFormatGroup.bgra8888
+            : ImageFormatGroup.yuv420,
       );
-      
+
       await _cameraController!.initialize();
       if (mounted) {
         setState(() {
           _isCameraInitialized = true;
         });
+        _startImageStream();
       }
     } catch (e) {
       if (mounted) {
@@ -134,7 +146,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     _progressTimer?.cancel();
     _countdownTimer?.cancel();
     try {
-      if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      if (_cameraController != null &&
+          _cameraController!.value.isStreamingImages) {
         _cameraController!.stopImageStream();
       }
     } catch (e) {
@@ -148,9 +161,10 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   InputImageRotation _getRotation(CameraDescription camera) {
     final sensorOrientation = camera.sensorOrientation;
     if (Platform.isIOS) {
-      return InputImageRotationValue.fromRawValue(sensorOrientation) ?? InputImageRotation.rotation90deg;
+      return InputImageRotationValue.fromRawValue(sensorOrientation) ??
+          InputImageRotation.rotation90deg;
     }
-    
+
     int rotationCompensation = 0;
     if (_cameraController != null) {
       final deviceOrient = _cameraController!.value.deviceOrientation;
@@ -171,14 +185,15 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     } else {
       rawRotation = (sensorOrientation - rotationCompensation + 360) % 360;
     }
-    
-    return InputImageRotationValue.fromRawValue(rawRotation) ?? InputImageRotation.rotation270deg;
+
+    return InputImageRotationValue.fromRawValue(rawRotation) ??
+        InputImageRotation.rotation270deg;
   }
 
   Uint8List _convertYUV420toNV21(CameraImage image) {
     final width = image.width;
     final height = image.height;
-    
+
     final yPlane = image.planes[0];
     final uPlane = image.planes[1];
     final vPlane = image.planes[2];
@@ -192,7 +207,7 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
 
     int idY = 0;
     int idUV = width * height;
-    
+
     final uvWidth = width ~/ 2;
     final uvHeight = height ~/ 2;
 
@@ -225,9 +240,13 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
       if (_cameraController == null) return null;
       final imageRotation = _getRotation(_cameraController!.description);
 
-      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
-      final InputImageFormat inputImageFormat = 
-          Platform.isIOS ? InputImageFormat.bgra8888 : InputImageFormat.nv21;
+      final Size imageSize = Size(
+        image.width.toDouble(),
+        image.height.toDouble(),
+      );
+      final InputImageFormat inputImageFormat = Platform.isIOS
+          ? InputImageFormat.bgra8888
+          : InputImageFormat.nv21;
 
       final Uint8List bytes;
       if (Platform.isIOS) {
@@ -252,16 +271,17 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
 
   void _startImageStream() {
     if (_cameraController == null || !_isCameraInitialized) return;
-    
+
     // Only start if not already streaming
     if (_cameraController!.value.isStreamingImages) return;
 
     _cameraController!.startImageStream((CameraImage image) async {
-      // Skip every 2 out of 3 frames — reduces face detection from ~30/s to ~10/s.
-      _frameSkipCount = (_frameSkipCount + 1) % 3;
-      if (_frameSkipCount != 0) return;
-
-      if (_isProcessingImage || !isScanning || !_isWaitingForGesture) return;
+      final now = DateTime.now();
+      if (_isProcessingImage ||
+          now.difference(_lastDetectionAt) < _detectionInterval) {
+        return;
+      }
+      _lastDetectionAt = now;
       _isProcessingImage = true;
 
       try {
@@ -269,7 +289,13 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
         if (inputImage != null) {
           final List<Face> faces = await _faceDetector.processImage(inputImage);
           if (faces.isNotEmpty) {
-            final Face face = faces.first;
+            final Face face = faces.reduce(
+              (a, b) =>
+                  a.boundingBox.width * a.boundingBox.height >=
+                      b.boundingBox.width * b.boundingBox.height
+                  ? a
+                  : b,
+            );
 
             double? leftEye = face.leftEyeOpenProbability;
             double? rightEye = face.rightEyeOpenProbability;
@@ -285,28 +311,60 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
             double? rotY = face.headEulerAngleY; // Yaw (left/right)
             if (rotY != null &&
                 Platform.isIOS &&
-                _cameraController?.description.lensDirection == CameraLensDirection.front) {
+                _cameraController?.description.lensDirection ==
+                    CameraLensDirection.front) {
               rotY = -rotY;
             }
             double? rotX = face.headEulerAngleX; // Pitch (up/down)
+            final rotZ = face.headEulerAngleZ ?? 0.0;
+            final imageArea = image.width * image.height;
+            final faceArea = face.boundingBox.width * face.boundingBox.height;
+            final largeEnough = faceArea >= imageArea * 0.075;
+            final aligned =
+                (rotY ?? 99).abs() <= 12 &&
+                (rotX ?? 99).abs() <= 12 &&
+                rotZ.abs() <= 15 &&
+                largeEnough;
 
             // Guard: only rebuild if a value changed meaningfully.
-            final newEye  = (leftEye != null && rightEye != null) ? (leftEye + rightEye) / 2.0 : _eyeOpenProbability;
+            final newEye = (leftEye != null && rightEye != null)
+                ? (leftEye + rightEye) / 2.0
+                : _eyeOpenProbability;
             final newRotY = rotY ?? _headRotationAngle;
             final newRotX = rotX ?? _headRotationAnglePitch;
-            final eyeChanged  = (newEye  - _eyeOpenProbability).abs() > 0.02;
+            final eyeChanged = (newEye - _eyeOpenProbability).abs() > 0.02;
             final rotYChanged = (newRotY - _headRotationAngle).abs() > 1.0;
             final rotXChanged = (newRotX - _headRotationAnglePitch).abs() > 1.0;
-            if (mounted && (eyeChanged || rotYChanged || rotXChanged)) {
+            if (mounted) {
               setState(() {
-                if (eyeChanged)  _eyeOpenProbability     = newEye;
-                if (rotYChanged) _headRotationAngle      = newRotY;
+                _trackedFaceRect = _trackedFaceRect == null
+                    ? face.boundingBox
+                    : Rect.lerp(_trackedFaceRect, face.boundingBox, .42);
+                _trackingImageSize = Size(
+                  image.width.toDouble(),
+                  image.height.toDouble(),
+                );
+                _trackingRotation = _getRotation(
+                  _cameraController!.description,
+                );
+                _faceDetected = true;
+                _captureReady = aligned;
+                _trackingMessage = !largeEnough
+                    ? "Move a little closer"
+                    : aligned
+                    ? "Face locked — ready to capture"
+                    : "Face detected — look straight ahead";
+                if (eyeChanged) _eyeOpenProbability = newEye;
+                if (rotYChanged) _headRotationAngle = newRotY;
                 if (rotXChanged) _headRotationAnglePitch = newRotX;
               });
             }
 
             if (_currentChallenge == "Blink") {
-              if (leftEye != null && rightEye != null && leftEye < 0.3 && rightEye < 0.3) {
+              if (leftEye != null &&
+                  rightEye != null &&
+                  leftEye < 0.3 &&
+                  rightEye < 0.3) {
                 _onChallengeSuccess();
               }
             } else if (_currentChallenge == "Turn Left") {
@@ -323,6 +381,13 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                 _onChallengeSuccess();
               }
             }
+          } else if (mounted && _faceDetected) {
+            setState(() {
+              _faceDetected = false;
+              _captureReady = false;
+              _trackedFaceRect = null;
+              _trackingMessage = "Move your face into view";
+            });
           }
         }
       } catch (e) {
@@ -349,7 +414,11 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   }
 
   void _triggerBlinkSuccess() {
-    if (!_isWaitingForGesture || _currentChallenge != "Blink" || _challengeSuccess) return;
+    if (!_isWaitingForGesture ||
+        _currentChallenge != "Blink" ||
+        _challengeSuccess) {
+      return;
+    }
     setState(() {
       _eyeOpenProbability = 0.02; // eyes closed/blinked
       _onChallengeSuccess();
@@ -358,10 +427,10 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
 
   void _handlePanUpdate(DragUpdateDetails details) {
     if (!_isWaitingForGesture || _challengeSuccess) return;
-    
+
     final dx = details.delta.dx;
     final dy = details.delta.dy;
-    
+
     if (_currentChallenge == "Turn Left") {
       // Turn Left = Swiping left (dx < -3)
       if (dx < -3.0) {
@@ -444,10 +513,11 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
         if (!_isWaitingForGesture && !_challengeSuccess) {
           // Increment progress
           progress += 0.05; // 5% per 200ms = same total scan time as before
-          
+
           // Simulate some light random telemetry noise before the challenge
           if (_currentChallenge == "Blink") {
-            _eyeOpenProbability = 0.90 + (DateTime.now().millisecond % 10) * 0.008;
+            _eyeOpenProbability =
+                0.90 + (DateTime.now().millisecond % 10) * 0.008;
             _headRotationAngle = 0.0;
             _headRotationAnglePitch = 0.0;
           } else if (_currentChallenge == "Turn Left") {
@@ -461,7 +531,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
           } else {
             _eyeOpenProbability = 0.95;
             _headRotationAngle = 0.0;
-            _headRotationAnglePitch = -0.5 + (DateTime.now().millisecond % 5) * 0.2;
+            _headRotationAnglePitch =
+                -0.5 + (DateTime.now().millisecond % 5) * 0.2;
           }
 
           // Check for pause thresholds (two chained challenges):
@@ -490,32 +561,39 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
           final taskNum = _completedTasksCount + 1;
           final secsLeft = _countdownSeconds.ceil();
           if (_currentChallenge == "Blink") {
-            scanningStatusText = "TASK $taskNum/$_kChallengeCount: Please BLINK! (${secsLeft}s)";
+            scanningStatusText =
+                "TASK $taskNum/$_kChallengeCount: Please BLINK! (${secsLeft}s)";
             if (_eyeOpenProbability > 0.4) {
-              _eyeOpenProbability = 0.90 + (DateTime.now().millisecond % 10) * 0.008;
+              _eyeOpenProbability =
+                  0.90 + (DateTime.now().millisecond % 10) * 0.008;
             }
             _headRotationAngle = 0.0;
             _headRotationAnglePitch = 0.0;
           } else if (_currentChallenge == "Turn Left") {
-            scanningStatusText = "TASK $taskNum/$_kChallengeCount: Turn head LEFT! (${secsLeft}s)";
+            scanningStatusText =
+                "TASK $taskNum/$_kChallengeCount: Turn head LEFT! (${secsLeft}s)";
             _eyeOpenProbability = 0.95;
             if (_headRotationAngle > -10.0) {
-              _headRotationAngle = -1.0 + (DateTime.now().millisecond % 5) * 0.4;
+              _headRotationAngle =
+                  -1.0 + (DateTime.now().millisecond % 5) * 0.4;
             }
             _headRotationAnglePitch = 0.0;
           } else if (_currentChallenge == "Turn Right") {
-            scanningStatusText = "TASK $taskNum/$_kChallengeCount: Turn head RIGHT! (${secsLeft}s)";
+            scanningStatusText =
+                "TASK $taskNum/$_kChallengeCount: Turn head RIGHT! (${secsLeft}s)";
             _eyeOpenProbability = 0.95;
             if (_headRotationAngle < 10.0) {
               _headRotationAngle = 1.0 - (DateTime.now().millisecond % 5) * 0.4;
             }
             _headRotationAnglePitch = 0.0;
           } else if (_currentChallenge == "Nod") {
-            scanningStatusText = "TASK $taskNum/$_kChallengeCount: NOD your head! (${secsLeft}s)";
+            scanningStatusText =
+                "TASK $taskNum/$_kChallengeCount: NOD your head! (${secsLeft}s)";
             _eyeOpenProbability = 0.95;
             _headRotationAngle = 0.0;
             if (_headRotationAnglePitch.abs() < 5.0) {
-              _headRotationAnglePitch = -0.5 + (DateTime.now().millisecond % 5) * 0.2;
+              _headRotationAnglePitch =
+                  -0.5 + (DateTime.now().millisecond % 5) * 0.2;
             }
           }
         } else if (_challengeSuccess) {
@@ -540,7 +618,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
       _countdownSeconds = _kPerChallengeSeconds;
     });
     // Tick every 100ms for a smooth countdown ring.
-    _countdownTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    _countdownTimer = Timer.periodic(const Duration(milliseconds: 100), (
+      timer,
+    ) {
       if (!mounted) {
         timer.cancel();
         return;
@@ -565,7 +645,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     _progressTimer?.cancel();
     _countdownTimer?.cancel();
     try {
-      if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      if (_cameraController != null &&
+          _cameraController!.value.isStreamingImages) {
         _cameraController!.stopImageStream();
       }
     } catch (e) {
@@ -590,7 +671,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     });
 
     try {
-      if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      if (_cameraController != null &&
+          _cameraController!.value.isStreamingImages) {
         await _cameraController!.stopImageStream();
       }
     } catch (e) {
@@ -621,7 +703,11 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     });
 
     Future.delayed(const Duration(milliseconds: 800), () {
-      widget.onScanComplete(capturedImageBase64, passed, challengeMs: challengeMs);
+      widget.onScanComplete(
+        capturedImageBase64,
+        passed,
+        challengeMs: challengeMs,
+      );
       if (mounted) {
         Navigator.pop(context);
       }
@@ -666,7 +752,451 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _buildLensScreen(context);
+
+  Widget _buildLensScreen(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = isDark ? const Color(0xFF4ADE80) : const Color(0xFF2563EB);
+    final primaryText = isDark ? Colors.white : const Color(0xFF0F172A);
+    final secondaryText = isDark ? Colors.white60 : const Color(0xFF64748B);
+    final panelColor = isDark
+        ? const Color(0xE6131313)
+        : Colors.white.withValues(alpha: .94);
+    final panelBorder = isDark ? Colors.white12 : const Color(0xFFE2E8F0);
+    final readyColor = _captureReady ? const Color(0xFF22C55E) : primary;
+    final statusText = isScanning ? scanningStatusText : _trackingMessage;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+        statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+        systemNavigationBarColor: isDark
+            ? Colors.black
+            : const Color(0xFFF8FAFC),
+        systemNavigationBarIconBrightness: isDark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: isDark ? Colors.black : const Color(0xFFF8FAFC),
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (_isCameraInitialized && _cameraController != null)
+              FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: 100,
+                  height: _cameraController!.value.aspectRatio > 1
+                      ? 100 * _cameraController!.value.aspectRatio
+                      : 100 / _cameraController!.value.aspectRatio,
+                  child: CameraPreview(_cameraController!),
+                ),
+              )
+            else
+              Container(
+                color: const Color(0xFF050505),
+                child: Center(
+                  child: _cameraError == null
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Icon(
+                          Icons.videocam_off_rounded,
+                          color: Colors.white38,
+                          size: 54,
+                        ),
+                ),
+              ),
+
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: isDark
+                      ? const [
+                          Color(0xCC000000),
+                          Color(0x22000000),
+                          Color(0x11000000),
+                          Color(0xE6000000),
+                        ]
+                      : const [
+                          Color(0xE6F8FAFC),
+                          Color(0x66F8FAFC),
+                          Color(0x00F8FAFC),
+                          Color(0x55F8FAFC),
+                          Color(0xF2F8FAFC),
+                        ],
+                  stops: isDark
+                      ? const [0, .2, .56, 1]
+                      : const [0, .16, .38, .64, 1],
+                ),
+              ),
+            ),
+
+            if (_trackingImageSize != null)
+              RepaintBoundary(
+                child: CustomPaint(
+                  painter: FaceTargetPainter(
+                    faceRect: _trackedFaceRect,
+                    imageSize: _trackingImageSize!,
+                    rotation: _trackingRotation,
+                    lensDirection:
+                        _cameraController?.description.lensDirection ??
+                        CameraLensDirection.front,
+                    ready: _captureReady,
+                    animation: _scannerAnimController,
+                  ),
+                ),
+              ),
+
+            if (isScanning && _isWaitingForGesture && !_showSuccessPulse)
+              _buildDirectionArrow(),
+
+            SafeArea(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: Icon(
+                            Icons.arrow_back_rounded,
+                            color: primaryText,
+                          ),
+                          style: IconButton.styleFrom(
+                            backgroundColor: isDark
+                                ? Colors.black.withValues(alpha: .38)
+                                : Colors.white.withValues(alpha: .9),
+                            side: BorderSide(
+                              color: isDark
+                                  ? Colors.white12
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.title,
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: primaryText,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              Text(
+                                'Live face tracking',
+                                style: GoogleFonts.inter(
+                                  color: secondaryText,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF16A34A),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'LIVE',
+                                style: GoogleFonts.inter(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: .7,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? Colors.black.withValues(alpha: .5)
+                          : Colors.white.withValues(alpha: .92),
+                      borderRadius: BorderRadius.circular(30),
+                      border: Border.all(
+                        color: _captureReady
+                            ? const Color(0xFF86EFAC)
+                            : panelBorder,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: isDark
+                              ? Colors.black26
+                              : const Color(0xFF2563EB).withValues(alpha: .10),
+                          blurRadius: 18,
+                          offset: const Offset(0, 7),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _captureReady
+                              ? Icons.check_circle_rounded
+                              : _faceDetected
+                              ? Icons.face_retouching_natural_rounded
+                              : Icons.center_focus_strong_rounded,
+                          color: readyColor,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            statusText,
+                            maxLines: 2,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(
+                              color: primaryText,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  if (isScanning)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 22),
+                      child: Column(
+                        children: [
+                          if (_isWaitingForGesture)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? Colors.black.withValues(alpha: .66)
+                                    : Colors.white.withValues(alpha: .94),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: panelBorder),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.motion_photos_on_rounded,
+                                    color: primary,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '$_currentChallenge  •  ${_countdownSeconds.ceil()}s',
+                                    style: GoogleFonts.inter(
+                                      color: primaryText,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 14),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: LinearProgressIndicator(
+                              value: progress,
+                              minHeight: 5,
+                              backgroundColor: isDark
+                                  ? Colors.white24
+                                  : const Color(0xFFDBEAFE),
+                              color: primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(14, 18, 14, 12),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                    decoration: BoxDecoration(
+                      color: panelColor,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: panelBorder),
+                      boxShadow: [
+                        BoxShadow(
+                          color: isDark
+                              ? Colors.black38
+                              : const Color(0xFF0F172A).withValues(alpha: .09),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _lensHint(
+                              Icons.light_mode_outlined,
+                              'Even light',
+                              true,
+                              isDark: isDark,
+                            ),
+                            const SizedBox(width: 18),
+                            _lensHint(
+                              Icons.face_rounded,
+                              _captureReady ? 'Face locked' : 'Look forward',
+                              _captureReady,
+                              isDark: isDark,
+                              verified: _captureReady,
+                            ),
+                            const SizedBox(width: 18),
+                            _lensHint(
+                              Icons.phone_android_rounded,
+                              'Hold steady',
+                              true,
+                              isDark: isDark,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        if (_cameraError != null) ...[
+                          Text(
+                            _cameraError!,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(
+                              color: const Color(0xFFFCA5A5),
+                              fontSize: 10,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        SizedBox(
+                          width: double.infinity,
+                          height: 52,
+                          child: FilledButton.icon(
+                            onPressed: isScanning
+                                ? null
+                                : (_captureReady || _cameraError != null)
+                                ? startScanning
+                                : null,
+                            icon: Icon(
+                              isScanning
+                                  ? Icons.hourglass_top_rounded
+                                  : Icons.center_focus_strong_rounded,
+                            ),
+                            label: Text(
+                              isScanning
+                                  ? 'Verifying liveness...'
+                                  : _captureReady
+                                  ? 'Start secure capture'
+                                  : 'Align your face to continue',
+                            ),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: isDark
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFF2563EB),
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor: isDark
+                                  ? Colors.white12
+                                  : const Color(0xFFE2E8F0),
+                              disabledForegroundColor: isDark
+                                  ? Colors.white38
+                                  : const Color(0xFF94A3B8),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              textStyle: GoogleFonts.inter(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _lensHint(
+    IconData icon,
+    String label,
+    bool active, {
+    required bool isDark,
+    bool verified = false,
+  }) {
+    final color = !active
+        ? (isDark ? Colors.white54 : const Color(0xFF94A3B8))
+        : verified
+        ? const Color(0xFF22C55E)
+        : isDark
+        ? const Color(0xFF4ADE80)
+        : const Color(0xFF2563EB);
+    return Expanded(
+      child: Column(
+        children: [
+          Icon(icon, size: 17, color: color),
+          const SizedBox(height: 5),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.inter(
+              color: color,
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Retained temporarily as a fallback layout while the live lens UI is exercised
+  // across devices with different camera aspect ratios.
+  // ignore: unused_element
+  Widget _buildLegacyScanner(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
 
@@ -674,7 +1204,10 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
       appBar: AppBar(
         title: Text(
           widget.title,
-          style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.bold),
+          style: GoogleFonts.spaceGrotesk(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         backgroundColor: Colors.white,
         elevation: 0,
@@ -691,7 +1224,10 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   GlassCard(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     color: _cameraError != null
                         ? Colors.red.withValues(alpha: 0.05)
                         : Colors.white.withValues(alpha: 0.8),
@@ -701,8 +1237,12 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                     child: Row(
                       children: [
                         Icon(
-                          _cameraError != null ? Icons.error_outline : Icons.info_outline,
-                          color: _cameraError != null ? const Color(0xFFDC2626) : const Color(0xFF2563EB),
+                          _cameraError != null
+                              ? Icons.error_outline
+                              : Icons.info_outline,
+                          color: _cameraError != null
+                              ? const Color(0xFFDC2626)
+                              : const Color(0xFF2563EB),
                           size: 16,
                         ),
                         const SizedBox(width: 8),
@@ -714,7 +1254,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                             style: GoogleFonts.inter(
                               fontSize: 10.5,
                               fontWeight: FontWeight.w500,
-                              color: _cameraError != null ? const Color(0xFF991B1B) : const Color(0xFF475569),
+                              color: _cameraError != null
+                                  ? const Color(0xFF991B1B)
+                                  : const Color(0xFF475569),
                             ),
                           ),
                         ),
@@ -731,7 +1273,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () {
-                            if (_isWaitingForGesture && _currentChallenge == "Blink") {
+                            if (_isWaitingForGesture &&
+                                _currentChallenge == "Blink") {
                               _triggerBlinkSuccess();
                             }
                           },
@@ -740,15 +1283,24 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                             alignment: Alignment.center,
                             children: [
                               // 1. Bottom Layer: Live Camera Preview
-                              if (_isCameraInitialized && _cameraController != null)
+                              if (_isCameraInitialized &&
+                                  _cameraController != null)
                                 Positioned.fill(
                                   child: FittedBox(
                                     fit: BoxFit.cover,
                                     child: SizedBox(
                                       width: 100,
-                                      height: _cameraController!.value.aspectRatio > 1.0
-                                          ? 100 * _cameraController!.value.aspectRatio
-                                          : 100 / _cameraController!.value.aspectRatio,
+                                      height:
+                                          _cameraController!.value.aspectRatio >
+                                              1.0
+                                          ? 100 *
+                                                _cameraController!
+                                                    .value
+                                                    .aspectRatio
+                                          : 100 /
+                                                _cameraController!
+                                                    .value
+                                                    .aspectRatio,
                                       child: CameraPreview(_cameraController!),
                                     ),
                                   ),
@@ -764,7 +1316,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                         // Technical grid overlay lines
                                         Positioned.fill(
                                           child: GridPaper(
-                                            color: const Color(0xFF10B981).withValues(alpha: 0.05),
+                                            color: const Color(
+                                              0xFF10B981,
+                                            ).withValues(alpha: 0.05),
                                             interval: 30.0,
                                             divisions: 1,
                                             subdivisions: 1,
@@ -785,11 +1339,22 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                         Positioned(
                                           top: 20,
                                           child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 4,
+                                            ),
                                             decoration: BoxDecoration(
-                                              color: Colors.amber.withValues(alpha: 0.12),
-                                              borderRadius: BorderRadius.circular(20),
-                                              border: Border.all(color: Colors.amber.withValues(alpha: 0.3), width: 1),
+                                              color: Colors.amber.withValues(
+                                                alpha: 0.12,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                              border: Border.all(
+                                                color: Colors.amber.withValues(
+                                                  alpha: 0.3,
+                                                ),
+                                                width: 1,
+                                              ),
                                             ),
                                             child: Text(
                                               "CAMERA SIMULATION ACTIVE",
@@ -810,7 +1375,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                           child: Text(
                                             "Camera Interface Warning: Clean rebuild is required to link CameraX native packages.",
                                             style: TextStyle(
-                                              color: Colors.white.withValues(alpha: 0.3),
+                                              color: Colors.white.withValues(
+                                                alpha: 0.3,
+                                              ),
                                               fontSize: 7.5,
                                               fontWeight: FontWeight.w500,
                                             ),
@@ -824,7 +1391,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                 )
                               else
                                 const Center(
-                                  child: CircularProgressIndicator(color: Color(0xFF10B981)),
+                                  child: CircularProgressIndicator(
+                                    color: Color(0xFF10B981),
+                                  ),
                                 ),
 
                               // 2. Middle Layer: Sliding Scanner Line (only if scanning)
@@ -833,7 +1402,10 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                   animation: _scannerAnimController,
                                   builder: (context, child) {
                                     final ovalHeight = screenHeight * 0.32;
-                                    final translationOffset = (ovalHeight * _scannerAnimController.value) - (ovalHeight / 2);
+                                    final translationOffset =
+                                        (ovalHeight *
+                                            _scannerAnimController.value) -
+                                        (ovalHeight / 2);
                                     return Transform.translate(
                                       offset: Offset(0, translationOffset),
                                       child: Container(
@@ -843,10 +1415,12 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                           color: const Color(0xFF10B981),
                                           boxShadow: [
                                             BoxShadow(
-                                              color: const Color(0xFF10B981).withValues(alpha: 0.8),
+                                              color: const Color(
+                                                0xFF10B981,
+                                              ).withValues(alpha: 0.8),
                                               blurRadius: 10,
                                               spreadRadius: 2.0,
-                                            )
+                                            ),
                                           ],
                                         ),
                                       ),
@@ -854,22 +1428,24 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                   },
                                 ),
 
-                               // Face Mesh Overlay (only if scanning)
-                               if (isScanning)
-                                 Positioned.fill(
-                                   child: RepaintBoundary(
-                                     child: CustomPaint(
-                                       painter: FaceMeshPainter(
-                                         progress: progress,
-                                         challenge: _currentChallenge,
-                                         animationValue: _scannerAnimController.value,
-                                         eyeOpenProbability: _eyeOpenProbability,
-                                         headRotationAngle: _headRotationAngle,
-                                         headRotationAnglePitch: _headRotationAnglePitch,
-                                       ),
-                                     ),
-                                   ),
-                                 ),
+                              // Face Mesh Overlay (only if scanning)
+                              if (isScanning)
+                                Positioned.fill(
+                                  child: RepaintBoundary(
+                                    child: CustomPaint(
+                                      painter: FaceMeshPainter(
+                                        progress: progress,
+                                        challenge: _currentChallenge,
+                                        animationValue:
+                                            _scannerAnimController.value,
+                                        eyeOpenProbability: _eyeOpenProbability,
+                                        headRotationAngle: _headRotationAngle,
+                                        headRotationAnglePitch:
+                                            _headRotationAnglePitch,
+                                      ),
+                                    ),
+                                  ),
+                                ),
 
                               // 3. Top Layer: Custom black mask overlay with transparent oval cutout
                               Positioned.fill(
@@ -877,11 +1453,16 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                   painter: OvalCutoutPainter(
                                     screenWidth: screenWidth,
                                     screenHeight: screenHeight,
-                                    overlayColor: Colors.black, // Opaque black mask outside the oval
+                                    overlayColor: Colors
+                                        .black, // Opaque black mask outside the oval
                                     borderSide: BorderSide(
                                       color: isScanning
-                                          ? const Color(0xFF10B981).withValues(alpha: 0.8)
-                                          : Colors.white.withValues(alpha: 0.35),
+                                          ? const Color(
+                                              0xFF10B981,
+                                            ).withValues(alpha: 0.8)
+                                          : Colors.white.withValues(
+                                              alpha: 0.35,
+                                            ),
                                       width: 2.0,
                                     ),
                                   ),
@@ -889,7 +1470,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                               ),
 
                               // 3b. Countdown ring + success pulse around the oval guide
-                              if (isScanning && (_isWaitingForGesture || _showSuccessPulse))
+                              if (isScanning &&
+                                  (_isWaitingForGesture || _showSuccessPulse))
                                 Positioned.fill(
                                   child: RepaintBoundary(
                                     child: CustomPaint(
@@ -897,7 +1479,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                         screenWidth: screenWidth,
                                         screenHeight: screenHeight,
                                         fraction: _isWaitingForGesture
-                                            ? (_countdownSeconds / _kPerChallengeSeconds).clamp(0.0, 1.0)
+                                            ? (_countdownSeconds /
+                                                      _kPerChallengeSeconds)
+                                                  .clamp(0.0, 1.0)
                                             : 1.0,
                                         success: _showSuccessPulse,
                                       ),
@@ -906,7 +1490,9 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                 ),
 
                               // 3c. Animated directional arrow cue for the current challenge
-                              if (isScanning && _isWaitingForGesture && !_showSuccessPulse)
+                              if (isScanning &&
+                                  _isWaitingForGesture &&
+                                  !_showSuccessPulse)
                                 _buildDirectionArrow(),
 
                               // 4. Fallback Shutter Info (only if camera not initialized and no error yet)
@@ -915,18 +1501,23 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                   child: Container(
                                     color: Colors.black.withValues(alpha: 0.85),
                                     child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
                                       children: [
                                         Icon(
                                           Icons.camera_alt,
                                           size: 36,
-                                          color: Colors.white.withValues(alpha: 0.08),
+                                          color: Colors.white.withValues(
+                                            alpha: 0.08,
+                                          ),
                                         ),
                                         const SizedBox(height: 6),
                                         Text(
                                           "CAMERA INITIALIZING...",
                                           style: TextStyle(
-                                            color: Colors.white.withValues(alpha: 0.08),
+                                            color: Colors.white.withValues(
+                                              alpha: 0.08,
+                                            ),
                                             fontSize: 10,
                                             fontWeight: FontWeight.bold,
                                             letterSpacing: 1.0,
@@ -942,17 +1533,26 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                 Positioned(
                                   bottom: 20,
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 8,
+                                    ),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF0F172A).withValues(alpha: 0.95), // Slate 900
+                                      color: const Color(
+                                        0xFF0F172A,
+                                      ).withValues(alpha: 0.95), // Slate 900
                                       borderRadius: BorderRadius.circular(20),
                                       border: Border.all(
-                                        color: const Color(0xFF3B82F6).withValues(alpha: 0.4),
+                                        color: const Color(
+                                          0xFF3B82F6,
+                                        ).withValues(alpha: 0.4),
                                         width: 1,
                                       ),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.black.withValues(alpha: 0.4),
+                                          color: Colors.black.withValues(
+                                            alpha: 0.4,
+                                          ),
                                           blurRadius: 8,
                                           offset: const Offset(0, 4),
                                         ),
@@ -971,10 +1571,11 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                           _currentChallenge == "Blink"
                                               ? "SIMULATOR HUD: TAP SCREEN TO BLINK"
                                               : _currentChallenge == "Turn Left"
-                                                  ? "SIMULATOR HUD: SWIPE LEFT TO TURN LEFT"
-                                                  : _currentChallenge == "Turn Right"
-                                                      ? "SIMULATOR HUD: SWIPE RIGHT TO TURN RIGHT"
-                                                      : "SIMULATOR HUD: SWIPE UP/DOWN TO NOD",
+                                              ? "SIMULATOR HUD: SWIPE LEFT TO TURN LEFT"
+                                              : _currentChallenge ==
+                                                    "Turn Right"
+                                              ? "SIMULATOR HUD: SWIPE RIGHT TO TURN RIGHT"
+                                              : "SIMULATOR HUD: SWIPE UP/DOWN TO NOD",
                                           style: GoogleFonts.spaceGrotesk(
                                             fontSize: 9.5,
                                             fontWeight: FontWeight.bold,
@@ -1003,24 +1604,32 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                           style: GoogleFonts.inter(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: isScanning ? const Color(0xFF1E293B) : const Color(0xFF64748B),
+                            color: isScanning
+                                ? const Color(0xFF1E293B)
+                                : const Color(0xFF64748B),
                           ),
                         ),
                         if (isScanning) ...[
                           const SizedBox(height: 12),
                           // High-tech Gesture Telemetry Tracker Panel
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFFF8FAFC),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFFE2E8F0)),
+                              border: Border.all(
+                                color: const Color(0xFFE2E8F0),
+                              ),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
                                       "Active Telemetry:",
@@ -1032,11 +1641,15 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                       ),
                                     ),
                                     Text(
-                                      _challengeSuccess ? "CHALLENGE PASSED ✅" : "AWAITING ACTION...",
+                                      _challengeSuccess
+                                          ? "CHALLENGE PASSED ✅"
+                                          : "AWAITING ACTION...",
                                       style: GoogleFonts.inter(
                                         fontSize: 9.0,
                                         fontWeight: FontWeight.bold,
-                                        color: _challengeSuccess ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                        color: _challengeSuccess
+                                            ? const Color(0xFF10B981)
+                                            : const Color(0xFFF59E0B),
                                       ),
                                     ),
                                   ],
@@ -1044,72 +1657,98 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                 const SizedBox(height: 6),
                                 if (_currentChallenge == "Blink") ...[
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
                                         "Eye Open Probability",
-                                        style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          color: const Color(0xFF64748B),
+                                        ),
                                       ),
                                       Text(
                                         _eyeOpenProbability.toStringAsFixed(2),
                                         style: GoogleFonts.spaceGrotesk(
                                           fontSize: 11,
                                           fontWeight: FontWeight.bold,
-                                          color: _eyeOpenProbability < 0.2 ? const Color(0xFF10B981) : const Color(0xFF2563EB),
+                                          color: _eyeOpenProbability < 0.2
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFF2563EB),
                                         ),
                                       ),
                                     ],
                                   ),
-                                ] else if (_currentChallenge == "Turn Left") ...[
+                                ] else if (_currentChallenge ==
+                                    "Turn Left") ...[
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
                                         "Head Yaw Angle",
-                                        style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          color: const Color(0xFF64748B),
+                                        ),
                                       ),
                                       Text(
                                         "${_headRotationAngle.toStringAsFixed(1)}°",
                                         style: GoogleFonts.spaceGrotesk(
                                           fontSize: 11,
                                           fontWeight: FontWeight.bold,
-                                          color: _headRotationAngle >= 20.0 ? const Color(0xFF10B981) : const Color(0xFF2563EB),
+                                          color: _headRotationAngle >= 20.0
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFF2563EB),
                                         ),
                                       ),
                                     ],
                                   ),
-                                ] else if (_currentChallenge == "Turn Right") ...[
+                                ] else if (_currentChallenge ==
+                                    "Turn Right") ...[
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
                                         "Head Yaw Angle",
-                                        style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          color: const Color(0xFF64748B),
+                                        ),
                                       ),
                                       Text(
                                         "${_headRotationAngle.toStringAsFixed(1)}°",
                                         style: GoogleFonts.spaceGrotesk(
                                           fontSize: 11,
                                           fontWeight: FontWeight.bold,
-                                          color: _headRotationAngle <= -20.0 ? const Color(0xFF10B981) : const Color(0xFF2563EB),
+                                          color: _headRotationAngle <= -20.0
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFF2563EB),
                                         ),
                                       ),
                                     ],
                                   ),
                                 ] else if (_currentChallenge == "Nod") ...[
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
                                         "Head Pitch Angle",
-                                        style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B)),
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          color: const Color(0xFF64748B),
+                                        ),
                                       ),
                                       Text(
                                         "${_headRotationAngle.toStringAsFixed(1)}°",
                                         style: GoogleFonts.spaceGrotesk(
                                           fontSize: 11,
                                           fontWeight: FontWeight.bold,
-                                          color: _headRotationAngle >= 15.0 ? const Color(0xFF10B981) : const Color(0xFF2563EB),
+                                          color: _headRotationAngle >= 15.0
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFF2563EB),
                                         ),
                                       ),
                                     ],
@@ -1148,12 +1787,14 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
 
                   if (_cameraError != null && !_isCameraInitialized) ...[
                     ElevatedButton.icon(
-                      onPressed: isScanning ? null : () {
-                        setState(() {
-                          _cameraError = null;
-                        });
-                        _initializeCamera();
-                      },
+                      onPressed: isScanning
+                          ? null
+                          : () {
+                              setState(() {
+                                _cameraError = null;
+                              });
+                              _initializeCamera();
+                            },
                       icon: const Icon(Icons.refresh),
                       label: const Text("Retry Camera Initialization"),
                       style: ElevatedButton.styleFrom(
@@ -1176,14 +1817,26 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                   ElevatedButton.icon(
                     onPressed: isScanning ? null : startScanning,
                     icon: const Icon(Icons.face_unlock_sharp),
-                    label: Text(isScanning
-                        ? "Processing Scan..."
-                        : (_cameraError != null ? "Detect Face (Simulation Mode)" : "Detect Face")),
+                    label: Text(
+                      isScanning
+                          ? "Processing Scan..."
+                          : (_cameraError != null
+                                ? "Detect Face (Simulation Mode)"
+                                : "Detect Face"),
+                    ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _cameraError != null ? const Color(0xFF64748B) : const Color(0xFF10B981),
+                      backgroundColor: _cameraError != null
+                          ? const Color(0xFF64748B)
+                          : const Color(0xFF10B981),
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: (_cameraError != null ? const Color(0xFF64748B) : const Color(0xFF10B981)).withValues(alpha: 0.5),
-                      disabledForegroundColor: Colors.white.withValues(alpha: 0.8),
+                      disabledBackgroundColor:
+                          (_cameraError != null
+                                  ? const Color(0xFF64748B)
+                                  : const Color(0xFF10B981))
+                              .withValues(alpha: 0.5),
+                      disabledForegroundColor: Colors.white.withValues(
+                        alpha: 0.8,
+                      ),
                       elevation: isScanning ? 0 : 3,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
@@ -1198,11 +1851,183 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                 ],
               ),
             ),
-          )
+          ),
         ],
       ),
     );
   }
+}
+
+class FaceTargetPainter extends CustomPainter {
+  final Rect? faceRect;
+  final Size imageSize;
+  final InputImageRotation rotation;
+  final CameraLensDirection lensDirection;
+  final bool ready;
+  final Animation<double> animation;
+
+  FaceTargetPainter({
+    required this.faceRect,
+    required this.imageSize,
+    required this.rotation,
+    required this.lensDirection,
+    required this.ready,
+    required this.animation,
+  }) : super(repaint: animation);
+
+  Rect _displayRect(Rect raw, Size canvasSize) {
+    // ML Kit returns the box in its display coordinate space. Rotation selects
+    // that space's dimensions and X direction; rotating every point again shifts
+    // a portrait face box down to the neck. After translating, apply the same
+    // BoxFit.cover scale and center crop as the full-screen CameraPreview.
+    final quarterTurn =
+        rotation == InputImageRotation.rotation90deg ||
+        rotation == InputImageRotation.rotation270deg;
+    final sourceSize = quarterTurn && !Platform.isIOS
+        ? Size(imageSize.height, imageSize.width)
+        : imageSize;
+
+    double translatedX(double x) {
+      return switch (rotation) {
+        InputImageRotation.rotation90deg => x,
+        InputImageRotation.rotation270deg => sourceSize.width - x,
+        _ =>
+          lensDirection == CameraLensDirection.back ? x : sourceSize.width - x,
+      };
+    }
+
+    final x1 = translatedX(raw.left);
+    final x2 = translatedX(raw.right);
+    final left = math.min(x1, x2);
+    final right = math.max(x1, x2);
+    final top = raw.top;
+    final bottom = raw.bottom;
+
+    final scale = math.max(
+      canvasSize.width / sourceSize.width,
+      canvasSize.height / sourceSize.height,
+    );
+    final dx = (canvasSize.width - sourceSize.width * scale) / 2;
+    final dy = (canvasSize.height - sourceSize.height * scale) / 2;
+    return Rect.fromLTRB(
+      left * scale + dx,
+      top * scale + dy,
+      right * scale + dx,
+      bottom * scale + dy,
+    );
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final raw = faceRect;
+    final mapped = raw == null ? null : _displayRect(raw, size);
+    final target = mapped == null
+        ? Rect.fromCenter(
+            center: Offset(size.width / 2, size.height * .43),
+            width: size.width * .54,
+            height: size.width * .7,
+          )
+        : Rect.fromLTRB(
+            mapped.left - mapped.width * .07,
+            mapped.top - mapped.height * .10,
+            mapped.right + mapped.width * .07,
+            mapped.bottom + mapped.height * .06,
+          );
+    final safeTarget = Rect.fromLTRB(
+      target.left.clamp(16, size.width - 80),
+      target.top.clamp(90, size.height - 160),
+      target.right.clamp(80, size.width - 16),
+      target.bottom.clamp(160, size.height - 120),
+    );
+    final color = ready ? const Color(0xFF22C55E) : Colors.white;
+    final glow = Paint()
+      ..color = color.withValues(alpha: ready ? .24 : .12)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 8
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    final line = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = ready ? 3 : 2
+      ..strokeCap = StrokeCap.round;
+    final contrastLine = Paint()
+      ..color = Colors.black.withValues(alpha: .32)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = line.strokeWidth + 3
+      ..strokeCap = StrokeCap.round;
+
+    final radius = Radius.circular(math.min(28, safeTarget.width * .12));
+    final rounded = RRect.fromRectAndRadius(safeTarget, radius);
+    canvas.drawRRect(rounded, glow);
+
+    final corner = math.min(34.0, safeTarget.width * .22);
+    final path = Path()
+      ..moveTo(safeTarget.left, safeTarget.top + corner)
+      ..lineTo(safeTarget.left, safeTarget.top + radius.x)
+      ..quadraticBezierTo(
+        safeTarget.left,
+        safeTarget.top,
+        safeTarget.left + radius.x,
+        safeTarget.top,
+      )
+      ..lineTo(safeTarget.left + corner, safeTarget.top)
+      ..moveTo(safeTarget.right - corner, safeTarget.top)
+      ..lineTo(safeTarget.right - radius.x, safeTarget.top)
+      ..quadraticBezierTo(
+        safeTarget.right,
+        safeTarget.top,
+        safeTarget.right,
+        safeTarget.top + radius.x,
+      )
+      ..lineTo(safeTarget.right, safeTarget.top + corner)
+      ..moveTo(safeTarget.right, safeTarget.bottom - corner)
+      ..lineTo(safeTarget.right, safeTarget.bottom - radius.x)
+      ..quadraticBezierTo(
+        safeTarget.right,
+        safeTarget.bottom,
+        safeTarget.right - radius.x,
+        safeTarget.bottom,
+      )
+      ..lineTo(safeTarget.right - corner, safeTarget.bottom)
+      ..moveTo(safeTarget.left + corner, safeTarget.bottom)
+      ..lineTo(safeTarget.left + radius.x, safeTarget.bottom)
+      ..quadraticBezierTo(
+        safeTarget.left,
+        safeTarget.bottom,
+        safeTarget.left,
+        safeTarget.bottom - radius.x,
+      )
+      ..lineTo(safeTarget.left, safeTarget.bottom - corner);
+    // The required white angled-face frame must remain visible against a bright
+    // wall or light-mode gradient, so draw a subtle contrast edge underneath it.
+    canvas.drawPath(path, contrastLine);
+    canvas.drawPath(path, line);
+
+    if (raw != null) {
+      final scanY = safeTarget.top + safeTarget.height * animation.value;
+      final scanPaint = Paint()
+        ..color = color.withValues(alpha: .72)
+        ..strokeWidth = 1.4;
+      canvas.drawLine(
+        Offset(safeTarget.left + 16, scanY),
+        Offset(safeTarget.right - 16, scanY),
+        scanPaint,
+      );
+      canvas.drawCircle(
+        safeTarget.center,
+        3.5,
+        Paint()..color = color.withValues(alpha: .9),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant FaceTargetPainter oldDelegate) =>
+      oldDelegate.faceRect != faceRect ||
+      oldDelegate.ready != ready ||
+      oldDelegate.imageSize != imageSize ||
+      oldDelegate.rotation != rotation ||
+      oldDelegate.lensDirection != lensDirection;
 }
 
 // Custom Painter to mask the camera feed outside the oval guide
@@ -1388,8 +2213,16 @@ class FaceMeshPainter extends CustomPainter {
       Offset(0.55, -0.2),
     ];
 
-    final leftEyebrowNorm = [Offset(-0.38, -0.38), Offset(-0.24, -0.42), Offset(-0.1, -0.36)];
-    final rightEyebrowNorm = [Offset(0.1, -0.36), Offset(0.24, -0.42), Offset(0.38, -0.38)];
+    final leftEyebrowNorm = [
+      Offset(-0.38, -0.38),
+      Offset(-0.24, -0.42),
+      Offset(-0.1, -0.36),
+    ];
+    final rightEyebrowNorm = [
+      Offset(0.1, -0.36),
+      Offset(0.24, -0.42),
+      Offset(0.38, -0.38),
+    ];
 
     final leftEyeNorm = [
       Offset(-0.30, -0.23), // top
@@ -1398,24 +2231,24 @@ class FaceMeshPainter extends CustomPainter {
       Offset(-0.42, -0.21), // left
     ];
     final rightEyeNorm = [
-      Offset(0.18, -0.21),  // left
-      Offset(0.30, -0.23),  // top
-      Offset(0.42, -0.21),  // right
-      Offset(0.30, -0.19),  // bottom
+      Offset(0.18, -0.21), // left
+      Offset(0.30, -0.23), // top
+      Offset(0.42, -0.21), // right
+      Offset(0.30, -0.19), // bottom
     ];
 
     final noseNorm = [
       Offset(0.0, -0.38), // bridge top
-      Offset(0.0, 0.12),  // tip
+      Offset(0.0, 0.12), // tip
       Offset(-0.08, 0.12), // left nostril
-      Offset(0.08, 0.12),  // right nostril
+      Offset(0.08, 0.12), // right nostril
     ];
 
     final mouthNorm = [
       Offset(-0.22, 0.32), // left corner
-      Offset(0.0, 0.26),   // top lip
-      Offset(0.22, 0.32),  // right corner
-      Offset(0.0, 0.42),   // bottom lip
+      Offset(0.0, 0.26), // top lip
+      Offset(0.22, 0.32), // right corner
+      Offset(0.0, 0.42), // bottom lip
     ];
 
     Offset transformPoint(Offset norm) {
@@ -1428,10 +2261,7 @@ class FaceMeshPainter extends CustomPainter {
         py = centerY + (py - centerY) * eyeHeightFactor;
       }
 
-      return Offset(
-        center.dx + px * scaleX + dx,
-        center.dy + py * scaleY + dy,
-      );
+      return Offset(center.dx + px * scaleX + dx, center.dy + py * scaleY + dy);
     }
 
     void drawPathPoints(List<Offset> normList, {bool closed = false}) {
@@ -1471,7 +2301,9 @@ class FaceMeshPainter extends CustomPainter {
     final eyebrowL = leftEyebrowNorm.map(transformPoint).toList();
     final eyebrowR = rightEyebrowNorm.map(transformPoint).toList();
 
-    if (jawPoints.length >= 7 && mouthPoints.length >= 4 && eyebrowL.length >= 3) {
+    if (jawPoints.length >= 7 &&
+        mouthPoints.length >= 4 &&
+        eyebrowL.length >= 3) {
       // Connect jaw nodes to mouth/eyebrow edges
       canvas.drawLine(jawPoints[0], eyebrowL[0], meshLinePaint);
       canvas.drawLine(jawPoints[6], eyebrowR[2], meshLinePaint);

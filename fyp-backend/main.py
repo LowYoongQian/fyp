@@ -12,8 +12,11 @@ import time
 from collections import OrderedDict
 
 from domain.announcements import announcement_dict
+from domain.audit import reset_audit_client_ip, set_audit_client_ip
+from domain.security_settings import is_enabled
 from db.database import SessionLocal, engine
-from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit
+from integrations.network_verify import get_client_ip, get_server_local_ip
+from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit, attendance_features
 
 # Schema is owned by Alembic (`alembic upgrade head`, which the Procfile/Dockerfile run
 # before uvicorn starts). Data seeds live in seed.py. Nothing here touches the database
@@ -30,7 +33,14 @@ NO_STORE_PREFIXES = (
     "/sessions/",              # open / active / per-session register
     "/students/me/active-sessions",
     "/students/me/attendance",
+    "/students/me/courses",       # timetable edits must reach mobile immediately
+    "/lecturers/me/timetable",
+    "/admin/timetable",
     "/admin/sessions",
+    "/students/me/attendance-overview",
+    "/students/me/attendance-requests",
+    "/lecturers/me/attendance-requests",
+    "/notifications",
 )
 
 
@@ -124,6 +134,45 @@ class ETagMiddleware(BaseHTTPMiddleware):
             media_type=response.media_type
         )
 
+
+class AuditClientIPMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        trust_proxy = await asyncio.to_thread(_trust_proxy_headers)
+
+        client_ip = get_client_ip(request, trust_proxy_header=trust_proxy)
+        if client_ip in ("127.0.0.1", "::1", "localhost", ""):
+            client_ip = get_server_local_ip()
+
+        token = set_audit_client_ip(client_ip)
+        try:
+            return await call_next(request)
+        finally:
+            reset_audit_client_ip(token)
+
+
+_proxy_trust_cache = (0.0, False)
+
+
+def _trust_proxy_headers() -> bool:
+    global _proxy_trust_cache
+    env_value = os.getenv("TRUST_PROXY_HEADERS", "").strip().lower()
+    if env_value in ("1", "true", "yes", "on"):
+        return True
+
+    cached_at, cached_value = _proxy_trust_cache
+    if time.monotonic() - cached_at < 30:
+        return cached_value
+
+    db = SessionLocal()
+    try:
+        value = is_enabled(db, "trust_proxy_header")
+        _proxy_trust_cache = (time.monotonic(), value)
+        return value
+    except Exception:
+        return False
+    finally:
+        db.close()
+
 logger = logging.getLogger(__name__)
 
 # Opening a fresh connection to the remote database measures ~1.9s (TLS + auth), while a
@@ -189,14 +238,13 @@ else:
         "http://127.0.0.1:5175",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
-        "https://flutter.up.railway.app",
-        "https://smart-web.up.railway.app",
-        "https://fyps.up.railway.app",
+        "https://smartsystem.live",
     ]
 
 origin_regex = r"https?://((localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?|.*\.up\.railway\.app)"
 
 app.add_middleware(ETagMiddleware)
+app.add_middleware(AuditClientIPMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -221,6 +269,7 @@ app.include_router(analytics.router)
 app.include_router(lecturers.router)
 app.include_router(admin_reports.router)
 app.include_router(admin_audit.router)
+app.include_router(attendance_features.router)
 
 # Public announcements endpoint for home screen
 @app.get("/public/logo")
@@ -231,9 +280,13 @@ def get_public_logo():
         if row and row[0]:
             return {"logo_url": row[0]}
         url_row = db.execute(text("SELECT value FROM security_settings WHERE key = 'system_logo_url'")).first()
-        if url_row and url_row[0]:
+        if url_row and url_row[0] and "/storage/v1/object/public/assets/" not in url_row[0]:
             return {"logo_url": url_row[0]}
-        return {"logo_url": "https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/assets/saslogo.png"}
+        supabase_url = os.getenv("SUPABASE_URL", "https://iekqyzdevnzeohmiddjc.supabase.co").rstrip("/")
+        bucket = os.getenv("SUPABASE_IMAGE_BUCKET", "images").strip() or "images"
+        logo_folder = os.getenv("SUPABASE_LOGO_FOLDER", "Logo").strip().strip("/") or "Logo"
+        logo_file = os.getenv("SUPABASE_LOGO_FILENAME", "saslogo.png").strip() or "saslogo.png"
+        return {"logo_url": f"{supabase_url}/storage/v1/object/public/{bucket}/{logo_folder}/{logo_file}"}
     finally:
         db.close()
 

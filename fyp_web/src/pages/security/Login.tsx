@@ -552,7 +552,7 @@ export const Login: React.FC = () => {
   const [timeState, setTimeState] = useState(() => getMalaysiaTimeDetails());
   
   // Supabase Storage & Database System Logo with Local Asset Fallback
-  const SUPABASE_LOGO_URL = 'https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/assets/saslogo.png';
+  const SUPABASE_LOGO_URL = 'https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/images/Logo/saslogo.png';
   const [logoSrc, setLogoSrc] = useState<string>(SUPABASE_LOGO_URL);
 
   useEffect(() => {
@@ -1088,16 +1088,93 @@ export const Login: React.FC = () => {
   };
 
   const setupRecoveryEmail = async () => {
-    const { value: recoveryEmail } = await Swal.fire({
-      title: 'Add a recovery email',
-      text: 'Use your personal Gmail. We send password reset links here.',
-      input: 'email',
-      inputPlaceholder: 'yourname@gmail.com',
-      allowOutsideClick: false,
-      allowEscapeKey: false,
-      confirmButtonText: 'Send Code',
-      preConfirm: value => value.trim().toLowerCase().endsWith('@gmail.com') ? value.trim() : Swal.showValidationMessage('Enter a Gmail address.'),
-    });
+    let emailDraft = '';
+    let recoveryEmail: string | undefined;
+
+    while (!recoveryEmail) {
+      const result = await Swal.fire({
+        title: 'Add a recovery email',
+        html: `<p class="recovery-email-intro">Keep your account safe and regain access if you forget your password.</p>
+          <div class="recovery-email-benefit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+            <span>Reset links will only be sent to this verified Gmail.</span>
+          </div>
+          <div class="password-reset-form recovery-email-form">
+            <div class="password-reset-control">
+              <label for="recovery-email-input" class="password-reset-label">Personal Gmail</label>
+              <div class="password-reset-field" id="recovery-email-field">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 8 6 8-6M4 4h16v16H4z"/></svg>
+                <input id="recovery-email-input" type="email" class="password-reset-input" autocomplete="email" value="${emailDraft.replace(/"/g, '&quot;')}" placeholder="yourname@gmail.com" aria-describedby="recovery-email-help">
+              </div>
+              <span id="recovery-email-help" class="password-reset-help">Use a personal Gmail you can access now.</span>
+            </div>
+          </div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Send Code',
+        cancelButtonText: 'Cancel',
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        buttonsStyling: false,
+        focusConfirm: false,
+        reverseButtons: true,
+        customClass: {
+          popup: 'password-reset-popup recovery-email-popup !rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
+          title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-xl',
+          htmlContainer: 'password-reset-content !text-slate-600 dark:!text-slate-300 !text-xs',
+          actions: 'password-reset-actions recovery-email-actions',
+          confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
+          cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
+        },
+        didOpen: () => {
+          const input = document.getElementById('recovery-email-input') as HTMLInputElement;
+          input?.addEventListener('input', () => {
+            emailDraft = input.value;
+            document.getElementById('recovery-email-field')?.classList.remove('is-invalid');
+          });
+          input?.focus();
+        },
+        preConfirm: () => {
+          const input = document.getElementById('recovery-email-input') as HTMLInputElement;
+          const value = input?.value.trim().toLowerCase();
+          const isValid = emailRegex.test(value) && value.endsWith('@gmail.com');
+          document.getElementById('recovery-email-field')?.classList.toggle('is-invalid', !isValid);
+          if (!isValid) {
+            input?.focus();
+            Swal.showValidationMessage('Enter a valid personal Gmail address.');
+            return false;
+          }
+          return value;
+        },
+      });
+
+      if (result.isConfirmed) {
+        recoveryEmail = result.value;
+        break;
+      }
+
+      const cancelWarning = await Swal.fire({
+        icon: 'warning',
+        title: 'Your account will be harder to recover',
+        text: 'Without a recovery email, you cannot reset a forgotten password yourself.',
+        showCancelButton: true,
+        confirmButtonText: 'Skip for Now',
+        cancelButtonText: 'Go Back',
+        reverseButtons: true,
+        focusCancel: true,
+        buttonsStyling: false,
+        customClass: {
+          popup: 'recovery-warning-popup !rounded-2xl !shadow-2xl !border !font-sans',
+          title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-lg',
+          htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-sm !leading-relaxed',
+          actions: 'password-reset-actions recovery-email-actions',
+          confirmButton: 'recovery-warning-skip !rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button',
+          cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
+        },
+      });
+
+      if (cancelWarning.isConfirmed) return;
+    }
+
     if (!recoveryEmail) return;
     await apiService.requestRecoveryEmail(recoveryEmail);
     const { value: code } = await Swal.fire({

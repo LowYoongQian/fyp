@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -16,6 +16,7 @@ from schemas import LoginRequest, RegisterRequest, TokenResponse
 from utils.db_helpers import ensure_unique, require_email_domain
 from pydantic import BaseModel
 from typing import Optional
+from urllib.parse import quote
 from utils.security import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -344,6 +345,67 @@ def update_avatar(body: AvatarUpdateRequest, user: User = Depends(get_current_us
     user.avatar_url = body.avatar_url
     db.commit()
     return {"message": "Avatar updated successfully", "avatar_url": user.avatar_url}
+
+
+@router.post("/me/avatar/upload")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Validate and upload one cropped profile image through the trusted backend."""
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    storage_key = (
+        os.getenv("SUPABASE_SECRET_KEY", "").strip()
+        or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    )
+    bucket = os.getenv("SUPABASE_AVATAR_BUCKET", "images").strip() or "images"
+    avatar_folder = os.getenv("SUPABASE_AVATAR_FOLDER", "Avatar").strip().strip("/") or "Avatar"
+    if not supabase_url or not storage_key:
+        raise HTTPException(status_code=503, detail="Profile image storage is not configured")
+
+    image = await file.read(5 * 1024 * 1024 + 1)
+    if not image:
+        raise HTTPException(status_code=400, detail="Choose an image to upload")
+    if len(image) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image must be smaller than 5 MB")
+
+    if image.startswith(b"\xff\xd8\xff"):
+        content_type, extension = "image/jpeg", "jpg"
+    elif image.startswith(b"\x89PNG\r\n\x1a\n"):
+        content_type, extension = "image/png", "png"
+    elif image.startswith(b"RIFF") and image[8:12] == b"WEBP":
+        content_type, extension = "image/webp", "webp"
+    else:
+        raise HTTPException(status_code=400, detail="Use a JPG, PNG, or WebP image")
+
+    object_path = f"{avatar_folder}/users/{user.id}/avatar.{extension}"
+    upload_url = f"{supabase_url}/storage/v1/object/{quote(bucket)}/{quote(object_path, safe='/')}"
+    headers = {
+        "apikey": storage_key,
+        "Content-Type": content_type,
+        "cache-control": "3600",
+        "x-upsert": "true",
+    }
+    if not storage_key.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {storage_key}"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(upload_url, content=image, headers=headers)
+
+    if not 200 <= response.status_code < 300:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not save the profile image. Check the Supabase images/Avatar folder.",
+        )
+
+    version = int(utcnow().timestamp())
+    public_url = (
+        f"{supabase_url}/storage/v1/object/public/{quote(bucket)}/"
+        f"{quote(object_path, safe='/')}?v={version}"
+    )
+    user.avatar_url = public_url
+    db.commit()
+    return {"message": "Profile image updated", "avatar_url": public_url}
 
 @router.put("/me/admin-profile")
 def update_admin_profile(body: AdminProfileUpdateRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):

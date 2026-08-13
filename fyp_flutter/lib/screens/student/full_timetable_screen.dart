@@ -7,7 +7,13 @@ import '../../widgets/glass_card.dart';
 
 class FullTimetableScreen extends StatefulWidget {
   final List<Map<String, dynamic>> schedule;
-  const FullTimetableScreen({super.key, required this.schedule});
+  final Future<List<Map<String, dynamic>>> Function() onRefresh;
+
+  const FullTimetableScreen({
+    super.key,
+    required this.schedule,
+    required this.onRefresh,
+  });
 
   @override
   State<FullTimetableScreen> createState() => _FullTimetableScreenState();
@@ -35,12 +41,14 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
   ];
   String _selectedWeek = "Week 1";
   late PageController _pageController;
+  late List<Map<String, dynamic>> _schedule;
 
   @override
   void initState() {
     super.initState();
     // Initialize day tab to today's weekday
     final todayWeekday = ApiConfig.now.weekday; // 1-7
+    _schedule = List<Map<String, dynamic>>.from(widget.schedule);
     _selectedDayIndex = math.min(6, math.max(0, todayWeekday - 1));
     _pageController = PageController(initialPage: _selectedDayIndex);
 
@@ -54,6 +62,23 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
       if (weekNum > 14) weekNum = 14;
     }
     _selectedWeek = "Week $weekNum";
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshSchedule());
+  }
+
+  @override
+  void didUpdateWidget(covariant FullTimetableScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.schedule, widget.schedule)) {
+      _schedule = List<Map<String, dynamic>>.from(widget.schedule);
+    }
+  }
+
+  Future<void> _refreshSchedule() async {
+    final latestSchedule = await widget.onRefresh();
+    if (!mounted) return;
+    setState(() {
+      _schedule = List<Map<String, dynamic>>.from(latestSchedule);
+    });
   }
 
   @override
@@ -411,7 +436,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
 
                     // Filter schedule for selected day
                     final dayClasses =
-                        widget.schedule.where((item) {
+                        _schedule.where((item) {
                           return item['day'].toString().toLowerCase() ==
                               selectedDayName.toLowerCase();
                         }).toList()..sort(
@@ -440,9 +465,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                     }).toList();
 
                     return RefreshIndicator(
-                      onRefresh: () async {
-                        await Future.delayed(const Duration(milliseconds: 600));
-                      },
+                      onRefresh: _refreshSchedule,
                       child: SingleChildScrollView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.symmetric(horizontal: 16),

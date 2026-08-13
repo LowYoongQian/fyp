@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../services/user_service.dart';
 import '../../widgets/shimmer_loading.dart';
 
@@ -47,6 +49,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final confirmPasswordController = TextEditingController();
     final formKey = GlobalKey<FormState>();
     bool isSubmitting = false;
+    bool hideCurrentPassword = true;
+    bool hideNewPassword = true;
+    bool hideConfirmPassword = true;
     String? errorMessage;
 
     await showDialog(
@@ -54,22 +59,121 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              title: Row(
-                children: [
-                  const Icon(
-                    Icons.lock_reset_rounded,
-                    color: Color(0xFF2563EB),
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final fieldColor = isDark
+                ? const Color(0xFF0F172A)
+                : const Color(0xFFF8FAFC);
+            final borderColor = isDark
+                ? const Color(0xFF334155)
+                : const Color(0xFFCBD5E1);
+
+            InputDecoration passwordDecoration({
+              required String label,
+              required IconData icon,
+              required bool hidden,
+              required VoidCallback toggleVisibility,
+            }) {
+              return InputDecoration(
+                labelText: label,
+                labelStyle: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: isDark
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
+                ),
+                prefixIcon: Icon(icon, size: 19),
+                suffixIcon: IconButton(
+                  onPressed: isSubmitting ? null : toggleVisibility,
+                  tooltip: hidden ? 'Show password' : 'Hide password',
+                  icon: Icon(
+                    hidden
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    size: 19,
                   ),
-                  const SizedBox(width: 8),
+                ),
+                filled: true,
+                fillColor: fieldColor,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 15,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(13),
+                  borderSide: BorderSide(color: borderColor),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(13),
+                  borderSide: const BorderSide(
+                    color: Color(0xFF2563EB),
+                    width: 1.5,
+                  ),
+                ),
+                errorBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(13),
+                  borderSide: const BorderSide(color: Color(0xFFEF4444)),
+                ),
+                focusedErrorBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(13),
+                  borderSide: const BorderSide(
+                    color: Color(0xFFEF4444),
+                    width: 1.5,
+                  ),
+                ),
+              );
+            }
+
+            return AlertDialog(
+              backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+              surfaceTintColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20),
+              titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              contentPadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+              actionsPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+              ),
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFF2563EB,
+                          ).withValues(alpha: isDark ? 0.18 : 0.1),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: const Icon(
+                          Icons.lock_reset_rounded,
+                          size: 21,
+                          color: Color(0xFF2563EB),
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Text(
+                          'Change Password',
+                          style: GoogleFonts.spaceGrotesk(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 19,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   Text(
-                    'Change Password',
+                    'Use at least 8 characters for your new password.',
                     style: GoogleFonts.inter(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                      color: isDark
+                          ? const Color(0xFF94A3B8)
+                          : const Color(0xFF64748B),
                     ),
                   ),
                 ],
@@ -84,67 +188,113 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFEE2E2),
+                            color: const Color(
+                              0xFFEF4444,
+                            ).withValues(alpha: isDark ? 0.16 : 0.1),
                             borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: const Color(0xFFFCA5A5)),
-                          ),
-                          child: Text(
-                            errorMessage!,
-                            style: GoogleFonts.inter(
-                              color: const Color(0xFF991B1B),
-                              fontSize: 12,
+                            border: Border.all(
+                              color: const Color(
+                                0xFFEF4444,
+                              ).withValues(alpha: 0.35),
                             ),
                           ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.error_outline_rounded,
+                                size: 17,
+                                color: Color(0xFFEF4444),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  errorMessage!,
+                                  style: GoogleFonts.inter(
+                                    color: isDark
+                                        ? const Color(0xFFFCA5A5)
+                                        : const Color(0xFF991B1B),
+                                    fontSize: 11.5,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 14),
                       ],
                       TextFormField(
                         controller: currentPasswordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'Current Password',
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                        obscureText: hideCurrentPassword,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        autofillHints: const [AutofillHints.password],
+                        textInputAction: TextInputAction.next,
+                        style: GoogleFonts.inter(fontSize: 13.5),
+                        decoration: passwordDecoration(
+                          label: 'Current password',
+                          icon: Icons.lock_outline_rounded,
+                          hidden: hideCurrentPassword,
+                          toggleVisibility: () => setModalState(
+                            () => hideCurrentPassword = !hideCurrentPassword,
                           ),
                         ),
                         validator: (val) => val == null || val.isEmpty
-                            ? 'Enter current password'
+                            ? 'Enter your current password'
                             : null,
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       TextFormField(
                         controller: newPasswordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'New Password',
-                          prefixIcon: const Icon(Icons.lock_rounded),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                        obscureText: hideNewPassword,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        autofillHints: const [AutofillHints.newPassword],
+                        textInputAction: TextInputAction.next,
+                        style: GoogleFonts.inter(fontSize: 13.5),
+                        decoration: passwordDecoration(
+                          label: 'New password',
+                          icon: Icons.key_rounded,
+                          hidden: hideNewPassword,
+                          toggleVisibility: () => setModalState(
+                            () => hideNewPassword = !hideNewPassword,
                           ),
                         ),
                         validator: (val) {
                           if (val == null || val.isEmpty) {
-                            return 'Enter new password';
+                            return 'Enter a new password';
                           }
-                          if (val.length < 6) {
-                            return 'Password must be at least 6 characters';
+                          if (val.length < 8) {
+                            return 'Use at least 8 characters';
+                          }
+                          if (val == currentPasswordController.text) {
+                            return 'Choose a different password';
                           }
                           return null;
                         },
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       TextFormField(
                         controller: confirmPasswordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'Confirm New Password',
-                          prefixIcon: const Icon(Icons.check_circle_outline),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                        obscureText: hideConfirmPassword,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        autofillHints: const [AutofillHints.newPassword],
+                        textInputAction: TextInputAction.done,
+                        style: GoogleFonts.inter(fontSize: 13.5),
+                        decoration: passwordDecoration(
+                          label: 'Confirm new password',
+                          icon: Icons.verified_user_outlined,
+                          hidden: hideConfirmPassword,
+                          toggleVisibility: () => setModalState(
+                            () => hideConfirmPassword = !hideConfirmPassword,
                           ),
                         ),
                         validator: (val) {
+                          if (val == null || val.isEmpty) {
+                            return 'Confirm your new password';
+                          }
                           if (val != newPasswordController.text) {
                             return 'Passwords do not match';
                           }
@@ -160,6 +310,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onPressed: isSubmitting
                       ? null
                       : () => Navigator.of(dialogContext).pop(),
+                  style: TextButton.styleFrom(
+                    foregroundColor: isDark
+                        ? const Color(0xFFCBD5E1)
+                        : const Color(0xFF475569),
+                    minimumSize: const Size(88, 44),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
@@ -200,6 +359,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2563EB),
                     foregroundColor: Colors.white,
+                    minimumSize: const Size(148, 44),
+                    elevation: 2,
+                    shadowColor: const Color(0xFF2563EB).withValues(alpha: 0.3),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -221,61 +383,315 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
       },
     );
+
+    currentPasswordController.dispose();
+    newPasswordController.dispose();
+    confirmPasswordController.dispose();
   }
 
   Future<void> _showAvatarUploadDialog() async {
-    final urlController = TextEditingController(
-      text: _userProfile?['avatar_url'] ?? '',
-    );
-    await showDialog(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final chooseImage = await showModalBottomSheet<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          'Update Profile Image',
-          style: GoogleFonts.inter(fontWeight: FontWeight.bold),
-        ),
-        content: TextField(
-          controller: urlController,
-          decoration: InputDecoration(
-            labelText: 'Image URL or Storage Path',
-            hintText: 'https://example.com/avatar.jpg',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final newUrl = urlController.text.trim();
-              if (newUrl.isNotEmpty) {
-                final nav = Navigator.of(dialogContext);
-                final messenger = ScaffoldMessenger.of(dialogContext);
-                final ok = await UserService.uploadAvatar(
-                  newUrl,
-                  authToken: widget.authToken,
-                  apiBaseUrl: widget.apiBaseUrl,
-                );
-                if (ok) {
-                  nav.pop();
-                  _loadProfile();
-                  messenger.showSnackBar(
-                    const SnackBar(
-                      content: Text('Avatar updated!'),
-                      backgroundColor: Color(0xFF10B981),
+      showDragHandle: true,
+      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(
+                    0xFF2563EB,
+                  ).withValues(alpha: isDark ? 0.2 : 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.add_photo_alternate_rounded,
+                  color: Color(0xFF2563EB),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Update Profile Photo',
+                style: GoogleFonts.spaceGrotesk(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Choose a clear photo, then crop it to fit your profile.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  height: 1.45,
+                  color: isDark
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.pop(sheetContext, true),
+                  icon: const Icon(Icons.photo_library_rounded, size: 19),
+                  label: const Text('Choose from Gallery'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
                     ),
-                  );
-                }
-              }
-            },
-            child: const Text('Save Avatar'),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(sheetContext, false),
+                  child: const Text('Cancel'),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
+    if (chooseImage != true || !mounted) return;
+
+    try {
+      final selected = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 95,
+        maxWidth: 2400,
+        maxHeight: 2400,
+        requestFullMetadata: false,
+      );
+      if (selected == null || !mounted) return;
+
+      final cropped = await ImageCropper().cropImage(
+        sourcePath: selected.path,
+        compressFormat: ImageCompressFormat.jpg,
+        compressQuality: 90,
+        aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Profile Photo',
+            toolbarColor: const Color(0xFF2563EB),
+            toolbarWidgetColor: Colors.white,
+            activeControlsWidgetColor: const Color(0xFF2563EB),
+            initAspectRatio: CropAspectRatioPreset.square,
+            cropStyle: CropStyle.circle,
+            lockAspectRatio: true,
+          ),
+          IOSUiSettings(
+            title: 'Crop Profile Photo',
+            cropStyle: CropStyle.circle,
+            aspectRatioLockEnabled: true,
+            resetAspectRatioEnabled: false,
+          ),
+        ],
+      );
+      if (cropped == null || !mounted) return;
+
+      final imageBytes = await cropped.readAsBytes();
+      if (imageBytes.length > 5 * 1024 * 1024) {
+        throw Exception('The cropped image must be smaller than 5 MB.');
+      }
+      if (!mounted) return;
+
+      bool uploading = false;
+      String? uploadError;
+      final savedUrl = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setPreviewState) {
+            final previewDark = Theme.of(context).brightness == Brightness.dark;
+            return AlertDialog(
+              backgroundColor: previewDark
+                  ? const Color(0xFF1E293B)
+                  : Colors.white,
+              surfaceTintColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20),
+              contentPadding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Preview Photo',
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'This is how your profile photo will appear.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.inter(
+                      fontSize: 11.5,
+                      color: previewDark
+                          ? const Color(0xFF94A3B8)
+                          : const Color(0xFF64748B),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    width: 172,
+                    height: 172,
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(0xFF2563EB),
+                        width: 2,
+                      ),
+                      color: const Color(0xFF2563EB).withValues(alpha: 0.08),
+                    ),
+                    child: ClipOval(
+                      child: Image.memory(imageBytes, fit: BoxFit.cover),
+                    ),
+                  ),
+                  if (uploadError != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        uploadError!,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: const Color(0xFFEF4444),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: OutlinedButton.icon(
+                      onPressed: uploading
+                          ? null
+                          : () => Navigator.pop(dialogContext, ''),
+                      icon: const Icon(Icons.photo_library_outlined, size: 18),
+                      label: const Text('Choose Another Photo'),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 9),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton.icon(
+                      onPressed: uploading
+                          ? null
+                          : () async {
+                              setPreviewState(() {
+                                uploading = true;
+                                uploadError = null;
+                              });
+                              try {
+                                final url = await UserService.uploadAvatar(
+                                  imageBytes,
+                                  filename: 'avatar.jpg',
+                                  authToken: widget.authToken,
+                                  apiBaseUrl: widget.apiBaseUrl,
+                                );
+                                if (dialogContext.mounted) {
+                                  Navigator.pop(dialogContext, url);
+                                }
+                              } catch (error) {
+                                setPreviewState(() {
+                                  uploading = false;
+                                  uploadError = error.toString().replaceFirst(
+                                    'Exception: ',
+                                    '',
+                                  );
+                                });
+                              }
+                            },
+                      icon: uploading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.cloud_upload_rounded, size: 19),
+                      label: Text(uploading ? 'Saving...' : 'Save Photo'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  TextButton(
+                    onPressed: uploading
+                        ? null
+                        : () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+
+      if (savedUrl == '' && mounted) {
+        await _showAvatarUploadDialog();
+      } else if (savedUrl != null && mounted) {
+        setState(
+          () => _userProfile = {...?_userProfile, 'avatar_url': savedUrl},
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Profile photo updated'),
+            backgroundColor: Color(0xFF10B981),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
   }
 
   String _formatTimestamp(String? iso) {

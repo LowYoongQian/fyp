@@ -1,7 +1,8 @@
 import uuid
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float,
-    ForeignKey, DateTime, LargeBinary, Text, func, UniqueConstraint
+    ForeignKey, DateTime, LargeBinary, Text, func, UniqueConstraint,
+    CheckConstraint, Index,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, declarative_base
@@ -203,6 +204,48 @@ class AttendanceRecord(Base):
     # left the old names as forwarding properties, SQLAlchemy stopped mapping the real
     # columns, and every row's data became invisible to the API. Rename the column
     # instead; where the outward name must differ, let Pydantic express that.
+
+# Student leave and attendance-correction workflow.
+class AttendanceRequest(Base):
+    __tablename__ = "attendance_requests"
+    __table_args__ = (
+        CheckConstraint("request_type IN ('leave', 'correction')", name="ck_attendance_request_type"),
+        CheckConstraint("status IN ('pending', 'approved', 'rejected', 'cancelled')", name="ck_attendance_request_status"),
+        Index("ix_attendance_requests_student_created", "student_id", "created_at"),
+        Index("ix_attendance_requests_course_status", "course_id", "status"),
+    )
+
+    id               = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    student_id       = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    course_id        = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    session_id       = Column(UUID(as_uuid=False), ForeignKey("class_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+    request_type     = Column(String, nullable=False)
+    reason           = Column(Text, nullable=False)
+    status           = Column(String, nullable=False, default="pending")
+    reviewer_user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    reviewer_note    = Column(Text, nullable=True)
+    created_at       = Column(DateTime, server_default=func.now(), nullable=False)
+    reviewed_at      = Column(DateTime, nullable=True)
+
+
+# Durable in-app notifications for class reminders, timetable changes and requests.
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "dedupe_key", name="uq_user_notification_dedupe"),
+        Index("ix_user_notifications_inbox", "user_id", "read_at", "created_at"),
+    )
+
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id    = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind       = Column(String, nullable=False)
+    title      = Column(String, nullable=False)
+    body       = Column(Text, nullable=False)
+    payload    = Column(Text, nullable=True)
+    dedupe_key = Column(String, nullable=False)
+    read_at    = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
 
 # 512-d Face Embeddings (ArcFace)
 class FaceEmbedding(Base):

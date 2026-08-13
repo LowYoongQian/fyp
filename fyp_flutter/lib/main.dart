@@ -1,7 +1,6 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -743,6 +742,8 @@ class _AppRootState extends State<AppRoot> {
       if (day == null || start == null || end == null) continue;
 
       schedule.add({
+        'courseId': c['course_id'],
+        'meetingId': c['id'],
         'courseCode': c['course_code'] ?? 'Unknown',
         'courseName': c['course_name'] ?? 'Unknown',
         'group': c['role'] ?? 'Lecture',
@@ -774,21 +775,37 @@ class _AppRootState extends State<AppRoot> {
     return schedule;
   }
 
-  Future<void> refreshStudentTimetable() async {
-    if (studentAuthToken.isEmpty) return;
+  Future<List<Map<String, dynamic>>> refreshStudentTimetable() async {
+    if (studentAuthToken.isEmpty) return studentSchedule;
     try {
-      final response = await _apiGet('/students/me/courses', context);
-      if (response.statusCode != 200) return;
+      // A unique query and explicit no-cache headers prevent an old empty timetable
+      // from being reused by the device, CDN, or reverse proxy after an admin edit.
+      final apiUrl = ApiConfig.getEffectiveUrl();
+      final refreshKey = DateTime.now().millisecondsSinceEpoch;
+      final response = await http
+          .get(
+            Uri.parse('$apiUrl/students/me/courses?refresh=$refreshKey'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache, no-store',
+              'Pragma': 'no-cache',
+              'Authorization': 'Bearer $studentAuthToken',
+            },
+          )
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return studentSchedule;
 
       final courses = jsonDecode(response.body) as List<dynamic>;
       final schedule = _mapStudentSchedule(courses);
-      if (!mounted) return;
+      if (!mounted) return schedule;
 
       setState(() => studentSchedule = schedule);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('cached_student_schedule', jsonEncode(schedule));
+      return schedule;
     } catch (e) {
       debugPrint('Timetable refresh failed: $e');
+      return studentSchedule;
     }
   }
 
@@ -2167,85 +2184,78 @@ class _AppRootState extends State<AppRoot> {
 
   Widget _buildBottomNavigationBar() {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final surfaceColor = isDarkMode ? const Color(0xFF1E293B) : Colors.white;
     return Container(
-      margin: const EdgeInsets.only(left: 20, right: 20, bottom: 16),
       decoration: BoxDecoration(
+        color: surfaceColor,
+        border: Border(
+          top: BorderSide(
+            color: isDarkMode
+                ? const Color(0xFF334155)
+                : const Color(0xFFE2E8F0),
+            width: 1,
+          ),
+        ),
         boxShadow: [
           BoxShadow(
             color: isDarkMode
-                ? Colors.black.withValues(alpha: 0.25)
-                : const Color(0xFF94A3B8).withValues(alpha: 0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+                ? Colors.black.withValues(alpha: 0.3)
+                : const Color(0xFF64748B).withValues(alpha: 0.1),
+            blurRadius: 14,
+            offset: const Offset(0, -4),
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            decoration: BoxDecoration(
-              color: isDarkMode
-                  ? const Color(0xFF1E1E1E).withValues(alpha: 0.8)
-                  : Colors.white.withValues(alpha: 0.8),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: isDarkMode
-                    ? const Color(0xFF334155).withValues(alpha: 0.4)
-                    : Colors.white.withValues(alpha: 0.4),
-                width: 1.2,
-              ),
+      child: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(top: 4),
+        child: SizedBox(
+          width: double.infinity,
+          child: BottomNavigationBar(
+            currentIndex: selectedTab,
+            onTap: (idx) => setState(() => selectedTab = idx),
+            backgroundColor: surfaceColor,
+            elevation: 0,
+            type: BottomNavigationBarType.fixed,
+            selectedFontSize: 10,
+            unselectedFontSize: 10,
+            selectedItemColor: const Color(0xFF2563EB),
+            unselectedItemColor: isDarkMode
+                ? const Color(0xFF64748B)
+                : const Color(0xFF94A3B8),
+            selectedLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold),
+            unselectedLabelStyle: GoogleFonts.inter(
+              fontWeight: FontWeight.w500,
             ),
-            child: BottomNavigationBar(
-              currentIndex: selectedTab,
-              onTap: (idx) => setState(() => selectedTab = idx),
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              type: BottomNavigationBarType.fixed,
-              selectedFontSize: 10,
-              unselectedFontSize: 10,
-              selectedItemColor: const Color(0xFF2563EB), // deep branding blue
-              unselectedItemColor: isDarkMode
-                  ? const Color(0xFF64748B)
-                  : const Color(0xFF94A3B8),
-              selectedLabelStyle: GoogleFonts.inter(
-                fontWeight: FontWeight.bold,
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.home_outlined, size: 18),
+                activeIcon: Icon(
+                  Icons.home,
+                  size: 18,
+                  color: Color(0xFF2563EB),
+                ),
+                label: 'Home',
               ),
-              unselectedLabelStyle: GoogleFonts.inter(
-                fontWeight: FontWeight.w500,
+              BottomNavigationBarItem(
+                icon: Icon(Icons.person_outline, size: 18),
+                activeIcon: Icon(
+                  Icons.person,
+                  size: 18,
+                  color: Color(0xFF2563EB),
+                ),
+                label: 'Student',
               ),
-              items: const [
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.home_outlined, size: 18),
-                  activeIcon: Icon(
-                    Icons.home,
-                    size: 18,
-                    color: Color(0xFF2563EB),
-                  ),
-                  label: 'Home',
+              BottomNavigationBarItem(
+                icon: Icon(Icons.people_outline, size: 18),
+                activeIcon: Icon(
+                  Icons.people,
+                  size: 18,
+                  color: Color(0xFF2563EB),
                 ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.person_outline, size: 18),
-                  activeIcon: Icon(
-                    Icons.person,
-                    size: 18,
-                    color: Color(0xFF2563EB),
-                  ),
-                  label: 'Student',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.people_outline, size: 18),
-                  activeIcon: Icon(
-                    Icons.people,
-                    size: 18,
-                    color: Color(0xFF2563EB),
-                  ),
-                  label: 'Staff',
-                ),
-              ],
-            ),
+                label: 'Staff',
+              ),
+            ],
           ),
         ),
       ),
