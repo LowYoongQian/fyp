@@ -72,7 +72,7 @@ export const Chatbot: React.FC = () => {
   };
 
   return (
-    <div className="h-[calc(100vh-12rem)] flex flex-col bg-white/75 backdrop-blur-md border border-slate-100 rounded-2xl shadow-premium overflow-hidden relative">
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-white/75 relative">
       {/* Panel Header */}
       <div className="flex h-16 items-center justify-between px-6 border-b border-slate-100 bg-slate-50/50 shrink-0">
         <div className="flex items-center gap-3">

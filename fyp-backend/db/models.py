@@ -1,7 +1,7 @@
 import uuid
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float,
-    ForeignKey, DateTime, LargeBinary, Text, func, UniqueConstraint,
+    ForeignKey, Date, DateTime, LargeBinary, Text, func, UniqueConstraint,
     CheckConstraint, Index,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -221,6 +221,16 @@ class AttendanceRequest(Base):
     session_id       = Column(UUID(as_uuid=False), ForeignKey("class_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
     request_type     = Column(String, nullable=False)
     reason           = Column(Text, nullable=False)
+    start_date       = Column(Date, nullable=True)
+    end_date         = Column(Date, nullable=True)
+    proof_path       = Column(String, nullable=True)
+    proof_file_name  = Column(String, nullable=True)
+    proof_mime_type  = Column(String, nullable=True)
+    proof_size       = Column(Integer, nullable=True)
+    ai_verdict       = Column(String, nullable=True)
+    ai_confidence    = Column(Float, nullable=True)
+    ai_summary       = Column(Text, nullable=True)
+    ai_details       = Column(Text, nullable=True)
     status           = Column(String, nullable=False, default="pending")
     reviewer_user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     reviewer_note    = Column(Text, nullable=True)
@@ -322,6 +332,13 @@ class Announcement(Base):
     target_programme_code = Column(String, nullable=True)
     target_course_code    = Column(String, nullable=True)
     target_audience       = Column(String, nullable=True)
+    creator_user_id       = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    target_group          = Column(String, nullable=True)
+    attachment_path       = Column(String, nullable=True)
+    attachment_name       = Column(String, nullable=True)
+    attachment_mime_type  = Column(String, nullable=True)
+    attachment_size       = Column(Integer, nullable=True)
+    external_link         = Column(String, nullable=True)
 
 # Security settings table
 class SecuritySetting(Base):

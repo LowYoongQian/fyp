@@ -45,6 +45,9 @@ def create_announcement(body: AnnouncementCreate, db: Session = Depends(get_db),
         target_role=body.target_role,
         target_programme_code=body.target_programme_code if body.target_scope == "programme" else None,
         target_course_code=body.target_course_code if body.target_scope == "course" else None,
+        target_group=body.target_group if body.target_scope == "course" else None,
+        external_link=body.external_link,
+        creator_user_id=current_user.id,
     )
     db.add(announcement)
     db.commit()
@@ -78,6 +81,8 @@ def update_announcement(announcement_id: Union[int, str], body: AnnouncementCrea
     announcement.target_role = body.target_role
     announcement.target_programme_code = body.target_programme_code if body.target_scope == "programme" else None
     announcement.target_course_code = body.target_course_code if body.target_scope == "course" else None
+    announcement.target_group = (body.target_group or announcement.target_group) if body.target_scope == "course" else None
+    announcement.external_link = body.external_link if body.external_link is not None else announcement.external_link
 
     db.commit()
     db.refresh(announcement)

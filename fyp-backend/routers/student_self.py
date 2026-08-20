@@ -10,10 +10,12 @@ needed by the web dashboard.
 """
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from domain.scheduler import lecture_meetings
 from domain.announcements import announcement_dict, visible_announcements
+from integrations.announcement_files import download as download_announcement_file
 from db.database import get_db
 from datetime import datetime
 from domain.session_sync import sync_class_sessions
@@ -140,17 +142,44 @@ def get_my_announcements(
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
         
-    my_course_codes = {
-        code for (code,) in (
-            db.query(Course.course_code)
+    enrolled_courses = (
+            db.query(Course.course_code, Enrolment.class_group)
             .join(Enrolment, Enrolment.course_id == Course.id)
             .filter(Enrolment.student_id == student.id)
             .all()
-        ) if code
-    }
+    )
+    my_course_codes = {code for code, _group in enrolled_courses if code}
+    course_groups: dict[str, set[str]] = {}
+    for code, group in enrolled_courses:
+        if code and group:
+            course_groups.setdefault(code.upper(), set()).add(group)
     my_prog_codes = {student.programme.code} if student.programme else set()
 
     return [
         announcement_dict(a) for a in
-        visible_announcements(db, "students", my_prog_codes, my_course_codes)
+        visible_announcements(db, "students", my_prog_codes, my_course_codes, course_groups)
     ]
+
+
+@router.get("/announcements/{announcement_id}/attachment")
+def get_announcement_attachment(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    student = require_own_profile(db, Student, current_user.id, "Student")
+    enrolments = db.query(Course.course_code, Enrolment.class_group).join(
+        Enrolment, Enrolment.course_id == Course.id).filter(Enrolment.student_id == student.id).all()
+    courses = {code for code, _group in enrolments if code}
+    groups: dict[str, set[str]] = {}
+    for code, group in enrolments:
+        if code and group:
+            groups.setdefault(code.upper(), set()).add(group)
+    programmes = {student.programme.code} if student.programme else set()
+    visible = {str(row.id): row for row in visible_announcements(db, "students", programmes, courses, groups)}
+    row = visible.get(str(announcement_id))
+    if not row or not row.attachment_path:
+        raise HTTPException(404, "Attachment not found")
+    try:
+        data = download_announcement_file(row.attachment_path)
+    except Exception as exc:
+        raise HTTPException(503, "Download failed") from exc
+    return Response(data, media_type=row.attachment_mime_type or "application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{row.attachment_name or "attachment"}"'
+    })

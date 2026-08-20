@@ -573,66 +573,44 @@ export const ShimmerAtRisk: React.FC = () => {
 // Chatbot Specific Skeleton
 export const ShimmerChatbot: React.FC = () => {
   return (
-    <div className="h-[calc(100vh-12rem)] flex flex-col bg-white/75 backdrop-blur-md border border-slate-100 rounded-2xl shadow-premium overflow-hidden">
-      {/* Panel Header */}
-      <div className="flex h-16 items-center justify-between px-6 border-b border-slate-100 bg-slate-50/50 shrink-0">
+    <div className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-white/75 dark:bg-slate-950/70">
+      {/* Header mirrors the loaded chatbot to prevent layout movement. */}
+      <div className="flex h-16 shrink-0 items-center justify-between border-b border-slate-100 bg-slate-50/50 px-6 dark:border-slate-800 dark:bg-slate-900/60">
         <div className="flex items-center gap-3">
-          <ShimmerCircle size="w-9 h-9 rounded-xl" />
-          <div className="space-y-1">
-            <ShimmerText width="w-32" height="h-4.5" />
-            <ShimmerText width="w-24" height="h-2.5" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 dark:border-blue-500/15 dark:bg-blue-500/10">
+            <ShimmerText width="w-4" height="h-4" className="rounded-md" />
+          </div>
+          <div className="space-y-2">
+            <ShimmerText width="w-44" height="h-3.5" />
+            <ShimmerText width="w-56" height="h-2.5" />
           </div>
         </div>
-        <ShimmerText width="w-24" height="h-5" className="rounded-full" />
+        <ShimmerText width="w-44" height="h-6" className="hidden rounded-full sm:block" />
       </div>
 
-      {/* Message Area */}
-      <div className="flex-grow p-6 space-y-6 overflow-y-auto bg-slate-50/20">
-        {/* System Message */}
-        <div className="flex gap-3 max-w-[80%]">
-          <ShimmerCircle size="w-8 h-8" />
-          <div className="p-4 bg-white border border-slate-100 rounded-2xl rounded-tl-none space-y-2 w-96">
+      {/* One initial assistant message matches the real empty conversation. */}
+      <div className="min-h-0 flex-1 overflow-hidden bg-slate-50/20 p-6 dark:bg-slate-950/20">
+        <div className="flex max-w-[85%] gap-3">
+          <ShimmerCircle size="w-8 h-8 shrink-0" />
+          <div className="w-full max-w-4xl space-y-2.5 rounded-2xl rounded-tl-none border border-slate-100 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <ShimmerText width="w-full" height="h-3" />
-            <ShimmerText width="w-5/6" height="h-3" />
-            <ShimmerText width="w-2/3" height="h-3" />
-          </div>
-        </div>
-
-        {/* User Message */}
-        <div className="flex gap-3 max-w-[80%] ml-auto flex-row-reverse">
-          <ShimmerCircle size="w-8 h-8" />
-          <div className="p-4 bg-brand-blue border border-transparent rounded-2xl rounded-tr-none space-y-2 w-72">
-            <ShimmerText width="w-full" height="h-3" className="bg-white/20 animate-pulse" />
-            <ShimmerText width="w-1/2" height="h-3" className="bg-white/20 animate-pulse" />
-          </div>
-        </div>
-
-        {/* System Message with SQL block */}
-        <div className="flex gap-3 max-w-[80%]">
-          <ShimmerCircle size="w-8 h-8" />
-          <div className="space-y-3">
-            <div className="p-4 bg-white border border-slate-100 rounded-2xl rounded-tl-none space-y-2 w-80">
-              <ShimmerText width="w-full" height="h-3" />
-              <ShimmerText width="w-1/3" height="h-3" />
-            </div>
-            <div className="p-4 bg-slate-50 border border-slate-200/60 rounded-xl space-y-2 w-[450px]">
-              <ShimmerText width="w-1/3" height="h-3" />
-              <div className="h-16 rounded-lg bg-white border border-slate-150 p-3" />
-            </div>
+            <ShimmerText width="w-11/12" height="h-3" />
+            <ShimmerText width="w-2/5" height="h-3" />
           </div>
         </div>
       </div>
 
-      {/* Input area */}
-      <div className="p-4 border-t border-slate-100 bg-slate-50/50 shrink-0 space-y-3">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-7 w-32 rounded-full shimmer-placeholder shrink-0" />
-          ))}
+      {/* Composer remains anchored at the bottom, like the loaded screen. */}
+      <div className="shrink-0 space-y-3 border-t border-slate-100 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+        <div className="flex gap-2 overflow-hidden pb-1">
+          <ShimmerText width="w-56" height="h-7" className="shrink-0 rounded-full" />
+          <ShimmerText width="w-64" height="h-7" className="shrink-0 rounded-full" />
+          <ShimmerText width="w-72" height="h-7" className="hidden shrink-0 rounded-full md:block" />
+          <ShimmerText width="w-64" height="h-7" className="hidden shrink-0 rounded-full xl:block" />
         </div>
-        <div className="bg-white rounded-xl border border-slate-200 p-1.5 flex items-center h-14">
-          <ShimmerText width="w-1/2" height="h-4" className="ml-3" />
-          <ShimmerCircle size="w-9 h-9" className="rounded-lg ml-auto mr-1" />
+        <div className="flex h-14 items-center rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <ShimmerText width="w-2/5" height="h-3" className="ml-3" />
+          <ShimmerText width="w-9" height="h-9" className="ml-auto mr-1 shrink-0 rounded-lg" />
         </div>
       </div>
     </div>

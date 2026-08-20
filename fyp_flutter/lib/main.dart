@@ -1050,6 +1050,7 @@ class _AppRootState extends State<AppRoot> {
           'department': a['department'],
           'created_at': a['created_at'],
           'priority': a['priority'],
+          'publisher': a['publisher'],
           'image_base64': a['image_base64'],
           'publish_start': a['publish_start'],
           'publish_end': a['publish_end'],
@@ -1057,6 +1058,9 @@ class _AppRootState extends State<AppRoot> {
           'target_role': a['target_role'],
           'target_programme_code': a['target_programme_code'],
           'target_course_code': a['target_course_code'],
+          'target_group': a['target_group'],
+          'attachment_name': a['attachment_name'],
+          'external_link': a['external_link'],
         });
       }
 

@@ -17,9 +17,87 @@ import {
   BookOpen,
   Filter,
   RefreshCw,
-  ChevronDown
+  ChevronDown,
+  Check,
+  Eye
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
+import { InfinityLoop } from '../../components/loading-ui/infinity';
+
+interface FilterOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+const FilterDropdown: React.FC<{
+  value: string;
+  options: FilterOption[];
+  onChange: (value: string) => void;
+  icon: React.ElementType;
+}> = ({ value, options, onChange, icon: Icon }) => {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const selected = options.find(option => option.value === value) || options[0];
+
+  useEffect(() => {
+    const close = (event: MouseEvent) => {
+      if (!dropdownRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  return (
+    <div ref={dropdownRef} className={`relative ${open ? 'z-40' : ''}`}>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+        className={`flex h-10 w-full items-center gap-2 rounded-xl border bg-white px-3 text-left text-xs font-semibold shadow-xs transition-all dark:bg-slate-900 ${open ? 'border-brand-blue ring-2 ring-brand-blue/10 dark:border-blue-500' : 'border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600'}`}
+      >
+        <Icon className="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-500" />
+        <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">{selected?.label}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${open ? 'rotate-180 text-brand-blue dark:text-blue-400' : ''}`} />
+      </button>
+
+      {open && (
+        <div role="listbox" className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-150 dark:border-slate-700 dark:bg-slate-900 custom-scrollbar">
+          {options.map(option => {
+            const isSelected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors ${isSelected ? 'bg-blue-50 text-brand-blue dark:bg-blue-500/10 dark:text-blue-400' : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'}`}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-bold">{option.label}</span>
+                  {option.description && <span className="mt-0.5 block truncate text-[10px] font-medium text-slate-400 dark:text-slate-500">{option.description}</span>}
+                </span>
+                {isSelected && <Check className="h-4 w-4 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const AttendanceManager: React.FC = () => {
   const [sessions, setSessions] = useState<AdminSession[]>([]);
@@ -90,6 +168,21 @@ export const AttendanceManager: React.FC = () => {
     });
     return Array.from(set).sort();
   }, [sessions]);
+
+  const courseFilterOptions = useMemo<FilterOption[]>(() => [
+    { value: 'all', label: `All Courses (${uniqueCourses.length})`, description: 'Show every course session' },
+    ...uniqueCourses.map(course => ({ value: course.code, label: course.code, description: course.name })),
+  ], [uniqueCourses]);
+
+  const groupFilterOptions = useMemo<FilterOption[]>(() => [
+    { value: 'all', label: `All Groups (${uniqueGroups.length})`, description: 'Show every class group' },
+    ...uniqueGroups.map(group => ({ value: group, label: group.startsWith('G') ? `Group ${group.replace('G', '')}` : group })),
+  ], [uniqueGroups]);
+
+  const staffFilterOptions = useMemo<FilterOption[]>(() => [
+    { value: 'all', label: `All Staff (${uniqueStaff.length})`, description: 'Show every lecturer' },
+    ...uniqueStaff.map(staff => ({ value: staff, label: staff })),
+  ], [uniqueStaff]);
 
   // Combined QOL Filtered Sessions
   const filteredSessions = useMemo(() => {
@@ -435,46 +528,34 @@ export const AttendanceManager: React.FC = () => {
               {/* 2. Course Filter */}
               <div className="space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Course</label>
-                <select
+                <FilterDropdown
                   value={selectedCourse}
-                  onChange={(e) => { setSelectedCourse(e.target.value); setPage(1); }}
-                  className="w-full uipro-input !py-2 text-xs bg-white cursor-pointer"
-                >
-                  <option value="all">All Courses ({uniqueCourses.length})</option>
-                  {uniqueCourses.map(c => (
-                    <option key={c.code} value={c.code}>{c.code} - {c.name}</option>
-                  ))}
-                </select>
+                  options={courseFilterOptions}
+                  icon={BookOpen}
+                  onChange={(next) => { setSelectedCourse(next); setPage(1); }}
+                />
               </div>
 
               {/* 3. Class Group Filter */}
               <div className="space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Class Group</label>
-                <select
+                <FilterDropdown
                   value={selectedGroup}
-                  onChange={(e) => { setSelectedGroup(e.target.value); setPage(1); }}
-                  className="w-full uipro-input !py-2 text-xs bg-white cursor-pointer"
-                >
-                  <option value="all">All Groups ({uniqueGroups.length})</option>
-                  {uniqueGroups.map(g => (
-                    <option key={g} value={g}>{g.startsWith('G') ? `Group ${g.replace('G', '')}` : g}</option>
-                  ))}
-                </select>
+                  options={groupFilterOptions}
+                  icon={UserCheck}
+                  onChange={(next) => { setSelectedGroup(next); setPage(1); }}
+                />
               </div>
 
               {/* 4. Staff / Lecturer Filter */}
               <div className="space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Staff / Lecturer</label>
-                <select
+                <FilterDropdown
                   value={selectedStaff}
-                  onChange={(e) => { setSelectedStaff(e.target.value); setPage(1); }}
-                  className="w-full uipro-input !py-2 text-xs bg-white cursor-pointer"
-                >
-                  <option value="all">All Staff ({uniqueStaff.length})</option>
-                  {uniqueStaff.map(st => (
-                    <option key={st} value={st}>{st}</option>
-                  ))}
-                </select>
+                  options={staffFilterOptions}
+                  icon={User}
+                  onChange={(next) => { setSelectedStaff(next); setPage(1); }}
+                />
               </div>
             </div>
 
@@ -592,9 +673,10 @@ export const AttendanceManager: React.FC = () => {
                       <td className="py-3.5 px-4 text-right">
                         <button
                           onClick={() => openAttendanceModal(session)}
-                          className="uipro-button uipro-button-primary bg-[#2563eb] text-white hover:bg-[#1d4ed8] shadow-md shadow-blue-500/20 py-1.5 px-3.5 text-[10px] font-bold rounded-xl border-0 cursor-pointer"
+                          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 text-[10px] font-bold text-brand-blue transition-colors hover:border-blue-300 hover:bg-blue-100 cursor-pointer"
                         >
-                          Audit Attendance
+                          <Eye className="h-3.5 w-3.5" />
+                          View
                         </button>
                       </td>
                     </tr>
@@ -746,9 +828,9 @@ export const AttendanceManager: React.FC = () => {
             {/* Attendance list output */}
             <div className="overflow-y-auto flex-1 min-h-0 border border-slate-100 rounded-xl">
               {modalLoading ? (
-                <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2 font-sans text-xs">
-                  <Loader2 className="h-6 w-6 text-brand-blue animate-spin" />
-                  <span>Loading enrolment checklist...</span>
+                <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs" aria-live="polite">
+                  <InfinityLoop className="h-14 w-20 text-brand-blue" />
+                  <span className="font-semibold">Loading attendance records...</span>
                 </div>
               ) : modalError ? (
                 <div className="p-4 text-center text-danger-red font-sans text-xs bg-danger-red-light">

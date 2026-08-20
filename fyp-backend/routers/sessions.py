@@ -322,6 +322,8 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
         liveness_passed=liveness_passed,
         marked_at=utcnow(),
         source_ip=source_ip,
+        local_ip=body.local_ip,
+        gateway_ip=body.gateway_ip,
         reported_ssid=body.wifi_ssid,
         reported_bssid=body.bssid,
         reported_gateway_ip=body.gateway_ip,
@@ -501,6 +503,7 @@ def update_lecturer_attendance(
     if record:
         record.status = body.status
         record.marked_at = utcnow()
+        record.method = f"staff_override:{current_user.id}"
         if body.status == "present":
             record.confidence_score = 1.0
             record.source_ip = "Staff Override"
@@ -516,6 +519,7 @@ def update_lecturer_attendance(
             network_verified=True if body.status == "present" else False,
             liveness_passed=True if body.status == "present" else False,
             marked_at=utcnow(),
+            method=f"staff_override:{current_user.id}",
             source_ip="Staff Override" if body.status == "present" else None
         )
         db.add(record)

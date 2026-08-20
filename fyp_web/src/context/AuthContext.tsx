@@ -25,6 +25,10 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const resetNavigationUrl = () => {
+  window.history.replaceState({}, '', window.location.pathname);
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserSession | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -39,6 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     resetThemeOnLogout();
     setActiveLanguage('en');
+    resetNavigationUrl();
   };
 
   const triggerSessionExpiredLogout = () => {
@@ -150,6 +155,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       sessionStorage.setItem('auth_token', data.access_token);
       sessionStorage.setItem('auth_user', JSON.stringify(sessionUser));
       sessionStorage.setItem('auth_session_expires_at', String(expiresAt));
+
+      // A new authenticated session always starts from its role dashboard.
+      // Remove any protected route left by a previous account or deep link.
+      resetNavigationUrl();
 
       setToken(data.access_token);
       setUser(sessionUser);

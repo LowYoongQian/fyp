@@ -5,6 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { swalError, swalSuccess } from '../../utils/swal';
 import type { Course, Programme } from '../../services/api';
+import { StudentCourseAttendance } from '../student/StudentCourseAttendance';
+import { MorphingInfinity } from '../../components/loading-ui/morphing-infinity';
 
 const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) => {
   let strokeColor = 'stroke-emerald-500';
@@ -211,6 +213,7 @@ export const Timetable: React.FC = () => {
   const [isWeekDropdownOpen, setIsWeekDropdownOpen] = useState(false);
   const [events, setEvents] = useState<TimetableEvent[]>([]);
   const [studentCourses, setStudentCourses] = useState<Course[]>([]);
+  const [selectedAttendanceCourse, setSelectedAttendanceCourse] = useState<{ courseCode: string; courseName: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<TimetableEvent | null>(null);
   const [editForm, setEditForm] = useState({ day: 'Monday', start: '08:00', end: '10:00', room: '' });
@@ -1123,6 +1126,16 @@ export const Timetable: React.FC = () => {
   const isPrinting = printStatus === 'preparing' || printStatus === 'rendering' || printStatus === 'downloading';
   const previewEvents = displayedEvents.slice(0, 6);
 
+  if (user?.role === 'student' && selectedAttendanceCourse) {
+    return (
+      <StudentCourseAttendance
+        courseCode={selectedAttendanceCourse.courseCode}
+        courseName={selectedAttendanceCourse.courseName}
+        onBack={() => setSelectedAttendanceCourse(null)}
+      />
+    );
+  }
+
   return (
     <div className="space-y-5 sm:space-y-6">
       {/* Timetable Header / Note */}
@@ -1586,9 +1599,12 @@ export const Timetable: React.FC = () => {
 
         {/* Timetable Grid Schedule */}
         {loading ? (
-          <div className="p-20 flex flex-col justify-center items-center gap-3 text-slate-400 font-sans text-xs">
-            <Loader2 className="h-8 w-8 text-brand-blue animate-spin" />
-            <span>Synchronizing academic schedules...</span>
+          <div className="flex min-h-[420px] flex-col items-center justify-center gap-2.5 rounded-2xl border border-blue-100 bg-gradient-to-b from-blue-50/70 to-white p-10 text-center dark:border-blue-900/60 dark:from-blue-950/30 dark:to-slate-900">
+            <MorphingInfinity className="h-16 w-20 text-brand-blue dark:text-blue-300" />
+            <div className="space-y-1.5">
+              <p className="text-sm font-extrabold text-slate-800 dark:text-slate-100">Loading timetable</p>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Syncing your latest class schedule...</p>
+            </div>
           </div>
         ) : user?.role === 'admin' && !selectedProgramme && !selectedCourseCode ? (
           <div className="p-16 my-4 flex flex-col items-center justify-center text-center gap-4 bg-slate-50/60 dark:bg-slate-900/30 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800">
@@ -1780,10 +1796,10 @@ export const Timetable: React.FC = () => {
                                 if (!editing && !dragState) setHoveredEventId(ev.id);
                               }}
                               onMouseLeave={() => setHoveredEventId(null)}
-                              onPointerDown={(pointerEvent) => handleClassPointerDown(pointerEvent, ev)}
-                              onPointerMove={(pointerEvent) => handleClassPointerMove(pointerEvent, ev)}
-                              onPointerUp={(pointerEvent) => void handleClassPointerUp(pointerEvent, ev)}
-                              onPointerCancel={handleClassPointerCancel}
+                              onPointerDown={user?.role === 'admin' ? (pointerEvent) => handleClassPointerDown(pointerEvent, ev) : undefined}
+                              onPointerMove={user?.role === 'admin' ? (pointerEvent) => handleClassPointerMove(pointerEvent, ev) : undefined}
+                              onPointerUp={user?.role === 'admin' ? (pointerEvent) => void handleClassPointerUp(pointerEvent, ev) : undefined}
+                              onPointerCancel={user?.role === 'admin' ? handleClassPointerCancel : undefined}
                               onClick={() => {
                                 if (!suppressCardClickRef.current && user?.role === 'admin' && ev.meetingId) openEdit(ev);
                               }}
@@ -1791,7 +1807,7 @@ export const Timetable: React.FC = () => {
                             >
                               {/* Simple Pastel Container Card */}
                               <div
-                                className={`group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-lg border p-2.5 shadow-sm transition-[box-shadow,filter] duration-200 ${isDragging ? 'cursor-grabbing ring-2 ring-white/90 shadow-2xl brightness-[1.03] dark:ring-slate-700' : user?.role === 'admin' && ev.meetingId ? 'cursor-grab hover:shadow-md' : 'cursor-default'} ${palette.bg} ${palette.border} ${
+                                className={`group relative flex h-full w-full flex-col justify-between overflow-visible rounded-lg border p-2.5 shadow-sm transition-[box-shadow,filter,transform] duration-200 ${isDragging ? 'cursor-grabbing ring-2 ring-white/90 shadow-2xl brightness-[1.03] dark:ring-slate-700' : user?.role === 'admin' && ev.meetingId ? 'cursor-grab hover:-translate-y-0.5 hover:shadow-md' : 'cursor-help hover:-translate-y-0.5 hover:shadow-md hover:ring-2 hover:ring-blue-400/30'} ${palette.bg} ${palette.border} ${
                                   isSearchActive
                                     ? isMatched
                                       ? 'opacity-100 ring-2 ring-sky-500 scale-[1.01]'
@@ -1972,7 +1988,20 @@ export const Timetable: React.FC = () => {
                   </tr>
                 ) : (
                   groupedCourses.map((c, index) => (
-                    <tr key={c.courseCode} className="hover:bg-slate-50/30 transition-colors align-top">
+                    <tr
+                      key={c.courseCode}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`View ${c.courseCode} attendance records`}
+                      onClick={() => setSelectedAttendanceCourse({ courseCode: c.courseCode, courseName: c.courseName })}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelectedAttendanceCourse({ courseCode: c.courseCode, courseName: c.courseName });
+                        }
+                      }}
+                      className="cursor-pointer align-top transition-colors hover:bg-blue-50/60 focus:bg-blue-50/60 focus:outline-none dark:hover:bg-blue-950/20"
+                    >
                       <td className="py-4 px-4 text-center font-bold text-slate-400">{index + 1}</td>
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-3 flex-wrap">

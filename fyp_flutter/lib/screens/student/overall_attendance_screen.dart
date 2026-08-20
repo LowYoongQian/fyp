@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 
-import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 
 class OverallAttendanceScreen extends StatefulWidget {
@@ -183,15 +182,9 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
     _ => 'Absent',
   };
 
-  IconData _statusIcon(String status) => switch (status) {
-    'present' => Icons.check_rounded,
-    'leave' => Icons.event_busy_rounded,
-    _ => Icons.close_rounded,
-  };
-
   String _dateLabel(dynamic raw) {
     final date = DateTime.tryParse(raw?.toString() ?? '')?.toLocal();
-    if (date == null) return 'Date unavailable';
+    if (date == null) return '—';
     const months = [
       'Jan',
       'Feb',
@@ -303,46 +296,102 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
     );
   }
 
-  Widget _sessionCard(Map<String, dynamic> session) {
-    final status = _statusOf(session);
-    final color = _statusColor(status);
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return GlassCard(
-      padding: const EdgeInsets.all(15),
-      child: Row(
+  String _value(dynamic value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? '—' : text;
+  }
+
+  Widget _cell(String primary, {String? secondary, double width = 130}) {
+    return SizedBox(
+      width: width,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: .11),
-              borderRadius: BorderRadius.circular(13),
+          Text(
+            primary,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.inter(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
             ),
-            child: Icon(_statusIcon(status), color: color, size: 21),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        session['course_code']?.toString() ?? '',
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
-                          color: dark ? Colors.white : const Color(0xFF0F172A),
-                        ),
-                      ),
+          if (secondary != null) ...[
+            const SizedBox(height: 3),
+            Text(
+              secondary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: 9,
+                height: 1.25,
+                color: const Color(0xFF64748B),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _recordsTable(List<Map<String, dynamic>> sessions, bool dark) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: dark ? const Color(0xFF1E293B) : Colors.white,
+          border: Border.all(
+            color: dark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          ),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowHeight: 46,
+            dataRowMinHeight: 70,
+            dataRowMaxHeight: 82,
+            horizontalMargin: 14,
+            columnSpacing: 22,
+            headingRowColor: WidgetStatePropertyAll(
+              dark ? const Color(0xFF172033) : const Color(0xFFF8FAFC),
+            ),
+            headingTextStyle: GoogleFonts.inter(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF64748B),
+            ),
+            columns: const [
+              DataColumn(label: Text('NO.')),
+              DataColumn(label: Text('CLASS DATE & TIME')),
+              DataColumn(label: Text('STAFF')),
+              DataColumn(label: Text('ROLE')),
+              DataColumn(label: Text('STATUS')),
+              DataColumn(label: Text('TAKEN BY / TIME')),
+              DataColumn(label: Text('LOCATION / NETWORK')),
+            ],
+            rows: sessions.map((session) {
+              final status = _statusOf(session);
+              final color = _statusColor(status);
+              final number = _filtered.indexOf(session) + 1;
+              return DataRow(
+                cells: [
+                  DataCell(Text('$number')),
+                  DataCell(
+                    _cell(
+                      _dateLabel(session['opened_at']),
+                      secondary: _classLabel(session),
+                      width: 145,
                     ),
+                  ),
+                  DataCell(_cell(_value(session['staff_name']), width: 120)),
+                  DataCell(_cell(_value(session['staff_role']), width: 80)),
+                  DataCell(
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 9,
-                        vertical: 4,
+                        vertical: 5,
                       ),
                       decoration: BoxDecoration(
                         color: color.withValues(alpha: .11),
@@ -357,52 +406,27 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                         ),
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  session['course_name']?.toString() ?? '',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.inter(
-                    fontSize: 11,
-                    height: 1.3,
-                    color: const Color(0xFF64748B),
-                    fontWeight: FontWeight.w600,
                   ),
-                ),
-                const SizedBox(height: 9),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.schedule_rounded,
-                      size: 13,
-                      color: Color(0xFF94A3B8),
+                  DataCell(
+                    _cell(
+                      _value(session['taken_by']),
+                      secondary: _dateLabel(session['taken_at']),
+                      width: 145,
                     ),
-                    const SizedBox(width: 5),
-                    Expanded(
-                      child: Text(
-                        _dateLabel(session['opened_at']),
-                        style: GoogleFonts.inter(
-                          fontSize: 10,
-                          color: const Color(0xFF64748B),
-                        ),
-                      ),
+                  ),
+                  DataCell(
+                    _cell(
+                      _value(session['room']),
+                      secondary:
+                          'Network: ${_value(session['network_ip'])}\nDevice: ${_value(session['device_ip'])}',
+                      width: 180,
                     ),
-                    Text(
-                      _classLabel(session),
-                      style: GoogleFonts.inter(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF94A3B8),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+                  ),
+                ],
+              );
+            }).toList(),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -509,16 +533,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
               child: expanded
                   ? Padding(
                       padding: const EdgeInsets.only(top: 5),
-                      child: Column(
-                        children: sessions
-                            .map(
-                              (session) => Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: _sessionCard(session),
-                              ),
-                            )
-                            .toList(),
-                      ),
+                      child: _recordsTable(sessions, dark),
                     )
                   : const SizedBox(width: double.infinity),
             ),

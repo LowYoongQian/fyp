@@ -264,7 +264,7 @@ def check_announcement_visibility():
     # public endpoint's own copy, so the mobile login screen read them as null.
     d = announcement_dict(everyone)
     assert {"faculty", "department", "publisher", "created_at"} <= set(d)
-    assert d["created_at"] == "2026-07-01T00:00:00"
+    assert d["created_at"] == "2026-07-01T00:00:00Z"
 
 
 class _FakeSession:

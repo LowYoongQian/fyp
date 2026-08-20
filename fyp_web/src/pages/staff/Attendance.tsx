@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../../services/api';
 import type { Course, ActiveSession } from '../../services/api';
 import { Search, Calendar, ChevronDown, Check, AlertTriangle, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { swalError } from '../../utils/swal';
 
 interface DailyAttendanceRecord {
   studentId: number | string;
@@ -13,6 +14,11 @@ interface DailyAttendanceRecord {
   markedAt?: string;
   deviceIp?: string;
 }
+
+const normalizeClassGroup = (group?: string | null) => {
+  const normalized = String(group || '').trim().replace(/\s+/g, '').toUpperCase();
+  return normalized.startsWith('GROUP') ? `G${normalized.slice(5)}` : normalized;
+};
 
 export const Attendance: React.FC = () => {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -37,6 +43,7 @@ export const Attendance: React.FC = () => {
   // Attendance records state
   const [records, setRecords] = useState<DailyAttendanceRecord[]>([]);
   const [copiedStudentId, setCopiedStudentId] = useState<number | string | null>(null);
+  const attendanceMutationVersions = useRef(new Map<string, number>());
 
   const getAvailableGroupsForCourse = (courseId: string): string[] => {
     if (!courseId) return ['G1'];
@@ -119,7 +126,7 @@ export const Attendance: React.FC = () => {
       }
       setLoadingSessions(true);
       try {
-        const data = await apiService.getCourseSessions(Number(selectedCourseId));
+        const data = await apiService.getCourseSessions(selectedCourseId);
         setSessions(data);
       } catch (err) {
         console.error("Failed to load sessions:", err);
@@ -209,13 +216,22 @@ export const Attendance: React.FC = () => {
   };
 
   const handleSelectDay = (dateStr: string) => {
+    if (!availableSessionDates.has(dateStr)) return;
+    const normalizedGroup = normalizeClassGroup(selectedGroup);
+    const matchingSession = sessions.find((session) => (
+      normalizeClassGroup(session.class_group) === normalizedGroup
+      && getLocalDateString(session.opened_at) === dateStr
+    ));
     setSelectedDate(dateStr);
+    setSelectedSessionId(matchingSession ? String(matchingSession.id) : '');
+    setRecords([]);
     setIsCalendarOpen(false);
   };
 
   // Filter sessions by selectedGroup and selectedDate, and auto-select most recent
   const groupSessions = React.useMemo(() => {
-    let filtered = sessions.filter(s => s.class_group === selectedGroup);
+    const normalizedGroup = normalizeClassGroup(selectedGroup);
+    let filtered = sessions.filter(s => normalizeClassGroup(s.class_group) === normalizedGroup);
     if (selectedDate) {
       filtered = filtered.filter(s => {
         const localDate = getLocalDateString(s.opened_at);
@@ -240,10 +256,13 @@ export const Attendance: React.FC = () => {
       setRecords([]);
       return;
     }
+
+    let cancelled = false;
+    setRecords([]);
     
     const loadAttendance = async () => {
       try {
-        const data = await apiService.getSessionAttendance(Number(selectedSessionId));
+        const data = await apiService.getSessionAttendance(selectedSessionId);
         
         // Map student records
         const mapped = data.attendance_list.map(s => {
@@ -271,88 +290,93 @@ export const Attendance: React.FC = () => {
           };
         });
         
-        setRecords(mapped);
+        if (!cancelled) setRecords(mapped);
       } catch (err) {
         console.error("Failed to load session attendance:", err);
+        if (!cancelled) setRecords([]);
       }
     };
     
     loadAttendance();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedSessionId, students]);
 
   const handleMarkPresent = async (studentId: number | string) => {
     if (!selectedSessionId) return;
+    const previousRecord = records.find(record => String(record.studentId) === String(studentId));
+    if (!previousRecord) return;
+    const mutationKey = String(studentId);
+    const mutationVersion = (attendanceMutationVersions.current.get(mutationKey) || 0) + 1;
+    attendanceMutationVersions.current.set(mutationKey, mutationVersion);
+
+    setRecords(prev => prev.map(record => String(record.studentId) === mutationKey
+      ? {
+          ...record,
+          status: 'present' as const,
+          markedAt: new Date().toISOString(),
+          deviceIp: 'Staff Override',
+        }
+      : record
+    ));
+
     try {
       await apiService.updateLecturerAttendance(selectedSessionId, studentId, 'present');
-      setRecords(prev => prev.map(r => {
-        if (r.studentId === studentId) {
-          return {
-            ...r,
-            status: 'present' as const,
-            markedAt: new Date().toISOString(),
-            deviceIp: 'Staff Override'
-          };
-        }
-        return r;
-      }));
     } catch (err) {
       console.error("Failed to override attendance present:", err);
+      if (attendanceMutationVersions.current.get(mutationKey) === mutationVersion) {
+        setRecords(prev => prev.map(record => String(record.studentId) === mutationKey ? previousRecord : record));
+        swalError('Save failed', 'Attendance was restored.');
+      }
+    } finally {
+      if (attendanceMutationVersions.current.get(mutationKey) === mutationVersion) {
+        attendanceMutationVersions.current.delete(mutationKey);
+      }
     }
   };
 
   const handleMarkAbsent = async (studentId: number | string) => {
     if (!selectedSessionId) return;
+    const previousRecord = records.find(record => String(record.studentId) === String(studentId));
+    if (!previousRecord) return;
+    const mutationKey = String(studentId);
+    const mutationVersion = (attendanceMutationVersions.current.get(mutationKey) || 0) + 1;
+    attendanceMutationVersions.current.set(mutationKey, mutationVersion);
+    const currentSession = sessions.find(s => s.id.toString() === selectedSessionId);
+    const isOpen = currentSession ? currentSession.is_open : false;
+
+    setRecords(prev => prev.map(record => String(record.studentId) === mutationKey
+      ? {
+          ...record,
+          status: isOpen ? ('pending' as const) : ('absent' as const),
+          markedAt: undefined,
+          deviceIp: undefined,
+        }
+      : record
+    ));
+
     try {
       await apiService.updateLecturerAttendance(selectedSessionId, studentId, 'absent');
-      const currentSession = sessions.find(s => s.id.toString() === selectedSessionId);
-      const isOpen = currentSession ? currentSession.is_open : false;
-      
-      setRecords(prev => prev.map(r => {
-        if (r.studentId === studentId) {
-          return {
-            ...r,
-            status: isOpen ? ('pending' as const) : ('absent' as const),
-            markedAt: undefined,
-            deviceIp: undefined
-          };
-        }
-        return r;
-      }));
     } catch (err) {
       console.error("Failed to override attendance absent:", err);
+      if (attendanceMutationVersions.current.get(mutationKey) === mutationVersion) {
+        setRecords(prev => prev.map(record => String(record.studentId) === mutationKey ? previousRecord : record));
+        swalError('Save failed', 'Attendance was restored.');
+      }
+    } finally {
+      if (attendanceMutationVersions.current.get(mutationKey) === mutationVersion) {
+        attendanceMutationVersions.current.delete(mutationKey);
+      }
     }
   };
 
-  const handleSelectAllToggle = async () => {
+  const handleSelectAllToggle = () => {
     if (!selectedSessionId) return;
     const allPresent = filteredRecords.length > 0 && filteredRecords.every(r => r.status === 'present');
-    const nextStatus = allPresent ? 'absent' : 'present';
-    
-    try {
-      const currentSession = sessions.find(s => s.id.toString() === selectedSessionId);
-      const isOpen = currentSession ? currentSession.is_open : false;
-
-      await Promise.all(
-        filteredRecords.map(r => apiService.updateLecturerAttendance(selectedSessionId, r.studentId, nextStatus))
-      );
-      
-      setRecords(prev => prev.map(r => {
-        const isFiltered = filteredRecords.some(fr => fr.studentId === r.studentId);
-        if (isFiltered) {
-          return {
-            ...r,
-            status: nextStatus === 'present' 
-              ? ('present' as const) 
-              : isOpen ? ('pending' as const) : ('absent' as const),
-            markedAt: nextStatus === 'present' ? new Date().toISOString() : undefined,
-            deviceIp: nextStatus === 'present' ? 'Staff Override' : undefined
-          };
-        }
-        return r;
-      }));
-    } catch (err) {
-      console.error("Failed to toggle all attendance:", err);
-    }
+    filteredRecords.forEach(record => {
+      void (allPresent ? handleMarkAbsent(record.studentId) : handleMarkPresent(record.studentId));
+    });
   };
 
   const handleCopyEmail = (email: string, studentId: number | string) => {
@@ -389,11 +413,46 @@ export const Attendance: React.FC = () => {
     r.studentCode.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const stats = {
-    total: records.length,
-    present: records.filter(r => r.status === 'present').length,
-    absent: records.filter(r => r.status === 'absent').length,
-  };
+  const stats = React.useMemo(() => records.reduce(
+    (summary, record) => {
+      summary.total += 1;
+      if (record.status === 'present') summary.present += 1;
+      if (record.status === 'absent') summary.absent += 1;
+      return summary;
+    },
+    { total: 0, present: 0, absent: 0 }
+  ), [records]);
+
+  const availableSessionDates = React.useMemo(() => {
+    const dates = new Map<string, number>();
+
+    sessions.forEach((session) => {
+      const belongsToGroup = normalizeClassGroup(session.class_group) === normalizeClassGroup(selectedGroup);
+      if (!belongsToGroup) return;
+
+      const date = getLocalDateString(session.opened_at);
+      if (date) dates.set(date, (dates.get(date) || 0) + 1);
+    });
+
+    return dates;
+  }, [sessions, selectedGroup]);
+
+  const availableDateList = React.useMemo(
+    () => Array.from(availableSessionDates.keys()).sort(),
+    [availableSessionDates]
+  );
+
+  useEffect(() => {
+    setSelectedDate((current) => (
+      current && !availableSessionDates.has(current) ? '' : current
+    ));
+
+    const latestDate = availableDateList[availableDateList.length - 1];
+    if (latestDate) {
+      const [year, month] = latestDate.split('-').map(Number);
+      setCalendarMonth(new Date(year, month - 1, 1));
+    }
+  }, [availableSessionDates, availableDateList]);
 
   const selectedCourseLabel = React.useMemo(() => {
     if (!selectedCourseId) return '---Select Subject Course---';
@@ -406,6 +465,7 @@ export const Attendance: React.FC = () => {
   }, [courses, selectedCourseId]);
 
   const selectedDateLabel = React.useMemo(() => {
+    if (loadingSessions) return 'Loading session dates...';
     if (!selectedDate) return '---Select Session Date---';
     return new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-MY', {
       weekday: 'short',
@@ -413,7 +473,22 @@ export const Attendance: React.FC = () => {
       month: 'short',
       year: 'numeric',
     });
-  }, [selectedDate]);
+  }, [loadingSessions, selectedDate]);
+
+  const selectedSession = React.useMemo(
+    () => sessions.find(session => String(session.id) === String(selectedSessionId)),
+    [sessions, selectedSessionId]
+  );
+
+  const selectedSessionLabel = React.useMemo(() => {
+    if (loadingSessions) return 'Loading sessions...';
+    if (!selectedSession) return '--- No Session Found ---';
+    const date = selectedSession.opened_at ? new Date(selectedSession.opened_at) : null;
+    const dateLabel = date && !Number.isNaN(date.getTime())
+      ? date.toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: 'numeric' })
+      : 'Session';
+    return `${dateLabel} (${selectedSession.is_open ? 'Active' : 'Closed'})`;
+  }, [loadingSessions, selectedSession]);
 
   return (
     <div className="space-y-6">
@@ -430,7 +505,7 @@ export const Attendance: React.FC = () => {
         </div>
 
         {/* Stats summary banner */}
-        <div className="flex items-center gap-4 bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2 text-xs font-semibold text-slate-650">
+        <div key={`attendance-stats-${stats.present}-${stats.absent}-${stats.total}`} className="flex items-center gap-4 bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2 text-xs font-semibold text-slate-650">
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-success-green animate-pulse" />
             <span>Present: <strong className="text-slate-800">{stats.present}</strong></span>
@@ -449,7 +524,7 @@ export const Attendance: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
         
         {/* Left Side: Filters Card */}
-        <div className={`uipro-card bg-white p-5 space-y-4 relative ${isCourseDropdownOpen || isSessionDropdownOpen || isCalendarOpen ? 'z-50' : 'z-10'}`}>
+        <div className={`uipro-card bg-white p-5 space-y-4 relative ${isCourseDropdownOpen || isGroupDropdownOpen || isSessionDropdownOpen || isCalendarOpen ? 'z-50' : 'z-10'}`}>
           <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider pb-2 border-b border-slate-100">
             Class Roster Filters
           </h3>
@@ -470,7 +545,12 @@ export const Attendance: React.FC = () => {
                 <button
                   key={`attendance-course-trigger-${selectedCourseId}`}
                   type="button"
-                  onClick={() => setIsCourseDropdownOpen(!isCourseDropdownOpen)}
+                  onClick={() => {
+                    setIsGroupDropdownOpen(false);
+                    setIsCalendarOpen(false);
+                    setIsSessionDropdownOpen(false);
+                    setIsCourseDropdownOpen(!isCourseDropdownOpen);
+                  }}
                   className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
                   title={selectedCourseLabel}
                 >
@@ -486,6 +566,9 @@ export const Attendance: React.FC = () => {
                       type="button"
                       onClick={() => {
                         setSelectedCourseId('');
+                        setSelectedDate('');
+                        setSelectedSessionId('');
+                        setRecords([]);
                         setIsCourseDropdownOpen(false);
                       }}
                       className={`group w-full text-left px-4 py-2.5 text-xs text-slate-500 hover:bg-brand-blue hover:text-white transition-all flex flex-col gap-0.5 border-b border-slate-100 last:border-b-0 cursor-pointer ${
@@ -502,6 +585,9 @@ export const Attendance: React.FC = () => {
                           type="button"
                           onClick={() => {
                             setSelectedCourseId(String(c.id));
+                            setSelectedDate('');
+                            setSelectedSessionId('');
+                            setRecords([]);
                             setIsCourseDropdownOpen(false);
                           }}
                           className={`group w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-brand-blue hover:text-white transition-all flex items-center justify-between border-b border-slate-100 last:border-b-0 cursor-pointer ${
@@ -530,24 +616,35 @@ export const Attendance: React.FC = () => {
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Class Group</label>
               <div className="relative">
                 <button
+                  key={`attendance-group-trigger-${selectedGroup}`}
                   type="button"
-                  onClick={() => setIsGroupDropdownOpen(prev => !prev)}
+                  onClick={() => {
+                    setIsCourseDropdownOpen(false);
+                    setIsCalendarOpen(false);
+                    setIsSessionDropdownOpen(false);
+                    setIsGroupDropdownOpen(prev => !prev);
+                  }}
                   className="w-full uipro-input py-2 px-3.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer font-semibold"
                 >
-                  <span className="truncate">
+                  <span key={`attendance-group-label-${selectedGroup}`} className="truncate">
                     {selectedGroup === 'All' ? 'Full Lecture Session' : `Group ${selectedGroup.replace('G', '')}`}
                   </span>
                   <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                 </button>
 
                 {isGroupDropdownOpen && (
-                  <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setIsGroupDropdownOpen(false)} />
+                    <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                     {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map((g) => (
                       <button
                         key={g}
                         type="button"
                         onClick={() => {
                           setSelectedGroup(g);
+                          setSelectedDate('');
+                          setSelectedSessionId('');
+                          setRecords([]);
                           setIsGroupDropdownOpen(false);
                         }}
                         className={`group w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-brand-blue hover:text-white transition-all flex items-center justify-between border-b border-slate-100 last:border-b-0 cursor-pointer ${
@@ -564,7 +661,8 @@ export const Attendance: React.FC = () => {
                         )}
                       </button>
                     ))}
-                  </div>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -585,8 +683,14 @@ export const Attendance: React.FC = () => {
                   <button
                     key={`attendance-date-trigger-${selectedDate || 'empty'}`}
                     type="button"
-                    onClick={() => setIsCalendarOpen(!isCalendarOpen)}
-                    className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
+                    onClick={() => {
+                      setIsCourseDropdownOpen(false);
+                      setIsGroupDropdownOpen(false);
+                      setIsSessionDropdownOpen(false);
+                      setIsCalendarOpen(!isCalendarOpen);
+                    }}
+                    disabled={loadingSessions}
+                    className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-slate-50"
                     title={selectedDateLabel}
                   >
                     <span key={`attendance-date-label-${selectedDate || 'empty'}`} className="truncate flex items-center gap-2">
@@ -633,6 +737,14 @@ export const Attendance: React.FC = () => {
                         </button>
                       </div>
 
+                      <div className="mb-2 flex items-center justify-between rounded-lg bg-blue-50 px-2.5 py-1.5 text-[10px] font-semibold text-slate-500">
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2 w-2 rounded-full bg-brand-blue" />
+                          Dates with sessions
+                        </span>
+                        <span className="font-bold text-brand-blue">{availableDateList.length} available</span>
+                      </div>
+
                       {/* Weekdays */}
                       <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
                         {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => (
@@ -645,23 +757,32 @@ export const Attendance: React.FC = () => {
                         {renderCalendar().map((cell, idx) => {
                           const isSelected = cell.dateStr === selectedDate;
                           const isToday = cell.dateStr === getFormattedDateStr(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+                          const sessionCount = availableSessionDates.get(cell.dateStr) || 0;
+                          const hasSession = sessionCount > 0;
                           
                           return (
                             <button
                               key={idx}
                               type="button"
                               onClick={() => handleSelectDay(cell.dateStr)}
-                              className={`py-1.5 text-center text-[11px] font-semibold rounded-lg transition-all cursor-pointer ${
-                                !cell.isCurrentMonth
-                                  ? 'text-slate-300 hover:bg-slate-50/50'
+                              disabled={!hasSession}
+                              title={hasSession ? `${sessionCount} ${sessionCount === 1 ? 'session' : 'sessions'}` : 'No sessions'}
+                              className={`relative py-1.5 text-center text-[11px] font-semibold rounded-lg transition-all ${
+                                !hasSession
+                                  ? 'cursor-not-allowed text-slate-300 opacity-55'
                                   : isSelected
                                     ? 'bg-brand-blue text-white shadow-sm font-bold scale-105'
                                     : isToday
                                       ? 'bg-brand-blue-light/50 border border-brand-blue/30 text-brand-blue hover:bg-brand-blue/10'
-                                      : 'text-slate-650 hover:bg-slate-100/70 hover:text-slate-800'
+                                      : cell.isCurrentMonth
+                                        ? 'cursor-pointer bg-blue-50/70 text-brand-blue hover:bg-blue-100'
+                                        : 'cursor-pointer text-blue-400 hover:bg-blue-50'
                               }`}
                             >
                               {cell.day}
+                              {hasSession && !isSelected && (
+                                <span className="absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-brand-blue" />
+                              )}
                             </button>
                           );
                         })}
@@ -686,16 +807,18 @@ export const Attendance: React.FC = () => {
                 
                 <div className={`relative ${isSessionDropdownOpen ? 'z-50' : 'z-45'}`}>
                   <button
+                    key={`attendance-session-trigger-${selectedSessionId || 'empty'}`}
                     type="button"
-                    onClick={() => setIsSessionDropdownOpen(!isSessionDropdownOpen)}
+                    onClick={() => {
+                      setIsCourseDropdownOpen(false);
+                      setIsGroupDropdownOpen(false);
+                      setIsCalendarOpen(false);
+                      setIsSessionDropdownOpen(!isSessionDropdownOpen);
+                    }}
                     className="w-full py-2.5 text-left flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100/50 transition-all cursor-pointer"
                   >
-                    <span className="truncate">
-                      {groupSessions.find(s => s.id.toString() === selectedSessionId)
-                        ? `${new Date(groupSessions.find(s => s.id.toString() === selectedSessionId)!.opened_at!).toLocaleDateString()} (${groupSessions.find(s => s.id.toString() === selectedSessionId)!.is_open ? 'Active' : 'Closed'})`
-                        : loadingSessions
-                          ? 'Loading Sessions...'
-                          : '--- No Session Found ---'}
+                    <span key={`attendance-session-label-${selectedSessionId || 'empty'}`} className="truncate">
+                      {selectedSessionLabel}
                     </span>
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                   </button>
@@ -748,7 +871,7 @@ export const Attendance: React.FC = () => {
             </div>
             
             <div className="text-[10px] font-semibold text-slate-400 font-sans uppercase tracking-wider">
-               Roster Date: {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+               Roster Date: {(selectedDate ? new Date(`${selectedDate}T00:00:00`) : new Date()).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </div>
           </div>
 

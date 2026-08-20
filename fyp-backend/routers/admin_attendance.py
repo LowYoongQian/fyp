@@ -161,6 +161,7 @@ def update_admin_attendance(
 
     if record:
         record.status = body.status
+        record.method = f"admin_override:{current_user.id}"
         record.network_verified = body.wifi_verified
         record.liveness_passed = body.liveness_passed
         record.marked_at = utcnow()
@@ -169,6 +170,7 @@ def update_admin_attendance(
             session_id=str(session_id),
             student_id=str(student_id),
             status=body.status,
+            method=f"admin_override:{current_user.id}",
             confidence_score=1.0,
             network_verified=body.wifi_verified,
             liveness_passed=body.liveness_passed,

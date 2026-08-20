@@ -10,7 +10,6 @@ import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import 'face_scanner_screen.dart';
 import 'full_timetable_screen.dart';
-import 'attendance_center_screen.dart';
 import 'overall_attendance_screen.dart';
 import '../system/profile_screen.dart';
 
@@ -1002,7 +1001,6 @@ class _MainScreenState extends State<MainScreen> {
           children: [
             _buildFaceVerificationNotice(),
             _buildFaceMatchTestButton(),
-            _buildAttendanceCenterCard(),
             const SizedBox(height: 20),
             // Active Lectures from backend
             Text(
@@ -1621,8 +1619,9 @@ class _MainScreenState extends State<MainScreen> {
                                             ),
                                             const SizedBox(width: 8),
                                             _buildPublisherBadge(
-                                              ann['publisher'] as String? ??
-                                                  'ADMIN',
+                                              ann['target_scope'] == 'course'
+                                                  ? 'COURSE'
+                                                  : 'GENERAL',
                                             ),
                                           ],
                                         ),
@@ -1707,94 +1706,11 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ],
           ),
-          action: SnackBarAction(
-            label: 'View',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => AttendanceCenterScreen(
-                  authToken: widget.authToken,
-                  apiBaseUrl: ApiConfig.getEffectiveUrl(),
-                ),
-              ),
-            ),
-          ),
         ),
       );
     } catch (_) {
       // Live alerts are additive; a failed poll must not disturb the dashboard.
     }
-  }
-
-  Widget _buildAttendanceCenterCard() {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return InkWell(
-      borderRadius: BorderRadius.circular(20),
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => AttendanceCenterScreen(
-            authToken: widget.authToken,
-            apiBaseUrl: ApiConfig.getEffectiveUrl(),
-          ),
-        ),
-      ),
-      child: Container(
-        margin: const EdgeInsets.only(top: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: dark ? const Color(0xFF172554) : const Color(0xFFEFF6FF),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFF93C5FD)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF2563EB), Color(0xFF3B82F6)],
-                ),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Icon(Icons.insights_rounded, color: Colors.white),
-            ),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Attendance Center',
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      color: dark ? Colors.white : const Color(0xFF0F172A),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    'Readiness, targets, requests and live updates',
-                    style: GoogleFonts.inter(
-                      fontSize: 10.5,
-                      color: dark
-                          ? const Color(0xFFBFDBFE)
-                          : const Color(0xFF475569),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(
-              Icons.arrow_forward_ios_rounded,
-              size: 16,
-              color: Color(0xFF2563EB),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildTodayTimeline(List<Map<String, dynamic>> classes) {

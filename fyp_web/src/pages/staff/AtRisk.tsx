@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { apiService } from '../../services/api';
+import { apiService, clearApiCache } from '../../services/api';
 import type { RiskScore, AlertLog } from '../../services/api';
 import { swalSuccess, swalError, swalInfo } from '../../utils/swal';
 import {
@@ -24,6 +24,13 @@ import {
 } from 'lucide-react';
 
 type RiskLevel = RiskScore['risk_label'];
+
+const normalizeRiskLevel = (value: unknown): RiskLevel => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === 'high' || normalized === 'medium' || normalized === 'low'
+    ? normalized
+    : 'observing';
+};
 
 // Custom CustomDropdown Option Interface
 interface DropdownOption<T> {
@@ -156,6 +163,7 @@ export const AtRisk: React.FC = () => {
     setLoading(true);
     try {
       await apiService.runNightlyRiskScorerJob();
+      clearApiCache();
       await loadData();
       await swalInfo('ML Job Completed', 'Recomputed attendance risk scores and refreshed the risk register.');
     } catch (err) {
@@ -213,7 +221,7 @@ export const AtRisk: React.FC = () => {
   const filteredRisk = useMemo(() => {
     return riskList
       .filter(item => courseFilter === 'all' || item.course_code === courseFilter)
-      .filter(item => activeFilter === 'all' || item.risk_label === activeFilter)
+      .filter(item => activeFilter === 'all' || normalizeRiskLevel(item.risk_label) === activeFilter)
       .filter(item => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
@@ -266,12 +274,13 @@ export const AtRisk: React.FC = () => {
     [riskList, courseFilter]
   );
 
-  const counts = {
-    high: scoped.filter(i => i.risk_label === 'high').length,
-    medium: scoped.filter(i => i.risk_label === 'medium').length,
-    low: scoped.filter(i => i.risk_label === 'low').length,
-    observing: scoped.filter(i => i.risk_label === 'observing').length,
-  };
+  const counts = useMemo(() => scoped.reduce(
+    (totals, item) => {
+      totals[normalizeRiskLevel(item.risk_label)] += 1;
+      return totals;
+    },
+    { high: 0, medium: 0, low: 0, observing: 0 } as Record<RiskLevel, number>,
+  ), [scoped]);
 
   const badgeClass = (label: RiskLevel) => {
     switch (label) {
@@ -287,10 +296,10 @@ export const AtRisk: React.FC = () => {
   };
 
   const statCards = [
-    { key: 'high', label: 'High Risk', value: counts.high, icon: AlertTriangle, color: 'text-rose-600 dark:text-rose-400', bg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200/50 dark:border-rose-900/30' },
-    { key: 'medium', label: 'Medium Risk', value: counts.medium, icon: Activity, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200/50 dark:border-amber-900/30' },
-    { key: 'low', label: 'Low Risk', value: counts.low, icon: ShieldCheck, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200/50 dark:border-emerald-900/30' },
-    { key: 'observing', label: 'Observing', value: counts.observing, icon: Eye, color: 'text-slate-500 dark:text-slate-400', bg: 'bg-slate-100 dark:bg-slate-800/60 border-slate-200/50 dark:border-slate-700/40' },
+    { key: 'high', label: 'Total High Risk', value: counts.high, icon: AlertTriangle, color: 'text-rose-600 dark:text-rose-400', bg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200/50 dark:border-rose-900/30' },
+    { key: 'medium', label: 'Total Medium Risk', value: counts.medium, icon: Activity, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200/50 dark:border-amber-900/30' },
+    { key: 'low', label: 'Total Low Risk', value: counts.low, icon: ShieldCheck, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200/50 dark:border-emerald-900/30' },
+    { key: 'observing', label: 'Total Observing', value: counts.observing, icon: Eye, color: 'text-slate-500 dark:text-slate-400', bg: 'bg-slate-100 dark:bg-slate-800/60 border-slate-200/50 dark:border-slate-700/40' },
   ] as const;
 
   return (

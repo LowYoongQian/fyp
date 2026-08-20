@@ -3,7 +3,16 @@ import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { swalSuccess } from '../../utils/swal';
 import { ShimmerTableRows } from '../../components/Shimmer';
-import type { Course, ActiveSession, SessionAttendanceDetail, StudentAttendance, Announcement } from '../../services/api';
+import { Pet } from '../../components/Pet';
+import { readRecentStaffPages, STAFF_PAGE_LINKS, type StaffPageId } from '../../utils/staffRecentPages';
+import type {
+  Course,
+  ActiveSession,
+  SessionAttendanceDetail,
+  StudentAttendance,
+  Announcement,
+  LecturerDashboardSummary,
+} from '../../services/api';
 import {
   Play,
   Wifi,
@@ -18,16 +27,21 @@ import {
   Sparkles,
   Bell,
   Mail,
-  Phone,
   Check,
   Clock
 } from 'lucide-react';
 
-export const LecturerDashboard: React.FC = () => {
+interface LecturerDashboardProps {
+  onNavigate?: (page: StaffPageId) => void;
+}
+
+export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [enrolments, setEnrolments] = useState<any[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+  const [dashboardSummary, setDashboardSummary] = useState<LecturerDashboardSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
   
   // Create Session Form
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
@@ -64,14 +78,6 @@ export const LecturerDashboard: React.FC = () => {
   const [realAnnouncements, setRealAnnouncements] = useState<Announcement[]>([]);
 
   const pollingRef = useRef<any>(null);
-
-  const lecturerName = user 
-    ? (user.email.split('@')[0].toUpperCase() === 'LEE' 
-        ? 'Dr. Lee Min' 
-        : user.email.split('@')[0].toUpperCase() === 'WONG' 
-          ? 'Dr. Wong Kang Shiang' 
-          : 'Dr. ' + user.email.split('@')[0].charAt(0).toUpperCase() + user.email.split('@')[0].slice(1)) 
-    : 'Dr. Lee Min';
 
   const getCourseIdentifier = (c: Course): string => {
     if (!c) return '';
@@ -152,20 +158,41 @@ export const LecturerDashboard: React.FC = () => {
   }, []);
 
   const loadInitialData = async () => {
-    try {
-      const [coursesList, enrolmentsList, announcementsList] = await Promise.all([
-        apiService.getCourses(),
-        apiService.getEnrolments(),
-        apiService.lecturerGetAnnouncements().catch(() => [])
-      ]);
-      setCourses(coursesList);
-      setEnrolments(enrolmentsList);
-      setRealAnnouncements(announcementsList);
-      await fetchActiveSessions(coursesList);
-    } catch (err) {
-      console.error("Failed to load initial lecturer dashboard data:", err);
-    }
-  };  const fetchActiveSessions = async (coursesList?: Course[]) => {
+    setSummaryLoading(true);
+
+    const coursesRequest = apiService.getCourses()
+      .then((coursesList) => {
+        setCourses(coursesList);
+        return coursesList;
+      })
+      .catch((err) => {
+        console.error('Failed to load lecturer courses:', err);
+        return [] as Course[];
+      });
+
+    const enrolmentsRequest = apiService.getLecturerEnrolments()
+      .then(setEnrolments)
+      .catch((err) => console.error('Failed to load lecturer enrolments:', err));
+
+    const announcementsRequest = apiService.lecturerGetAnnouncements()
+      .then(setRealAnnouncements)
+      .catch((err) => console.error('Failed to load lecturer announcements:', err));
+
+    const summaryRequest = apiService.getLecturerDashboardSummary()
+      .then(setDashboardSummary)
+      .catch((err) => console.error('Failed to load lecturer dashboard summary:', err))
+      .finally(() => setSummaryLoading(false));
+
+    const coursesList = await coursesRequest;
+    await Promise.allSettled([
+      enrolmentsRequest,
+      announcementsRequest,
+      summaryRequest,
+      fetchActiveSessions(coursesList),
+    ]);
+  };
+
+  const fetchActiveSessions = async (coursesList?: Course[]) => {
     try {
       const data = await apiService.getActiveSessions();
       const listToUse = coursesList || courses;
@@ -191,6 +218,7 @@ export const LecturerDashboard: React.FC = () => {
       if (!classGroup) throw new Error('Please select a class allocation group');
       const response = await apiService.openSession(selectedCourseId, classGroup);
       await fetchActiveSessions();
+      setDashboardSummary(await apiService.getLecturerDashboardSummary());
       handleStartMonitor(response.id);
       await swalSuccess('Session Opened', 'Attendance window is now live for students.');
     } catch (err: any) {
@@ -266,47 +294,25 @@ export const LecturerDashboard: React.FC = () => {
   const totalCount = attendanceData?.attendance_list.length || 0;
   const rate = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
 
-  // Static/default rates for display before a monitored session is live
-  const displayRate = monitoredSessionId ? rate : 92; 
+  const displayRate = monitoredSessionId ? rate : (dashboardSummary?.overall_attendance_rate ?? 0);
 
-  // Calculate unique enrolled students count
-  const totalEnrolledStudents = React.useMemo(() => {
-    try {
-      const courseIds = courses.map(c => c.id);
-      const studentIds = enrolments
-        .filter(e => courseIds.includes(e.course_id))
-        .map(e => e.student_id);
-      return new Set(studentIds).size;
-    } catch (err) {
-      console.error("Error calculating enrolled students:", err);
-      return 0;
-    }
-  }, [courses, enrolments]);
+  const announcements = realAnnouncements.map(a => ({
+    id: a.id,
+    title: a.title,
+    body: a.content,
+    date: new Date(a.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+    type: a.publisher || 'ADMIN'
+  }));
 
-  const announcements = realAnnouncements.length > 0
-    ? realAnnouncements.map(a => ({
-        id: a.id,
-        title: a.title,
-        body: a.content,
-        date: new Date(a.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
-        type: a.publisher || 'ADMIN'
-      }))
-    : [
-        {
-          id: 1,
-          title: "Mid-Term Examination Schedule",
-          body: "Subnet security bounds apply to Hall A and Hall B examination rooms. Timetable key sync is mandatory.",
-          date: "June 15, 2026",
-          type: "Exam"
-        },
-        {
-          id: 2,
-          title: "FastAPI Core Router Maintenance",
-          body: "Database transaction validation engines will undergo scheduled migration backup on June 18 at 02:00 AM.",
-          date: "June 14, 2026",
-          type: "System"
-        }
-      ];
+  const recentShortcuts = user
+    ? readRecentStaffPages(user.user_id)
+        .map(id => STAFF_PAGE_LINKS.find(page => page.id === id))
+        .filter((page): page is (typeof STAFF_PAGE_LINKS)[number] => Boolean(page))
+    : [];
+  const profile = dashboardSummary?.profile;
+  const joinedLabel = profile?.joined_at
+    ? new Date(profile.joined_at).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+    : null;
 
   return (
     <div className="space-y-6">
@@ -318,40 +324,56 @@ export const LecturerDashboard: React.FC = () => {
           <div className="absolute top-0 right-0 w-32 h-32 bg-brand-blue/5 rounded-full blur-2xl pointer-events-none" />
           <div className="space-y-4">
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <div className="w-16 h-16 rounded-2xl bg-brand-blue/10 border border-brand-blue/20 flex items-center justify-center text-brand-blue shadow-inner shrink-0">
-                  <User className="h-8 w-8" />
-                </div>
-                <span className="absolute -bottom-1 -right-1 w-5.5 h-5.5 bg-success-green border-2 border-white rounded-full flex items-center justify-center text-[10px] text-white">
-                  ✓
-                </span>
+              <div className="w-16 h-16 rounded-2xl bg-brand-blue/10 border border-brand-blue/20 flex items-center justify-center text-brand-blue shadow-inner shrink-0 overflow-hidden">
+                {profile?.avatar_url ? (
+                  <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  summaryLoading
+                    ? <div className="h-full w-full shimmer-placeholder" />
+                    : <User className="h-8 w-8" />
+                )}
               </div>
-              <div>
+              <div className="min-w-0 flex-1">
                 <h3 className="text-lg font-display font-extrabold text-slate-800 leading-tight">
-                  {lecturerName}
+                  {summaryLoading
+                    ? <span className="block h-5 w-28 rounded-md shimmer-placeholder" />
+                    : profile?.name || 'Profile unavailable'}
                 </h3>
-                <span className="text-[10px] font-bold text-brand-blue bg-brand-blue-light px-2 py-0.5 rounded-md uppercase tracking-wider mt-1 inline-block">
-                  Senior Lecturer
-                </span>
+                {summaryLoading ? (
+                  <span className="mt-2 block h-4 w-16 rounded-md shimmer-placeholder" />
+                ) : (
+                  <span className="text-[10px] font-bold text-brand-blue bg-brand-blue-light px-2 py-0.5 rounded-md uppercase tracking-wider mt-1 inline-block">
+                    {profile?.role || 'Lecturer'}
+                  </span>
+                )}
               </div>
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Managing smart attendance rosters, liveness verification nodes, and student risk analytics profiles.
-            </p>
-            
+
             <div className="space-y-1.5 pt-2 border-t border-slate-100 text-[10.5px] text-slate-500 font-medium">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                <span>Joined January 2025</span>
-              </div>
+              {summaryLoading ? (
+                <>
+                  <div className="h-3 w-32 rounded shimmer-placeholder" />
+                  <div className="h-3 w-44 rounded shimmer-placeholder" />
+                  <div className="h-3 w-24 rounded shimmer-placeholder" />
+                </>
+              ) : (
+                <>
+              {joinedLabel && (
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  <span>Joined {joinedLabel}</span>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <Mail className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                <span className="truncate">{user?.email}</span>
+                <span className="truncate">{profile?.email || '—'}</span>
               </div>
               <div className="flex items-center gap-2">
-                <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                <span>+60 12-345 6789</span>
+                <ShieldCheck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                <span>{profile?.staff_id || '—'}</span>
               </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -366,7 +388,9 @@ export const LecturerDashboard: React.FC = () => {
               </div>
             </div>
             <div className="mt-3">
-              <span className="text-2xl font-display font-extrabold text-slate-800">{totalEnrolledStudents}</span>
+              {summaryLoading
+                ? <span className="block h-7 w-10 rounded-md shimmer-placeholder" />
+                : <span className="text-2xl font-display font-extrabold text-slate-800">{dashboardSummary?.total_enrolled ?? '—'}</span>}
               <p className="text-[9px] text-slate-400 font-semibold mt-1">Unique Students Enrolled</p>
             </div>
           </div>
@@ -379,7 +403,9 @@ export const LecturerDashboard: React.FC = () => {
               </div>
             </div>
             <div className="mt-3">
-              <span className="text-2xl font-display font-extrabold text-slate-800">{activeSessions.length}</span>
+              {summaryLoading
+                ? <span className="block h-7 w-10 rounded-md shimmer-placeholder" />
+                : <span className="text-2xl font-display font-extrabold text-slate-800">{dashboardSummary?.active_sessions ?? '—'}</span>}
               <p className="text-[9px] text-slate-400 font-semibold mt-1">Currently Open Subnets</p>
             </div>
           </div>
@@ -392,7 +418,9 @@ export const LecturerDashboard: React.FC = () => {
               </div>
             </div>
             <div className="mt-3">
-              <span className="text-2xl font-display font-extrabold text-slate-800">{courses.length}</span>
+              {summaryLoading
+                ? <span className="block h-7 w-10 rounded-md shimmer-placeholder" />
+                : <span className="text-2xl font-display font-extrabold text-slate-800">{dashboardSummary?.my_courses ?? '—'}</span>}
               <p className="text-[9px] text-slate-400 font-semibold mt-1">Assigned Enrolled Roster</p>
             </div>
           </div>
@@ -405,7 +433,9 @@ export const LecturerDashboard: React.FC = () => {
               </div>
             </div>
             <div className="mt-3">
-              <span className="text-2xl font-display font-extrabold text-slate-800">6</span>
+              {summaryLoading
+                ? <span className="block h-7 w-10 rounded-md shimmer-placeholder" />
+                : <span className="text-2xl font-display font-extrabold text-slate-800">{dashboardSummary?.roster_classes ?? '—'}</span>}
               <p className="text-[9px] text-slate-400 font-semibold mt-1">Lecture & Tutorial Groups</p>
             </div>
           </div>
@@ -420,18 +450,20 @@ export const LecturerDashboard: React.FC = () => {
             </h4>
           </div>
           <div className="grid grid-cols-1 gap-2">
-            <button className="w-full text-left py-2 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-[10.5px] font-semibold text-slate-650 hover:bg-brand-blue-light hover:text-brand-blue hover:border-brand-blue/10 transition-all cursor-pointer">
-              Teacher's Classes
-            </button>
-            <button className="w-full text-left py-2 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-[10.5px] font-semibold text-slate-650 hover:bg-brand-blue-light hover:text-brand-blue hover:border-brand-blue/10 transition-all cursor-pointer">
-              Teacher's Students
-            </button>
-            <button className="w-full text-left py-2 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-[10.5px] font-semibold text-slate-650 hover:bg-brand-blue-light hover:text-brand-blue hover:border-brand-blue/10 transition-all cursor-pointer">
-              Teacher's Lessons
-            </button>
-            <button className="w-full text-left py-2 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-[10.5px] font-semibold text-slate-650 hover:bg-brand-blue-light hover:text-brand-blue hover:border-brand-blue/10 transition-all cursor-pointer">
-              Teacher's Exams
-            </button>
+            {recentShortcuts.length > 0 ? recentShortcuts.map(page => (
+              <button
+                key={page.id}
+                type="button"
+                onClick={() => onNavigate?.(page.id)}
+                className="w-full text-left py-2 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-[10.5px] font-semibold text-slate-650 hover:bg-brand-blue-light hover:text-brand-blue hover:border-brand-blue/10 transition-all cursor-pointer"
+              >
+                {page.label}
+              </button>
+            )) : (
+              <p className="py-6 text-center text-[10.5px] font-medium text-slate-400">
+                Recent pages appear here.
+              </p>
+            )}
           </div>
         </div>
 
@@ -1023,6 +1055,13 @@ export const LecturerDashboard: React.FC = () => {
               Overall Class Performance
             </h4>
             <div className="flex flex-col items-center justify-center p-2 mt-4">
+              {summaryLoading ? (
+                <div className="flex h-[104px] w-36 flex-col items-center justify-center gap-3">
+                  <div className="h-20 w-32 rounded-t-full shimmer-placeholder" />
+                  <div className="h-3 w-28 rounded shimmer-placeholder" />
+                </div>
+              ) : (
+                <>
               <div className="relative w-36 h-20">
                 {/* semicircle: chord 120 => radius 60, arc length = PI * 60 */}
                 <svg className="w-full h-full" viewBox="0 0 140 80">
@@ -1052,6 +1091,8 @@ export const LecturerDashboard: React.FC = () => {
                 </div>
               </div>
               <span className="text-[10px] font-bold text-slate-500 mt-3">1st Semester - 2nd Semester</span>
+                </>
+              )}
             </div>
           </div>
 
@@ -1119,7 +1160,7 @@ export const LecturerDashboard: React.FC = () => {
             <div className="pb-3 border-b border-slate-200 mb-3">
               <h4 className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
                 <Bell className="h-4 w-4 text-brand-blue" />
-                Administrative Notices
+                Latest Notices
               </h4>
             </div>
 
@@ -1145,6 +1186,7 @@ export const LecturerDashboard: React.FC = () => {
 
       </div>
 
+      <Pet />
     </div>
   );
 };

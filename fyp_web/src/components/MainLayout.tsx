@@ -63,15 +63,28 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   // Profile slide-up popover menu & modal states
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileInitialTab, setProfileInitialTab] = useState<'profile' | 'security'>('profile');
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const openProfile = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab?: 'profile' | 'security' }>).detail;
+      setProfileInitialTab(detail?.tab || 'profile');
+      setIsProfileMenuOpen(false);
+      setIsProfileModalOpen(true);
+    };
+    window.addEventListener('open-user-profile', openProfile);
+    return () => window.removeEventListener('open-user-profile', openProfile);
+  }, []);
 
   const handleLogout = () => {
     // Immediately destroy session tokens so refreshing the page (F5 / Ctrl+F5) CANNOT cancel logout
     sessionStorage.removeItem('auth_token');
     sessionStorage.removeItem('auth_user');
     sessionStorage.removeItem('auth_session_expires_at');
+    window.history.replaceState({}, '', window.location.pathname);
     clearApiCache();
     setIsLoggingOut(true);
     setIsProfileMenuOpen(false);
@@ -115,7 +128,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       ? [
           { id: 'student_dashboard', label: t('common.dashboard', 'en'), icon: LayoutDashboard },
           { id: 'student_timetable', label: t('common.timetable', 'en'), icon: Calendar },
-          { id: 'student_mc', label: t('student.mcSubmission', 'en'), icon: FileText },
+          { id: 'student_mc', label: 'Medical Leave', icon: FileText },
           { id: 'student_contact', label: t('student.contactAdmin', 'en'), icon: MessageSquare }
         ]
       : [
@@ -124,6 +137,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           { id: 'attendance', label: t('common.attendance', 'en'), icon: UserCheck },
           { id: 'analytics', label: 'Analytics', icon: BarChart3 },
           { id: 'risk', label: 'At-Risk Students', icon: AlertTriangle },
+          { id: 'course_announcements', label: 'Course Notices', icon: Megaphone },
           { id: 'chatbot', label: 'AI Assistant', icon: MessageSquareCode }
         ];
 
@@ -277,7 +291,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                         }`}
                       >
                         <FileCheck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                        <span className="truncate">MC Reports</span>
+                        <span className="truncate">Medical Leave</span>
                       </button>
                     </div>
                   )}
@@ -328,7 +342,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               <div className="space-y-0.5">
                 <button
                   type="button"
-                  onClick={() => { setIsProfileMenuOpen(false); setIsProfileModalOpen(true); }}
+                  onClick={() => { setIsProfileMenuOpen(false); setProfileInitialTab('profile'); setIsProfileModalOpen(true); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors font-medium cursor-pointer"
                 >
                   <User className="h-4 w-4 text-slate-400" />
@@ -477,7 +491,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         </header>
 
         {/* View Injector */}
-        <main className="flex-grow p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className={currentTab === 'chatbot'
+          ? 'flex min-h-0 w-full flex-1'
+          : 'flex-grow p-6 lg:p-8 max-w-7xl w-full mx-auto'
+        }>
           {children}
         </main>
       </div>
@@ -488,6 +505,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         onClose={() => setIsProfileModalOpen(false)}
         initialEmail={user?.email}
         initialRole={user?.role}
+        initialTab={profileInitialTab}
       />
 
       <UserSettingsModal

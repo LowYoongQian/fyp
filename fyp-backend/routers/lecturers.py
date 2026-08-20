@@ -1,21 +1,36 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 from utils.timeutil import iso_utc, utcnow
-from typing import List
+from typing import List, Optional
+import os
+import uuid
 
 from domain.announcements import announcement_dict, visible_announcements
 from db.database import get_db
-from domain.scheduler import calculate_schedule, lecture_meetings, meeting_key_for, slots_for_assignment
-from db.models import (
-    User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement, ClassMeeting
+from domain.scheduler import (
+    calculate_schedule, lecture_meetings,
+    meeting_key_for, session_end_utc, slots_for_assignment,
 )
+from db.models import (
+    User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement,
+    ClassMeeting, ClassSession, AttendanceRecord, UserNotification
+)
+from integrations.announcement_files import ALLOWED_TYPES, download as download_announcement_file, upload as upload_announcement_file
+from routers.attendance_features import add_notification
 from utils.security import require_lecturer
 from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
 
 router = APIRouter(prefix="/lecturers", tags=["Lecturers"])
+
+
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 class AlertCreate(BaseModel):
     student_id: str
@@ -227,3 +242,298 @@ def get_my_announcements(
             {c.course_code for c in my_courses if c.course_code},
         )
     ]
+
+
+def _owned_announcement(db: Session, announcement_id: str, user_id: str) -> Announcement:
+    row = db.query(Announcement).filter(Announcement.id == announcement_id,
+        Announcement.creator_user_id == user_id).first()
+    if not row:
+        raise HTTPException(404, "Course notice not found")
+    return row
+
+
+def _assigned_course(db: Session, lecturer: Lecturer, course_id: str) -> Course:
+    if course_id not in {str(value) for value in my_course_ids(db, lecturer.id)}:
+        raise HTTPException(403, "You are not assigned to this course")
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Course not found")
+    return course
+
+
+def _notify_course(db: Session, row: Announcement, course: Course) -> int:
+    if row.publish_start and row.publish_start > utcnow():
+        return 0
+    query = db.query(Enrolment, Student).join(Student, Student.id == Enrolment.student_id).filter(Enrolment.course_id == course.id)
+    if row.target_group and row.target_group.lower() != "all":
+        query = query.filter(Enrolment.class_group == row.target_group)
+    recipient_ids = {student.user_id for _enrolment, student in query.all() if student.user_id}
+    for user_id in recipient_ids:
+        add_notification(db, user_id, "course_announcement", row.title,
+            f"{course.course_code}: {row.content[:180]}", f"announcement:{row.id}",
+            {"announcement_id": row.id, "course_id": course.id, "course_code": course.course_code})
+    return len(recipient_ids)
+
+
+@router.get("/me/course-announcements")
+def list_course_announcements(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    return [announcement_dict(row) for row in db.query(Announcement).filter(
+        Announcement.creator_user_id == current_user.id).order_by(Announcement.created_at.desc()).all()]
+
+
+@router.get("/me/course-announcement-options")
+def course_announcement_options(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
+    result = []
+    for course in courses:
+        groups = [value for (value,) in db.query(Enrolment.class_group).filter(
+            Enrolment.course_id == course.id).distinct().order_by(Enrolment.class_group).all() if value]
+        result.append({"id": course.id, "course_code": course.course_code, "course_name": course.course_name, "groups": groups})
+    return result
+
+
+@router.get("/me/enrolments")
+def get_lecturer_enrolments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_lecturer),
+):
+    """Return only enrolments for courses assigned to the current lecturer."""
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    course_ids = my_course_ids(db, lecturer.id)
+    rows = (
+        db.query(Enrolment, Student, Course)
+        .join(Student, Student.id == Enrolment.student_id)
+        .join(Course, Course.id == Enrolment.course_id)
+        .filter(Enrolment.course_id.in_(course_ids))
+        .all()
+    )
+    return [
+        {
+            "id": enrolment.id,
+            "student_id": enrolment.student_id,
+            "student_name": student.name,
+            "student_code": student.student_code,
+            "course_id": enrolment.course_id,
+            "course_code": course.course_code,
+            "course_name": course.course_name,
+            "semester": enrolment.semester,
+            "class_group": enrolment.class_group,
+        }
+        for enrolment, student, course in rows
+    ]
+
+
+@router.get("/me/dashboard-summary")
+def get_lecturer_dashboard_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_lecturer),
+):
+    """Database-backed profile and counters for the authenticated lecturer dashboard."""
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    course_ids = my_course_ids(db, lecturer.id)
+
+    total_enrolled = (
+        db.query(func.count(func.distinct(Enrolment.student_id)))
+        .filter(Enrolment.course_id.in_(course_ids))
+        .scalar()
+        or 0
+    )
+    open_sessions = (
+        db.query(ClassSession)
+        .filter(
+            ClassSession.course_id.in_(course_ids),
+            ClassSession.is_open.is_(True),
+        )
+        .all()
+    )
+    now_utc = utcnow()
+    timetable_slots = list(calculate_schedule(db).values()) if open_sessions else []
+    active_sessions = sum(
+        1
+        for session in open_sessions
+        if now_utc <= session_end_utc(
+            session,
+            [
+                slot for slot in timetable_slots
+                if slot["course_id"] == session.course_id
+                and (
+                    (session.class_group == "All" and slot["role"] == "Lecture")
+                    or (
+                        session.class_group != "All"
+                        and slot["class_group"] == session.class_group
+                    )
+                )
+            ],
+        )
+    )
+
+    assignment_ids = [
+        assignment_id
+        for assignment_id, in db.query(CourseStaffAssignment.id)
+        .filter(CourseStaffAssignment.lecturer_id == lecturer.id)
+        .all()
+    ]
+    primary_course_ids = [
+        course_id
+        for course_id, in db.query(Course.id)
+        .filter(Course.lecturer_id == lecturer.id)
+        .all()
+    ]
+    roster_classes = (
+        db.query(func.count(func.distinct(ClassMeeting.id)))
+        .filter(
+            (ClassMeeting.lecturer_id == lecturer.id)
+            | (ClassMeeting.assignment_id.in_(assignment_ids))
+            | (
+                (ClassMeeting.role == "Lecture")
+                & (ClassMeeting.course_id.in_(primary_course_ids))
+            )
+        )
+        .scalar()
+        or 0
+    )
+
+    attendance_total, attendance_present = (
+        db.query(
+            func.count(AttendanceRecord.id),
+            func.count(AttendanceRecord.id).filter(AttendanceRecord.status == "present"),
+        )
+        .join(ClassSession, ClassSession.id == AttendanceRecord.session_id)
+        .filter(ClassSession.course_id.in_(course_ids))
+        .one()
+    )
+    attendance_rate = round((attendance_present / attendance_total) * 100, 1) if attendance_total else 0.0
+
+    return {
+        "profile": {
+            "name": lecturer.name,
+            "staff_id": lecturer.staff_id,
+            "email": current_user.email,
+            "role": "Lecturer",
+            "avatar_url": current_user.avatar_url,
+            "joined_at": iso_utc(current_user.created_at),
+        },
+        "total_enrolled": int(total_enrolled),
+        "active_sessions": int(active_sessions),
+        "my_courses": len(course_ids),
+        "roster_classes": int(roster_classes),
+        "overall_attendance_rate": attendance_rate,
+    }
+
+
+@router.post("/me/course-announcements", status_code=201)
+def create_course_announcement(
+    course_id: str = Form(...), target_group: str = Form("all"), title: str = Form(...),
+    content: str = Form(...), priority: str = Form("Medium"), publish_start: Optional[datetime] = Form(None),
+    publish_end: Optional[datetime] = Form(None), external_link: Optional[str] = Form(None),
+    attachment: Optional[UploadFile] = File(None), db: Session = Depends(get_db),
+    current_user: User = Depends(require_lecturer),
+):
+    publish_start, publish_end = _naive_utc(publish_start), _naive_utc(publish_end)
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    course = _assigned_course(db, lecturer, course_id)
+    clean_title, clean_content = title.strip(), content.strip()
+    if not clean_title or not clean_content:
+        raise HTTPException(400, "Title and message are required")
+    if publish_start and publish_end and publish_end <= publish_start:
+        raise HTTPException(400, "Expiry must be after publish time")
+    groups = {value for (value,) in db.query(Enrolment.class_group).filter(Enrolment.course_id == course.id).distinct().all() if value}
+    if target_group.lower() != "all" and target_group not in groups:
+        raise HTTPException(400, "Class group not found")
+    row = Announcement(title=clean_title, content=clean_content, faculty="Course", department="Academic",
+        priority=priority if priority in {"High", "Medium", "Low"} else "Medium",
+        publisher=lecturer.name, publish_start=publish_start, publish_end=publish_end,
+        target_scope="course", target_role="students", target_course_code=course.course_code,
+        target_group=target_group, creator_user_id=current_user.id, external_link=(external_link or "").strip() or None)
+    if attachment:
+        mime_type = (attachment.content_type or "").lower()
+        if mime_type not in ALLOWED_TYPES:
+            raise HTTPException(415, "Use PDF, PNG, JPG, DOC, or DOCX")
+        data = attachment.file.read(5 * 1024 * 1024 + 1)
+        if not data or len(data) > 5 * 1024 * 1024:
+            raise HTTPException(413, "File must be under 5 MB")
+        path = f"{current_user.id}/{uuid.uuid4().hex}/{os.path.basename(attachment.filename or 'attachment')}"
+        try:
+            upload_announcement_file(path, data, mime_type)
+        except Exception as exc:
+            raise HTTPException(503, "File upload failed") from exc
+        row.attachment_path, row.attachment_name = path, os.path.basename(attachment.filename or "attachment")
+        row.attachment_mime_type, row.attachment_size = mime_type, len(data)
+    db.add(row)
+    db.flush()
+    recipient_count = _notify_course(db, row, course)
+    db.commit()
+    db.refresh(row)
+    result = announcement_dict(row)
+    result["recipient_count"] = recipient_count
+    return result
+
+
+@router.delete("/me/course-announcements/{announcement_id}")
+def delete_course_announcement(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    row = _owned_announcement(db, announcement_id, current_user.id)
+    db.delete(row)
+    db.commit()
+    return {"message": "Course notice deleted"}
+
+
+@router.put("/me/course-announcements/{announcement_id}")
+def update_course_announcement(
+    announcement_id: str, course_id: str = Form(...), target_group: str = Form("all"),
+    title: str = Form(...), content: str = Form(...), priority: str = Form("Medium"),
+    publish_start: Optional[datetime] = Form(None), publish_end: Optional[datetime] = Form(None),
+    external_link: Optional[str] = Form(None), attachment: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db), current_user: User = Depends(require_lecturer),
+):
+    publish_start, publish_end = _naive_utc(publish_start), _naive_utc(publish_end)
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    course = _assigned_course(db, lecturer, course_id)
+    row = _owned_announcement(db, announcement_id, current_user.id)
+    groups = {value for (value,) in db.query(Enrolment.class_group).filter(Enrolment.course_id == course.id).distinct().all() if value}
+    if target_group.lower() != "all" and target_group not in groups:
+        raise HTTPException(400, "Class group not found")
+    if not title.strip() or not content.strip():
+        raise HTTPException(400, "Title and message are required")
+    if publish_start and publish_end and publish_end <= publish_start:
+        raise HTTPException(400, "Expiry must be after publish time")
+    row.title, row.content = title.strip(), content.strip()
+    row.priority = priority if priority in {"High", "Medium", "Low"} else "Medium"
+    row.publish_start, row.publish_end = publish_start, publish_end
+    row.target_course_code, row.target_group = course.course_code, target_group
+    row.external_link = (external_link or "").strip() or None
+    if attachment:
+        mime_type = (attachment.content_type or "").lower()
+        if mime_type not in ALLOWED_TYPES:
+            raise HTTPException(415, "Use PDF, PNG, JPG, DOC, or DOCX")
+        data = attachment.file.read(5 * 1024 * 1024 + 1)
+        if not data or len(data) > 5 * 1024 * 1024:
+            raise HTTPException(413, "File must be under 5 MB")
+        path = f"{current_user.id}/{uuid.uuid4().hex}/{os.path.basename(attachment.filename or 'attachment')}"
+        try:
+            upload_announcement_file(path, data, mime_type)
+        except Exception as exc:
+            raise HTTPException(503, "File upload failed") from exc
+        row.attachment_path, row.attachment_name = path, os.path.basename(attachment.filename or "attachment")
+        row.attachment_mime_type, row.attachment_size = mime_type, len(data)
+    db.query(UserNotification).filter(UserNotification.dedupe_key == f"announcement:{row.id}").delete(synchronize_session=False)
+    recipient_count = _notify_course(db, row, course)
+    db.commit()
+    db.refresh(row)
+    result = announcement_dict(row)
+    result["recipient_count"] = recipient_count
+    return result
+
+
+@router.get("/me/course-announcements/{announcement_id}/attachment")
+def lecturer_announcement_attachment(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    row = _owned_announcement(db, announcement_id, current_user.id)
+    if not row.attachment_path:
+        raise HTTPException(404, "Attachment not found")
+    try:
+        data = download_announcement_file(row.attachment_path)
+    except Exception as exc:
+        raise HTTPException(503, "Download failed") from exc
+    return Response(data, media_type=row.attachment_mime_type or "application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{row.attachment_name or "attachment"}"'
+    })

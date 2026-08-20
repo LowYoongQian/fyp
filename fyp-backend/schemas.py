@@ -183,6 +183,8 @@ class AnnouncementCreate(BaseModel):
     target_role: Optional[str] = "all"         # 'all' | 'students' | 'staff'
     target_programme_code: Optional[str] = None
     target_course_code: Optional[str] = None
+    target_group: Optional[str] = None
+    external_link: Optional[str] = None
 
 class AnnouncementResponse(BaseModel):
     id: Any
@@ -201,6 +203,12 @@ class AnnouncementResponse(BaseModel):
     target_role: Optional[str] = "all"
     target_programme_code: Optional[str] = None
     target_course_code: Optional[str] = None
+    creator_user_id: Optional[Any] = None
+    target_group: Optional[str] = None
+    attachment_name: Optional[str] = None
+    attachment_mime_type: Optional[str] = None
+    attachment_size: Optional[int] = None
+    external_link: Optional[str] = None
 
     class Config:
         from_attributes = True

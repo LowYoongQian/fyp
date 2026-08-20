@@ -22,7 +22,8 @@ _PRIORITY_WEIGHT = {"High": 3, "Medium": 2, "Low": 1}
 _DEFAULT_PRIORITY_WEIGHT = 2
 
 
-def visible_announcements(db: Session, role: str, prog_codes, course_codes) -> list:
+def visible_announcements(db: Session, role: str, prog_codes, course_codes,
+                          course_groups: dict[str, set[str]] | None = None) -> list:
     """Published, in-window announcements addressed to this viewer, best first.
 
     role: "students" or "staff" — the audience the caller belongs to. An announcement
@@ -54,7 +55,14 @@ def visible_announcements(db: Session, role: str, prog_codes, course_codes) -> l
         if scope == "programme":
             return bool(a.target_programme_code) and a.target_programme_code.upper() in progs
         if scope == "course":
-            return bool(a.target_course_code) and a.target_course_code.upper() in courses
+            code = (a.target_course_code or "").upper()
+            if not code or code not in courses:
+                return False
+            group = (getattr(a, "target_group", None) or "all").upper()
+            if role == "students" and group != "ALL":
+                groups = (course_groups or {}).get(code, set())
+                return group in {str(value).upper() for value in groups}
+            return True
         return False
 
     return sorted(
@@ -84,4 +92,10 @@ def announcement_dict(a) -> dict:
         "target_role": a.target_role,
         "target_programme_code": a.target_programme_code,
         "target_course_code": a.target_course_code,
+        "target_group": getattr(a, "target_group", None),
+        "attachment_name": getattr(a, "attachment_name", None),
+        "attachment_mime_type": getattr(a, "attachment_mime_type", None),
+        "attachment_size": getattr(a, "attachment_size", None),
+        "external_link": getattr(a, "external_link", None),
+        "creator_user_id": getattr(a, "creator_user_id", None),
     }

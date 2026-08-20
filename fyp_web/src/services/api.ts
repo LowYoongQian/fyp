@@ -28,7 +28,7 @@ const apiCache = new Map<string, ApiCacheEntry>();
 const pendingGets = new Map<string, Promise<any>>();
 const CACHE_TTL = 60000;
 const CACHE_PREFIX = 'sas_api_cache:';
-const NO_CLIENT_CACHE = ['/sessions', '/students/me/active-sessions', '/students/me/attendance', '/admin/sessions'];
+const NO_CLIENT_CACHE = ['/sessions', '/students/me/active-sessions', '/students/me/attendance', '/students/me/attendance-sessions', '/lecturers/me/dashboard-summary', '/admin/sessions'];
 
 const cacheScope = () => {
   try {
@@ -211,6 +211,22 @@ export interface ActiveSession {
   class_group: string;
 }
 
+export interface LecturerDashboardSummary {
+  profile: {
+    name: string;
+    staff_id: string;
+    email: string;
+    role: 'Lecturer';
+    avatar_url?: string | null;
+    joined_at?: string | null;
+  };
+  total_enrolled: number;
+  active_sessions: number;
+  my_courses: number;
+  roster_classes: number;
+  overall_attendance_rate: number;
+}
+
 export interface StudentAttendance {
   student_id: number | string;
   student_name: string;
@@ -250,6 +266,20 @@ export interface Announcement {
   target_programme_code?: string | null;
   target_course_code?: string | null;
   target_audience?: string | null;
+  creator_user_id?: string | null;
+  target_group?: string | null;
+  attachment_name?: string | null;
+  attachment_mime_type?: string | null;
+  attachment_size?: number | null;
+  external_link?: string | null;
+  recipient_count?: number;
+}
+
+export interface CourseAnnouncementOption {
+  id: string;
+  course_code: string;
+  course_name: string;
+  groups: string[];
 }
 
 export interface AdminStudent {
@@ -355,6 +385,47 @@ export interface StudentAttendanceRecord {
   network_verified: boolean | null;
 }
 
+export interface MedicalLeaveRecord {
+  id: string;
+  course_id: string;
+  course_code: string;
+  course_name: string;
+  class_group: string;
+  start_date: string;
+  end_date: string;
+  reason: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  remarks?: string | null;
+  submitted_at: string;
+  ai_verdict?: 'valid' | 'needs_review';
+  ai_confidence?: number;
+  ai_summary?: string;
+}
+
+export interface StudentAttendanceSession {
+  session_id: number | string;
+  course_id: number | string;
+  course_code: string;
+  course_name: string;
+  class_group: string;
+  class_type: string;
+  room: string | null;
+  staff_name: string;
+  staff_role: string;
+  status: 'present' | 'absent' | 'leave' | string;
+  taken_by: string;
+  taken_at: string | null;
+  network_ip: string | null;
+  device_ip: string | null;
+  device_id: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  week_number: number;
+}
+
 export interface StudentActiveSession {
   id: number | string;
   course_id: number | string;
@@ -434,6 +505,14 @@ export const apiService = {
 
   getLecturerTimetable: async (): Promise<Course[]> => {
     return cachedGet('/lecturers/me/timetable');
+  },
+
+  getLecturerEnrolments: async (): Promise<Enrolment[]> => {
+    return cachedGet('/lecturers/me/enrolments');
+  },
+
+  getLecturerDashboardSummary: async (): Promise<LecturerDashboardSummary> => {
+    return cachedGet('/lecturers/me/dashboard-summary');
   },
 
   getStudents: async (): Promise<Student[]> => {
@@ -646,11 +725,31 @@ export const apiService = {
   studentGetEnrolments: async (): Promise<StudentEnrolmentDetail[]> => {
     return cachedGet('/students/me/enrolments');
   },
+  studentGetMedicalLeave: async (): Promise<MedicalLeaveRecord[]> => {
+    const response = await api.get('/students/me/medical-leave');
+    return response.data;
+  },
+  studentSubmitMedicalLeave: async (data: FormData, onProgress?: (percent: number) => void): Promise<MedicalLeaveRecord> => {
+    const response = await api.post('/students/me/medical-leave', data, {
+      onUploadProgress: event => {
+        const ratio = event.progress ?? (event.total ? event.loaded / event.total : null);
+        onProgress?.(ratio === null ? 70 : Math.min(80, Math.max(5, Math.round(ratio * 80))));
+      },
+    });
+    return response.data;
+  },
+  studentDownloadMedicalProof: async (requestId: string): Promise<Blob> => {
+    const response = await api.get(`/students/me/medical-leave/${encodeURIComponent(requestId)}/proof`, { responseType: 'blob' });
+    return response.data;
+  },
   studentGetCourses: async (): Promise<Course[]> => {
     return cachedGet('/students/me/courses');
   },
   studentGetAttendance: async (): Promise<StudentAttendanceRecord[]> => {
     return cachedGet('/students/me/attendance');
+  },
+  studentGetAttendanceSessions: async (): Promise<StudentAttendanceSession[]> => {
+    return cachedGet('/students/me/attendance-sessions');
   },
   studentGetActiveSessions: async (): Promise<StudentActiveSession[]> => {
     return cachedGet('/students/me/active-sessions');
@@ -658,8 +757,42 @@ export const apiService = {
   studentGetAnnouncements: async (): Promise<Announcement[]> => {
     return cachedGet('/students/me/announcements');
   },
+  studentDownloadAnnouncementAttachment: async (announcementId: string | number): Promise<Blob> => {
+    const response = await api.get(`/students/me/announcements/${announcementId}/attachment`, { responseType: 'blob' });
+    return response.data;
+  },
   lecturerGetAnnouncements: async (): Promise<Announcement[]> => {
     return cachedGet('/lecturers/me/announcements');
+  },
+  lecturerGetCourseAnnouncements: async (): Promise<Announcement[]> => {
+    const response = await api.get('/lecturers/me/course-announcements');
+    return response.data;
+  },
+  lecturerGetCourseAnnouncementOptions: async (): Promise<CourseAnnouncementOption[]> => {
+    return cachedGet('/lecturers/me/course-announcement-options');
+  },
+  lecturerCreateCourseAnnouncement: async (data: FormData, onProgress?: (percent: number) => void): Promise<Announcement> => {
+    const response = await api.post('/lecturers/me/course-announcements', data, {
+      onUploadProgress: event => {
+        if (event.total) onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      },
+    });
+    clearApiCache();
+    return response.data;
+  },
+  lecturerUpdateCourseAnnouncement: async (id: string | number, data: FormData, onProgress?: (percent: number) => void): Promise<Announcement> => {
+    const response = await api.put(`/lecturers/me/course-announcements/${id}`, data, {
+      onUploadProgress: event => {
+        if (event.total) onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      },
+    });
+    clearApiCache();
+    return response.data;
+  },
+  lecturerDeleteCourseAnnouncement: async (id: string | number) => {
+    const response = await api.delete(`/lecturers/me/course-announcements/${id}`);
+    clearApiCache();
+    return response.data;
   },
 
   // ─── User Profile & Account Settings APIs ──────────────────────────

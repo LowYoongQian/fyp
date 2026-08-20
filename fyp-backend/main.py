@@ -16,7 +16,7 @@ from domain.audit import reset_audit_client_ip, set_audit_client_ip
 from domain.security_settings import is_enabled
 from db.database import SessionLocal, engine
 from integrations.network_verify import get_client_ip, get_server_local_ip
-from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit, attendance_features
+from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit, attendance_features, medical_leave
 
 # Schema is owned by Alembic (`alembic upgrade head`, which the Procfile/Dockerfile run
 # before uvicorn starts). Data seeds live in seed.py. Nothing here touches the database
@@ -39,6 +39,7 @@ NO_STORE_PREFIXES = (
     "/admin/sessions",
     "/students/me/attendance-overview",
     "/students/me/attendance-requests",
+    "/students/me/medical-leave",
     "/lecturers/me/attendance-requests",
     "/notifications",
 )
@@ -270,6 +271,7 @@ app.include_router(lecturers.router)
 app.include_router(admin_reports.router)
 app.include_router(admin_audit.router)
 app.include_router(attendance_features.router)
+app.include_router(medical_leave.router)
 
 # Public announcements endpoint for home screen
 @app.get("/public/logo")

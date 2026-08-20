@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -212,15 +213,22 @@ def request_recovery_email(body: RecoveryEmailRequest, user: User = Depends(get_
         raise HTTPException(status_code=403, detail="Student account required")
     if not address.endswith("@gmail.com"):
         raise HTTPException(status_code=400, detail="Enter a Gmail address")
-    existing = db.query(User).filter(User.recovery_email == address, User.id != user.id).first()
+    existing = db.query(User).filter(
+        func.lower(User.recovery_email) == address,
+        User.id != user.id,
+    ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="This Gmail is already linked to another account")
+        raise HTTPException(status_code=409, detail="Gmail already in use")
     code = f"{secrets.randbelow(1000000):06d}"
     user.recovery_email = address
     user.recovery_email_verified = False
     user.recovery_code_hash = _token_hash(code)
     user.recovery_code_expires_at = utcnow() + timedelta(minutes=10)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Gmail already in use")
     _send_email(address, "Verify your recovery email", f"<p>Your verification code is:</p><h1>{code}</h1><p>This code expires in 10 minutes.</p>", f"recovery-{user.id}-{code}")
     return {"message": "Code sent"}
 

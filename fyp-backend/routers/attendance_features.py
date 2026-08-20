@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models import (
-    AttendanceRecord, AttendanceRequest, ClassMeeting, ClassSession, Course,
+    Announcement, AttendanceRecord, AttendanceRequest, ClassMeeting, ClassSession, Course,
     CourseStaffAssignment, Enrolment, Lecturer, Student, User, UserNotification,
 )
 from domain.attendance import session_hours
+from domain.announcements import visible_announcements
 from utils.db_helpers import my_course_ids, require_own_profile
 from utils.security import get_current_user, require_lecturer, require_student
 from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
@@ -44,6 +45,23 @@ def add_notification(db: Session, user_id: str, kind: str, title: str, body: str
         dedupe_key=dedupe_key,
         payload=json.dumps(payload or {}, separators=(",", ":")),
     ))
+
+
+def ensure_course_announcement_notifications(db: Session, user: User, student: Student) -> None:
+    enrolments = db.query(Course.course_code, Enrolment.class_group).join(
+        Enrolment, Enrolment.course_id == Course.id).filter(Enrolment.student_id == student.id).all()
+    courses = {code for code, _group in enrolments if code}
+    groups: dict[str, set[str]] = {}
+    for code, group in enrolments:
+        if code and group:
+            groups.setdefault(code.upper(), set()).add(group)
+    programmes = {student.programme.code} if getattr(student, "programme", None) else set()
+    for row in visible_announcements(db, "students", programmes, courses, groups):
+        if not row.creator_user_id:
+            continue
+        add_notification(db, user.id, "course_announcement", row.title,
+            f"{row.target_course_code}: {row.content[:180]}", f"announcement:{row.id}",
+            {"announcement_id": row.id, "course_code": row.target_course_code})
 
 
 def notify_timetable_change(db: Session, meeting: ClassMeeting, old_slot: str) -> None:
@@ -89,6 +107,13 @@ def _request_dict(row: AttendanceRequest, course: Course, student: Student | Non
         "reviewer_note": row.reviewer_note,
         "created_at": iso_utc(row.created_at),
         "reviewed_at": iso_utc(row.reviewed_at),
+        "start_date": row.start_date.isoformat() if row.start_date else None,
+        "end_date": row.end_date.isoformat() if row.end_date else None,
+        "proof_file_name": row.proof_file_name,
+        "has_proof": bool(row.proof_path),
+        "ai_verdict": row.ai_verdict,
+        "ai_confidence": row.ai_confidence,
+        "ai_summary": row.ai_summary,
     }
 
 
@@ -269,6 +294,32 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
     meetings = db.query(ClassMeeting).filter(
         ClassMeeting.course_id.in_(list(groups))
     ).all()
+    lecturer_ids = {meeting.lecturer_id for meeting in meetings if meeting.lecturer_id}
+    lecturer_by_id = {
+        row.id: row for row in db.query(Lecturer).filter(Lecturer.id.in_(lecturer_ids)).all()
+    } if lecturer_ids else {}
+    approved_requests = {
+        row.session_id: row for row in db.query(AttendanceRequest).filter(
+            AttendanceRequest.student_id == student.id,
+            AttendanceRequest.session_id.in_(session_ids),
+            AttendanceRequest.status == "approved",
+        ).order_by(AttendanceRequest.reviewed_at.asc()).all()
+    } if session_ids else {}
+    actor_ids = {
+        request.reviewer_user_id for request in approved_requests.values()
+        if request.reviewer_user_id
+    }
+    for record in records.values():
+        method = record.method or ""
+        if ":" in method and method.split(":", 1)[0] in ("admin_override", "staff_override"):
+            actor_ids.add(method.split(":", 1)[1])
+    actor_by_id = {
+        row.id: row for row in db.query(User).filter(User.id.in_(actor_ids)).all()
+    } if actor_ids else {}
+
+    def actor_name(user_id: str | None, fallback: str) -> str:
+        user = actor_by_id.get(user_id) if user_id else None
+        return (user.profile_name or user.email) if user else fallback
 
     def matching_meeting(session: ClassSession) -> ClassMeeting | None:
         local_start = session.opened_at + local_offset()
@@ -289,9 +340,25 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
 
     def session_dict(session: ClassSession, course: Course) -> dict:
         meeting = matching_meeting(session)
+        record = records.get(session.id)
+        request = approved_requests.get(session.id)
         class_type = meeting.role if meeting else (
             "Lecture" if session.class_group == "All" else "Class"
         )
+        lecturer = lecturer_by_id.get(meeting.lecturer_id) if meeting else course.lecturer
+        method = record.method if record else ""
+        if method and ":" in method and method.split(":", 1)[0] in ("admin_override", "staff_override"):
+            taken_by = actor_name(method.split(":", 1)[1], "Staff")
+        elif request and request.reviewer_user_id:
+            taken_by = actor_name(request.reviewer_user_id, "Staff")
+        elif record and record.source_ip == "Staff Override":
+            taken_by = "Staff"
+        elif record and record.status == "absent":
+            taken_by = "System"
+        elif record:
+            taken_by = "Student (You)"
+        else:
+            taken_by = "System"
         return {
             "session_id": session.id, "course_id": course.id,
             "course_code": course.course_code, "course_name": course.course_name,
@@ -299,7 +366,14 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
             "enrolled_group": groups[session.course_id],
             "class_type": class_type,
             "room": meeting.room if meeting else None,
-            "status": records[session.id].status if session.id in records else "absent",
+            "staff_name": lecturer.name if lecturer else "Not assigned",
+            "staff_role": class_type,
+            "status": record.status if record else "absent",
+            "taken_by": taken_by,
+            "taken_at": iso_utc(request.reviewed_at) if request and request.reviewed_at else iso_utc(record.marked_at) if record else None,
+            "network_ip": record.source_ip if record else None,
+            "device_ip": record.local_ip if record else None,
+            "device_id": record.device_id if record else None,
             "opened_at": iso_utc(session.opened_at),
             "closed_at": iso_utc(session.closed_at),
             "week_number": ((session.opened_at.date() - semester_start).days // 7) + 1 if semester_start else 1,
@@ -411,6 +485,7 @@ def notifications(db: Session = Depends(get_db), current_user: User = Depends(ge
     if current_user.role == "student":
         student = require_own_profile(db, Student, current_user.id, "Student")
         _ensure_reminder(db, current_user, student)
+        ensure_course_announcement_notifications(db, current_user, student)
         db.commit()
     elif current_user.role in ("lecturer", "admin"):
         lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()

@@ -16,9 +16,65 @@ import {
   Hash,
   Loader2,
   AlertCircle,
-  ChevronDown
+  ChevronDown,
+  Check,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
+
+const staffRoles = ['Lecturer', 'Tutor', 'Practical'];
+
+const StaffRoleDropdown: React.FC<{
+  value: string;
+  onChange: (role: string) => void;
+}> = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className={`relative ${open ? 'z-40' : ''}`}>
+      <button
+        key={`staff-role-trigger-${value}`}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+        className={`uipro-input flex w-full items-center gap-3 bg-white !pl-3.5 pr-3.5 text-left font-semibold text-slate-700 cursor-pointer transition-all ${open ? 'border-brand-blue ring-2 ring-brand-blue/10' : ''}`}
+      >
+        <Briefcase className="h-4 w-4 shrink-0 text-slate-400" />
+        <span key={`staff-role-label-${value}`} className="min-w-0 flex-1 truncate">{value}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${open ? 'rotate-180 text-brand-blue' : ''}`} />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div role="listbox" className="absolute left-0 right-0 top-full z-40 mt-1.5 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-150">
+            {staffRoles.map(option => {
+              const selected = option === value;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => {
+                    onChange(option);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-xs font-semibold transition-colors cursor-pointer ${selected ? 'bg-blue-50 text-brand-blue' : 'text-slate-700 hover:bg-slate-50'}`}
+                >
+                  <span>{option}</span>
+                  {selected && <Check className="h-4 w-4" />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 export const StaffManager: React.FC = () => {
   const [staffList, setStaffList] = useState<AdminStaff[]>([]);
@@ -44,6 +100,7 @@ export const StaffManager: React.FC = () => {
   const [role, setRole] = useState('Lecturer');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     fetchStaff();
@@ -78,6 +135,7 @@ export const StaffManager: React.FC = () => {
     setPassword('');
     setStaffId('');
     setRole('Lecturer');
+    setShowPassword(false);
     setFormError(null);
     setIsCreateOpen(true);
   };
@@ -87,6 +145,7 @@ export const StaffManager: React.FC = () => {
     setName(staff.name);
     setEmail(staff.email);
     setPassword(''); // leave blank for no change
+    setShowPassword(false);
     setStaffId(staff.staff_id);
     setRole(staff.role || 'Lecturer');
     setFormError(null);
@@ -359,19 +418,7 @@ export const StaffManager: React.FC = () => {
 
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Staff Role</label>
-                <div className="relative">
-                  <Briefcase className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                    className="w-full uipro-input !pl-10 pr-10 appearance-none bg-white cursor-pointer font-semibold text-slate-700"
-                  >
-                    <option value="Lecturer">Lecturer</option>
-                    <option value="Tutor">Tutor</option>
-                    <option value="Practical">Practical</option>
-                  </select>
-                  <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                </div>
+                <StaffRoleDropdown value={role} onChange={setRole} />
               </div>
 
               <div className="space-y-1">
@@ -379,13 +426,22 @@ export const StaffManager: React.FC = () => {
                 <div className="relative">
                   <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full uipro-input !pl-10"
+                    className="w-full uipro-input !pl-10 !pr-11"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(current => !current)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand-blue cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
 
@@ -487,19 +543,7 @@ export const StaffManager: React.FC = () => {
 
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Staff Role</label>
-                <div className="relative">
-                  <Briefcase className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                    className="w-full uipro-input !pl-10 pr-10 appearance-none bg-white cursor-pointer font-semibold text-slate-700"
-                  >
-                    <option value="Lecturer">Lecturer</option>
-                    <option value="Tutor">Tutor</option>
-                    <option value="Practical">Practical</option>
-                  </select>
-                  <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                </div>
+                <StaffRoleDropdown value={role} onChange={setRole} />
               </div>
 
               <div className="space-y-1">
@@ -507,12 +551,21 @@ export const StaffManager: React.FC = () => {
                 <div className="relative">
                   <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full uipro-input !pl-10"
+                    className="w-full uipro-input !pl-10 !pr-11"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(current => !current)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand-blue cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
 

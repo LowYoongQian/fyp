@@ -15,6 +15,7 @@ interface UserProfileModalProps {
   onClose: () => void;
   initialRole?: string;
   initialEmail?: string;
+  initialTab?: 'profile' | 'security';
 }
 
 const FileFormatIcon: React.FC<{ extension: string }> = ({ extension }) => {
@@ -42,11 +43,17 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   isOpen,
   onClose,
   initialRole,
-  initialEmail
+  initialEmail,
+  initialTab = 'profile',
 }) => {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'profile' | 'security'>('profile');
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoveryStep, setRecoveryStep] = useState<'email' | 'code'>('email');
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
   // Change Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -153,9 +160,10 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      setActiveTab(initialTab);
       loadProfile();
     }
-  }, [isOpen]);
+  }, [isOpen, initialTab]);
 
   const loadProfile = async () => {
     setLoading(true);
@@ -163,6 +171,10 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       clearApiCache();
       const res = await apiService.getUserProfile();
       setProfile(res);
+      setRecoveryEmail(res.recovery_email || '');
+      setRecoveryStep('email');
+      setRecoveryCode('');
+      setRecoveryError(null);
       setAvatarUrl(res.avatar_url || '');
       setIdentityForm({ name: res.name || '', email: res.email || '', code: res.code || '' });
     } catch {
@@ -177,6 +189,48 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       setIdentityForm({ name: 'User', email: initialEmail || 'user@school.edu', code: 'N/A' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const requestRecoveryCode = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setRecoveryError(null);
+    if (!/^[^\s@]+@gmail\.com$/i.test(recoveryEmail.trim())) {
+      setRecoveryError('Enter your personal Gmail.');
+      return;
+    }
+    setRecoveryLoading(true);
+    try {
+      await apiService.requestRecoveryEmail(recoveryEmail.trim());
+      setRecoveryStep('code');
+    } catch (err: any) {
+      setRecoveryError(err.response?.data?.detail || 'Could not send code.');
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  const confirmRecoveryCode = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setRecoveryError(null);
+    if (!/^\d{6}$/.test(recoveryCode.trim())) {
+      setRecoveryError('Enter the 6-digit code.');
+      return;
+    }
+    setRecoveryLoading(true);
+    try {
+      await apiService.verifyRecoveryEmail(recoveryCode.trim());
+      setProfile((current: any) => ({
+        ...current,
+        recovery_email: recoveryEmail.trim(),
+        recovery_email_verified: true,
+      }));
+      window.dispatchEvent(new CustomEvent('recovery-email-verified'));
+      await swalSuccess('Email verified', 'Recovery email is ready.');
+    } catch (err: any) {
+      setRecoveryError(err.response?.data?.detail || 'Invalid code.');
+    } finally {
+      setRecoveryLoading(false);
     }
   };
 
@@ -603,6 +657,87 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           ) : (
             <div className="space-y-5 font-sans text-xs">
+              <section
+                id="recovery-email-setup"
+                style={{
+                  backgroundColor: THEME_TOKENS.surface,
+                  borderColor: profile?.recovery_email_verified
+                    ? 'rgba(16, 185, 129, 0.4)'
+                    : THEME_TOKENS.border,
+                }}
+                className="scroll-mt-4 rounded-2xl border p-5 shadow-sm"
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${profile?.recovery_email_verified ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-brand-blue'}`}>
+                    {profile?.recovery_email_verified ? <ShieldCheck className="h-5 w-5" /> : <Mail className="h-5 w-5" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 style={{ color: THEME_TOKENS.textPrimary }} className="font-bold">Recovery Email</h4>
+                      <span className={`rounded-full px-2.5 py-1 text-[9px] font-extrabold uppercase ${profile?.recovery_email_verified ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {profile?.recovery_email_verified ? 'Completed' : 'Required'}
+                      </span>
+                    </div>
+                    <p style={{ color: THEME_TOKENS.textSecondary }} className="mt-1 leading-relaxed">
+                      Use your personal Gmail to reset your password.
+                    </p>
+                  </div>
+                </div>
+
+                {profile?.recovery_email_verified ? (
+                  <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-700">
+                    <CheckCircle className="h-4 w-4 shrink-0" />
+                    <span className="truncate font-bold">{profile.recovery_email}</span>
+                  </div>
+                ) : (
+                  <form onSubmit={recoveryStep === 'email' ? requestRecoveryCode : confirmRecoveryCode} className="mt-4 space-y-3">
+                    <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
+                      <span className="rounded-full bg-brand-blue px-2 py-1 text-white">1</span>
+                      <span>Add Gmail</span>
+                      <span className="h-px flex-1 bg-slate-200" />
+                      <span className={`rounded-full px-2 py-1 ${recoveryStep === 'code' ? 'bg-brand-blue text-white' : 'bg-slate-200 text-slate-500'}`}>2</span>
+                      <span>Verify</span>
+                    </div>
+                    {recoveryStep === 'email' ? (
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Personal Gmail</label>
+                        <input
+                          type="email"
+                          value={recoveryEmail}
+                          onChange={event => setRecoveryEmail(event.target.value)}
+                          placeholder="yourname@gmail.com"
+                          autoComplete="email"
+                          className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Email Code</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          value={recoveryCode}
+                          onChange={event => setRecoveryCode(event.target.value.replace(/\D/g, ''))}
+                          placeholder="6-digit code"
+                          className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-center font-mono text-base font-bold tracking-[0.35em] text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                        />
+                        <button type="button" onClick={() => setRecoveryStep('email')} className="mt-2 text-[10px] font-bold text-brand-blue">Change Gmail</button>
+                      </div>
+                    )}
+                    {recoveryError && <p className="text-[10px] font-bold text-red-500">{recoveryError}</p>}
+                    <button
+                      type="submit"
+                      disabled={recoveryLoading}
+                      className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-blue text-xs font-bold text-white shadow-sm disabled:opacity-50"
+                    >
+                      {recoveryLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {recoveryStep === 'email' ? 'Send Code' : 'Verify Email'}
+                    </button>
+                  </form>
+                )}
+              </section>
+
               {/* Actionable Item 1: Security Change Password Form with Blue Accent Left Border */}
               <form
                 onSubmit={handleChangePassword}
