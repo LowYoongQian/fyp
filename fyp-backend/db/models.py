@@ -147,12 +147,32 @@ class Enrolment(Base):
 # Active or past class session
 class ClassSession(Base):
     __tablename__ = "class_sessions"
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "scheduled_start", name="uq_class_session_meeting_start"),
+        CheckConstraint(
+            "status IN ('scheduled', 'open', 'completed', 'cancelled', 'needs_attention')",
+            name="ck_class_sessions_status",
+        ),
+    )
     id          = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     course_id   = Column(UUID(as_uuid=False), ForeignKey("courses.id"), index=True)
-    opened_at   = Column(DateTime, server_default=func.now())
+    meeting_id  = Column(UUID(as_uuid=False), ForeignKey("class_meetings.id", ondelete="SET NULL"), nullable=True, index=True)
+    scheduled_start = Column(DateTime, nullable=True, index=True)
+    scheduled_end   = Column(DateTime, nullable=True)
+    status      = Column(String, nullable=False, default="open", index=True)
+    room        = Column(String, nullable=True)
+    semester    = Column(String, nullable=True, index=True)
+    opened_at   = Column(DateTime, nullable=True)
     closed_at   = Column(DateTime, nullable=True)
     is_open     = Column(Boolean, default=True)
     class_group = Column(String, default="All")
+    opened_by_user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    cancelled_by_user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    replacement_for_session_id = Column(
+        UUID(as_uuid=False), ForeignKey("class_sessions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     
     course      = relationship("Course", back_populates="sessions")
     records     = relationship("AttendanceRecord", back_populates="session")

@@ -82,15 +82,17 @@ def get_my_enrolments(
     # the risk model uses (domain/attendance.py), so the student's number always matches
     # the lecturer's dashboard. Both lookups are built once, not once per enrolment.
     sessions_by_course = {}
-    for sid, cid, group, opened, closed_at in db.query(
+    for sid, cid, group, opened, closed_at, scheduled_start, scheduled_end in db.query(
         ClassSession.id, ClassSession.course_id, ClassSession.class_group,
-        ClassSession.opened_at, ClassSession.closed_at
+        ClassSession.opened_at, ClassSession.closed_at,
+        ClassSession.scheduled_start, ClassSession.scheduled_end,
     ).filter(
         ClassSession.course_id.in_(course_ids),
-        ClassSession.is_open == False,  # noqa: E712
-    ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all():
+        ClassSession.status == "completed",
+    ).order_by(ClassSession.scheduled_start.asc().nullslast(), ClassSession.id.asc()).all():
         sessions_by_course.setdefault(cid, []).append(
-            (sid, group, session_hours(opened, closed_at)))
+            (sid, group, session_hours(opened, closed_at,
+                                       scheduled_start=scheduled_start, scheduled_end=scheduled_end)))
 
     attended = {
         (student.id, sid) for (sid,) in db.query(AttendanceRecord.session_id).filter(

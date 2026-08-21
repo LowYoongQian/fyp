@@ -197,7 +197,7 @@ def student_attendance_overview(db: Session = Depends(get_db), current_user: Use
     ).all()
     course_ids = [course.id for _, course in enrolments]
     sessions = db.query(ClassSession).filter(
-        ClassSession.course_id.in_(course_ids), ClassSession.is_open == False  # noqa: E712
+        ClassSession.course_id.in_(course_ids), ClassSession.status == "completed"
     ).all() if course_ids else []
     records = db.query(AttendanceRecord).filter(
         AttendanceRecord.student_id == student.id,
@@ -208,9 +208,11 @@ def student_attendance_overview(db: Session = Depends(get_db), current_user: Use
     targets = []
     for enrolment, course in enrolments:
         held = [s for s in sessions if s.course_id == course.id and s.class_group in ("All", enrolment.class_group)]
-        total = sum(session_hours(s.opened_at, s.closed_at) for s in held)
+        total = sum(session_hours(s.opened_at, s.closed_at,
+                                  scheduled_start=s.scheduled_start, scheduled_end=s.scheduled_end) for s in held)
         earned = sum(
-            session_hours(s.opened_at, s.closed_at) for s in held
+            session_hours(s.opened_at, s.closed_at,
+                          scheduled_start=s.scheduled_start, scheduled_end=s.scheduled_end) for s in held
             if record_by_session.get(s.id) and record_by_session[s.id].status in ("present", "leave")
         )
         rate = round((earned / total * 100) if total else 100.0, 1)
@@ -274,15 +276,15 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
     if not groups:
         return []
     sessions = db.query(ClassSession, Course).join(Course, Course.id == ClassSession.course_id).filter(
-        ClassSession.course_id.in_(list(groups)), ClassSession.is_open == False  # noqa: E712
-    ).order_by(ClassSession.opened_at.asc()).all()
+        ClassSession.course_id.in_(list(groups)), ClassSession.status == "completed"
+    ).order_by(ClassSession.scheduled_start.asc().nullslast()).all()
     assigned_sessions = [
         (session, course) for session, course in sessions
         if session.class_group in ("All", groups[session.course_id])
     ]
     semester_start = None
     if assigned_sessions:
-        first_opened = assigned_sessions[0][0].opened_at
+        first_opened = assigned_sessions[0][0].scheduled_start or assigned_sessions[0][0].opened_at
         semester_start = first_opened.date() - timedelta(days=first_opened.weekday())
     session_ids = [session.id for session, _ in assigned_sessions]
     records = {

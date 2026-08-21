@@ -49,12 +49,37 @@ def require_session_enrolment(db, session, student_id, status_code: int = 400):
     return enrolment
 
 
-def session_hours(opened_at, closed_at) -> float:
+def class_counts_toward_attendance(session) -> bool:
+    """Only a class that was actually held belongs in the denominator."""
+    return getattr(session, "status", "completed") == "completed"
+
+
+def session_hours(opened_at, closed_at, *, scheduled_start=None, scheduled_end=None) -> float:
     """Contact hours for one closed session, clamped to a sane range.
     Falls back to 2.0h when either timestamp is missing."""
-    if opened_at and closed_at:
-        return max(0.5, min(6.0, (closed_at - opened_at).total_seconds() / 3600.0))
+    start = scheduled_start or opened_at
+    end = scheduled_end or closed_at
+    if start and end:
+        return max(0.5, min(6.0, (end - start).total_seconds() / 3600.0))
     return 2.0
+
+
+def effective_planned_hours(planned_hours, classes):
+    """Remove cancelled contact hours; add them back only via a held replacement."""
+    if planned_hours is None:
+        return None
+    total = float(planned_hours)
+    for item in classes:
+        hours = session_hours(
+            None, None,
+            scheduled_start=getattr(item, "scheduled_start", None),
+            scheduled_end=getattr(item, "scheduled_end", None),
+        )
+        if item.status == "cancelled" and not item.replacement_for_session_id:
+            total -= hours
+        elif item.status == "completed" and item.replacement_for_session_id:
+            total += hours
+    return max(0.0, total)
 
 
 def build_attendance_sequence(course_sessions, present_set, student_id, class_group):

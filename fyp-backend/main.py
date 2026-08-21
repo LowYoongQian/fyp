@@ -14,6 +14,7 @@ from collections import OrderedDict
 from domain.announcements import announcement_dict
 from domain.audit import reset_audit_client_ip, set_audit_client_ip
 from domain.security_settings import is_enabled
+from domain.session_sync import sync_class_sessions
 from db.database import SessionLocal, engine
 from integrations.network_verify import get_client_ip, get_server_local_ip
 from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit, attendance_features, medical_leave
@@ -196,6 +197,12 @@ async def _keep_pool_warm():
             logger.warning("DB keepalive ping failed: %s", exc)
 
 
+async def _class_lifecycle_loop():
+    while True:
+        sync_class_sessions(force=True)
+        await asyncio.sleep(60)
+
+
 def _ping_pool():
     # Held open at the same time on purpose: one connection at a time would only ever
     # refresh the same pooled connection, leaving the rest to go stale. The admin pages
@@ -211,11 +218,16 @@ def _ping_pool():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_keep_pool_warm())
+    tasks = [
+        asyncio.create_task(_keep_pool_warm()),
+        asyncio.create_task(_class_lifecycle_loop()),
+    ]
     try:
         yield
     finally:
-        task.cancel()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(

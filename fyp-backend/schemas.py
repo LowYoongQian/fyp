@@ -1,6 +1,6 @@
 import re
 
-from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict, field_validator
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict, field_validator, model_validator
 from typing import Annotated, Optional, Any, Union
 from enum import Enum
 
@@ -90,7 +90,7 @@ class MessageResponse(BaseModel):
     user_id: Optional[Any] = None
 
 # Session & Attendance Schemas
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from pydantic import PlainSerializer
 
@@ -106,6 +106,7 @@ UtcDateTime = Annotated[datetime, PlainSerializer(iso_utc, return_type=Optional[
 class SessionCreate(BaseModel):
     course_id: Any
     class_group: str = "All"
+    meeting_id: Optional[Any] = None
 
 class SessionResponse(BaseModel):
     id: Any
@@ -114,9 +115,49 @@ class SessionResponse(BaseModel):
     closed_at: Optional[UtcDateTime] = None
     is_open: bool
     class_group: str
+    meeting_id: Optional[Any] = None
+    scheduled_start: Optional[UtcDateTime] = None
+    scheduled_end: Optional[UtcDateTime] = None
+    status: str = "open"
+    room: Optional[str] = None
+    cancel_reason: Optional[str] = None
+    replacement_for_session_id: Optional[Any] = None
 
     class Config:
         from_attributes = True
+
+
+class ClassCancellation(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("Cancellation reason must contain at least 3 characters")
+        return value
+
+
+class ReplacementClassCreate(BaseModel):
+    scheduled_start: datetime
+    scheduled_end: datetime
+    room: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def end_must_follow_start(self):
+        if self.scheduled_start.tzinfo is not None:
+            self.scheduled_start = self.scheduled_start.astimezone(timezone.utc).replace(tzinfo=None)
+        if self.scheduled_end.tzinfo is not None:
+            self.scheduled_end = self.scheduled_end.astimezone(timezone.utc).replace(tzinfo=None)
+        if self.scheduled_end <= self.scheduled_start:
+            raise ValueError("Replacement class end time must be after its start time")
+        if self.scheduled_end - self.scheduled_start > timedelta(hours=6):
+            raise ValueError("Replacement class cannot exceed 6 hours")
+        self.room = self.room.strip()
+        if not self.room:
+            raise ValueError("Room is required")
+        return self
 
 class AttendanceSubmit(BaseModel):
     wifi_ssid: str

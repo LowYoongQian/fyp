@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { swalSuccess } from '../../utils/swal';
+import Swal from 'sweetalert2';
 import { ShimmerTableRows } from '../../components/Shimmer';
 import { Pet } from '../../components/Pet';
 import { readRecentStaffPages, STAFF_PAGE_LINKS, type StaffPageId } from '../../utils/staffRecentPages';
@@ -12,6 +13,7 @@ import type {
   StudentAttendance,
   Announcement,
   LecturerDashboardSummary,
+  TodayClass,
 } from '../../services/api';
 import {
   Play,
@@ -29,6 +31,7 @@ import {
   Mail,
   Check,
   Clock
+  , CalendarPlus, Ban
 } from 'lucide-react';
 
 interface LecturerDashboardProps {
@@ -40,6 +43,8 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
   const [courses, setCourses] = useState<Course[]>([]);
   const [enrolments, setEnrolments] = useState<any[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+  const [todayClasses, setTodayClasses] = useState<TodayClass[]>([]);
+  const [classActionId, setClassActionId] = useState<string | null>(null);
   const [dashboardSummary, setDashboardSummary] = useState<LecturerDashboardSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   
@@ -183,13 +188,101 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
       .catch((err) => console.error('Failed to load lecturer dashboard summary:', err))
       .finally(() => setSummaryLoading(false));
 
+    const todayClassesRequest = apiService.getTodayClasses()
+      .then(setTodayClasses)
+      .catch((err) => console.error('Failed to load today classes:', err));
+
     const coursesList = await coursesRequest;
     await Promise.allSettled([
       enrolmentsRequest,
       announcementsRequest,
       summaryRequest,
+      todayClassesRequest,
       fetchActiveSessions(coursesList),
     ]);
+  };
+
+  const refreshClasses = async () => {
+    const [today, active] = await Promise.all([
+      apiService.getTodayClasses(),
+      apiService.getActiveSessions(),
+    ]);
+    setTodayClasses(today);
+    setActiveSessions(active);
+  };
+
+  const openTodayClass = async (lesson: TodayClass) => {
+    setClassActionId(String(lesson.id));
+    try {
+      const opened = await apiService.openTodayClass(lesson.id);
+      await refreshClasses();
+      handleStartMonitor(opened.id);
+      await swalSuccess('Class opened', 'Students can check in from the scheduled start time.');
+    } catch (err: any) {
+      await Swal.fire('Could not open class', err.response?.data?.detail || 'Please try again.', 'error');
+    } finally {
+      setClassActionId(null);
+    }
+  };
+
+  const cancelTodayClass = async (lesson: TodayClass) => {
+    const result = await Swal.fire({
+      title: 'Cancel class',
+      input: 'textarea',
+      inputLabel: `${lesson.course_code} cancellation reason`,
+      inputPlaceholder: 'Reason for cancellation',
+      inputAttributes: { maxlength: '1000' },
+      showCancelButton: true,
+      confirmButtonText: 'Cancel class',
+      confirmButtonColor: '#dc2626',
+      inputValidator: value => value.trim().length < 3 ? 'Enter at least 3 characters.' : undefined,
+    });
+    if (!result.isConfirmed) return;
+    setClassActionId(String(lesson.id));
+    try {
+      await apiService.cancelClass(lesson.id, result.value.trim());
+      await refreshClasses();
+      await swalSuccess('Class cancelled', 'Students and administrators were notified.');
+    } catch (err: any) {
+      await Swal.fire('Could not cancel class', err.response?.data?.detail || 'Please try again.', 'error');
+    } finally {
+      setClassActionId(null);
+    }
+  };
+
+  const arrangeReplacement = async (lesson: TodayClass) => {
+    const result = await Swal.fire({
+      title: 'Arrange replacement class',
+      html: `
+        <div class="grid gap-3 text-left">
+          <label class="text-sm">Start<input id="replacement-start" type="datetime-local" class="swal2-input !m-0 !w-full" /></label>
+          <label class="text-sm">End<input id="replacement-end" type="datetime-local" class="swal2-input !m-0 !w-full" /></label>
+          <label class="text-sm">Room<input id="replacement-room" class="swal2-input !m-0 !w-full" maxlength="200" /></label>
+        </div>`,
+      showCancelButton: true,
+      confirmButtonText: 'Arrange class',
+      preConfirm: () => {
+        const start = (document.getElementById('replacement-start') as HTMLInputElement).value;
+        const end = (document.getElementById('replacement-end') as HTMLInputElement).value;
+        const room = (document.getElementById('replacement-room') as HTMLInputElement).value.trim();
+        if (!start || !end || !room || new Date(end) <= new Date(start)) {
+          Swal.showValidationMessage('Enter a valid start, end and room.');
+          return false;
+        }
+        return { scheduled_start: new Date(start).toISOString(), scheduled_end: new Date(end).toISOString(), room };
+      },
+    });
+    if (!result.isConfirmed || !result.value) return;
+    setClassActionId(String(lesson.id));
+    try {
+      await apiService.arrangeReplacementClass(lesson.id, result.value);
+      await refreshClasses();
+      await swalSuccess('Replacement arranged', 'Students and administrators were notified.');
+    } catch (err: any) {
+      await Swal.fire('Could not arrange class', err.response?.data?.detail || 'Please try again.', 'error');
+    } finally {
+      setClassActionId(null);
+    }
   };
 
   const fetchActiveSessions = async (coursesList?: Course[]) => {
@@ -316,6 +409,63 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
 
   return (
     <div className="space-y-6">
+      <section className="border-y border-slate-200 bg-white px-4 py-5 sm:px-6">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900">Today's Classes</h2>
+            <p className="mt-1 text-xs text-slate-500">{new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+          </div>
+          <button onClick={refreshClasses} className="p-2 text-slate-500 hover:text-slate-900" title="Refresh today's classes">
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
+        {todayClasses.length === 0 ? (
+          <p className="py-4 text-sm text-slate-500">No classes scheduled today.</p>
+        ) : (
+          <div className="divide-y divide-slate-200 border-y border-slate-200">
+            {todayClasses.map(lesson => {
+              const busy = classActionId === String(lesson.id);
+              const start = lesson.scheduled_start ? new Date(lesson.scheduled_start) : null;
+              const end = lesson.scheduled_end ? new Date(lesson.scheduled_end) : null;
+              return (
+                <div key={String(lesson.id)} className="grid gap-3 py-4 md:grid-cols-[1fr_auto] md:items-center">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs font-bold text-brand-blue">{lesson.course_code}</span>
+                      <span className="text-xs font-semibold text-slate-700">{lesson.role} {lesson.class_group !== 'All' ? lesson.class_group : ''}</span>
+                      <span className="rounded px-2 py-0.5 text-[10px] font-bold uppercase bg-slate-100 text-slate-600">{lesson.status?.replace('_', ' ')}</span>
+                    </div>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">{lesson.course_name}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {start?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–{end?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {lesson.room || 'Room TBA'}
+                    </p>
+                    {lesson.cancel_reason && <p className="mt-1 text-xs text-red-600">{lesson.cancel_reason}</p>}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {lesson.status === 'scheduled' && (
+                      <button disabled={busy} onClick={() => openTodayClass(lesson)} className="inline-flex items-center gap-2 rounded-md bg-brand-blue px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+                        <Play className="h-4 w-4" /> Open Class
+                      </button>
+                    )}
+                    {(lesson.status === 'scheduled' || lesson.status === 'needs_attention') && (
+                      <button disabled={busy} onClick={() => cancelTodayClass(lesson)} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-50">
+                        <Ban className="h-4 w-4" /> Cancel Class
+                      </button>
+                    )}
+                    {lesson.status === 'cancelled' && (
+                      <button disabled={busy} onClick={() => arrangeReplacement(lesson)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50">
+                        <CalendarPlus className="h-4 w-4" /> Arrange Replacement
+                      </button>
+                    )}
+                    {lesson.status === 'open' && <span className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700"><Clock className="h-4 w-4" /> Sign-in open</span>}
+                    {lesson.status === 'completed' && <span className="inline-flex items-center gap-2 text-xs font-bold text-slate-600"><Check className="h-4 w-4" /> Completed</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
       {/* Top Section Row (Profile Card, Stats grid, Shortcuts list) */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         

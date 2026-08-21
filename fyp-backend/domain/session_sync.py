@@ -1,15 +1,19 @@
+import json
 import logging
 import threading
 from datetime import datetime, timedelta, time
 
 from sqlalchemy.exc import IntegrityError
 from utils.timeutil import local_offset, utcnow
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from db.database import SessionLocal
-from db.models import Course, Enrolment, ClassSession, AttendanceRecord, Student, CourseStaffAssignment
+from db.models import (
+    Enrolment, ClassSession, AttendanceRecord, Student, ClassMeeting,
+    Lecturer, User, UserNotification,
+)
 import time as time_module
-from domain.scheduler import calculate_schedule, meeting_key_for
+from domain.scheduler import calculate_schedule
+from domain.class_lifecycle import close_class_if_due
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +30,13 @@ _SYNC_THROTTLE_SECONDS = 60.0 # Only sync once per minute max to prevent query s
 
 
 def sync_class_sessions(*, force: bool = False):
-    """Kick off a sync in the background and return immediately.
+    """Kick off session closing and absence processing in the background.
 
     This used to run inline, so once a minute some unlucky request paid its ~18
     queries (~2s against a remote database) before its own response was built --
-    which is what made page loads randomly slow. The work itself is only
-    opening/closing sessions and marking end-of-day absences, and no caller needs
-    the result, so the request no longer waits for it. The trade is that a session
-    opening this very second may not appear until the next poll.
+    which is what made page loads randomly slow. No caller needs the result, so
+    the request no longer waits for it. Sessions are created only when a lecturer
+    opens one; this worker closes those sessions and marks end-of-day absences.
     """
     global _last_sync_time, _is_syncing, _force_pending
 
@@ -79,8 +82,11 @@ def _sync_worker():
 
 
 def _sync_class_sessions_now(db: Session):
-    """Automatically opens and closes class sessions based on the timetable schedule,
-    and runs batch processing to mark absent students at the end of the day.
+    """Advance classes from the timetable without ever inventing attendance.
+
+    Open classes complete at their scheduled end. A timetable class that was
+    neither opened nor cancelled becomes needs_attention, which counts for
+    neither attendance nor absence and blocks final barred-list publication.
     """
     try:
         now_utc = utcnow()
@@ -94,130 +100,88 @@ def _sync_class_sessions_now(db: Session):
         now_local = now_utc + tz_offset
         schedule_map = calculate_schedule(db)
         
-        # Query distinct enrolment combinations once
-        enrolments_summary = db.query(Enrolment.course_id, Enrolment.class_group).distinct().all()
-        
-        # Fetch staff assignments for Tutor/Practical roles once
-        assignments_list = db.query(CourseStaffAssignment).filter(
-            CourseStaffAssignment.role.in_(["Tutor", "Practical"])
-        ).all()
-        assignments_by_course = {}
-        for a in assignments_list:
-            assignments_by_course.setdefault(a.course_id, []).append(a)
-            
-        # Fetch existing class sessions for the last 7 days to avoid query storms inside the loop
+        # Fetch existing dated classes once; scheduled_start is authoritative for
+        # new rows, while opened_at keeps legacy rows visible during migration.
         min_date_utc = datetime.combine(now_local - timedelta(days=7), time(0, 0, 0)) - tz_offset
         sessions_list = db.query(ClassSession).filter(
-            ClassSession.opened_at >= min_date_utc
+            (ClassSession.scheduled_start >= min_date_utc) | (ClassSession.opened_at >= min_date_utc)
         ).all()
-        
-        # Index sessions in memory for O(1) retrieval
-        sessions_by_key = {}
-        for s in sessions_list:
-            s_date = (s.opened_at + tz_offset).date()
-            sessions_by_key[(s.course_id, s.class_group, s_date)] = s
-            
-        # Check the last 7 days (including today) to sync past and present classes
+
+        sessions_by_key = {
+            (str(s.meeting_id), s.scheduled_start): s
+            for s in sessions_list if s.meeting_id and s.scheduled_start
+        }
+
+        new_attention = []
         for i in range(7):
             date_check = (now_local - timedelta(days=i)).date()
-            day_name = (now_local - timedelta(days=i)).strftime("%A") # Monday, Tuesday, etc.
-            
-            for course_id, class_group in enrolments_summary:
-                # Determine scheduled slots for this course and group
-                slots = []
-                
-                # 1. Primary Lecture Slot
-                lect_slot = schedule_map.get(f"Lecture-{course_id}")
-                if lect_slot and lect_slot["day"] == day_name:
-                    slots.append((lect_slot, "All"))
-                
-                # 2. Tutor/Practical Slots matching this group. Each group has its own
-                # meeting, so the key carries the group — without it this picked up
-                # another group's slot and opened sessions on the wrong day.
-                assignments = assignments_by_course.get(course_id, [])
-                for a in assignments:
-                    slot = schedule_map.get(meeting_key_for(a.role, course_id, a.id, class_group))
-                    if slot and slot["day"] == day_name:
-                        slots.append((slot, class_group))
-                
-                for slot, group_name in slots:
-                    start_time = datetime.strptime(slot["start"], "%H:%M").time()
-                    end_time = datetime.strptime(slot["end"], "%H:%M").time()
-                    
-                    start_dt = datetime.combine(date_check, start_time)
-                    end_dt = datetime.combine(date_check, end_time)
-                    
-                    start_dt_utc = start_dt - tz_offset
-                    end_dt_utc = end_dt - tz_offset
-                    
-                    # Only process if the class scheduled start time has arrived or passed
-                    if now_utc < start_dt_utc:
-                        continue
-                        
-                    session = sessions_by_key.get((course_id, group_name, date_check))
-                    
-                    if not session:
-                        # Auto-open session on time
-                        is_open = (now_utc < end_dt_utc)
-                        session = ClassSession(
-                            course_id=course_id,
-                            class_group=group_name,
-                            opened_at=start_dt_utc,
-                            is_open=is_open,
-                            closed_at=end_dt_utc if not is_open else None
-                        )
-                        db.add(session)
-                        db.commit()
-                        db.refresh(session)
-                        # Add to our local index map
-                        sessions_by_key[(course_id, group_name, date_check)] = session
-                    else:
-                        # Auto-close session on time if it reaches the end of class time
-                        if session.is_open and now_utc >= end_dt_utc:
-                            session.is_open = False
-                            session.closed_at = end_dt_utc
-                            db.commit()
-                            db.refresh(session)
-                            
-                    # Auto-mark absent at the end of the day (after 11:59 PM local time)
-                    absent_threshold_utc = datetime.combine(date_check, time(23, 59, 0)) - tz_offset
-                    if now_utc >= absent_threshold_utc:
-                        # Find all students enrolled in this course and group
-                        enrolled_students = db.query(Student).join(
-                            Enrolment, Enrolment.student_id == Student.id
-                        ).filter(
-                            Enrolment.course_id == course_id,
-                            Enrolment.class_group == class_group
-                        ).all()
-                        
-                        if enrolled_students:
-                            # Fetch all existing attendance records for this session in one query
-                            existing_records = db.query(AttendanceRecord).filter(
-                                AttendanceRecord.session_id == session.id
-                            ).all()
-                            recorded_student_ids = {r.student_id for r in existing_records}
-                            
-                            needs_commit = False
-                            for student in enrolled_students:
-                                if student.id not in recorded_student_ids:
-                                    marked_time_local = datetime.combine(date_check, time(23, 0, 0))
-                                    marked_time_utc = marked_time_local - tz_offset
-                                    record = AttendanceRecord(
-                                        student_id=student.id,
-                                        session_id=session.id,
-                                        status="absent",
-                                        network_verified=False,
-                                        # liveness_passed stays NULL: nobody attempted a
-                                        # liveness check on a no-show, so False would claim
-                                        # a check ran and failed. status='absent' says it.
-                                        marked_at=marked_time_utc,
-                                        verify_detail=marked_time_local.strftime("System on %a %d/%m/%y %I:%M%p")
-                                    )
-                                    db.add(record)
-                                    needs_commit = True
-                            
-                            if needs_commit:
-                                db.commit()
+            day_name = date_check.strftime("%A")
+            for slot in schedule_map.values():
+                if slot["day"] != day_name or not slot.get("meeting_id"):
+                    continue
+                start_utc = datetime.combine(date_check, datetime.strptime(slot["start"], "%H:%M").time()) - tz_offset
+                end_utc = datetime.combine(date_check, datetime.strptime(slot["end"], "%H:%M").time()) - tz_offset
+                if now_utc < end_utc:
+                    continue
+                key = (str(slot["meeting_id"]), start_utc)
+                session = sessions_by_key.get(key)
+                if not session:
+                    session = ClassSession(
+                        course_id=slot["course_id"], meeting_id=slot["meeting_id"],
+                        scheduled_start=start_utc, scheduled_end=end_utc,
+                        status="needs_attention", is_open=False, opened_at=None,
+                        class_group="All" if slot["role"] == "Lecture" else slot["class_group"],
+                        room=slot["room"],
+                    )
+                    db.add(session)
+                    sessions_list.append(session)
+                    sessions_by_key[key] = session
+                    new_attention.append((session, slot["meeting_id"]))
+                elif session.status == "scheduled":
+                    session.status = "needs_attention"
+                    session.is_open = False
+                    new_attention.append((session, slot["meeting_id"]))
+                else:
+                    close_class_if_due(session, now_utc)
+
+        # Replacement classes do not have a weekly meeting_id, so advance the
+        # materialized rows directly.
+        for session in sessions_list:
+            if session.replacement_for_session_id and session.scheduled_end and now_utc >= session.scheduled_end:
+                if session.status == "scheduled":
+                    session.status = "needs_attention"
+                    new_attention.append((session, None))
+                else:
+                    close_class_if_due(session, now_utc)
+
+        db.flush()
+        for session, meeting_id in new_attention:
+            _notify_needs_attention(db, session, meeting_id)
+
+        # Only completed classes create absences. Cancelled, scheduled and
+        # needs_attention rows are deliberately excluded.
+        for session in sessions_list:
+            if session.status != "completed" or not session.scheduled_end:
+                continue
+            class_date = (session.scheduled_end + tz_offset).date()
+            absent_threshold_utc = datetime.combine(class_date, time(23, 59)) - tz_offset
+            if now_utc < absent_threshold_utc:
+                continue
+            students = db.query(Student).join(Enrolment, Enrolment.student_id == Student.id).filter(
+                Enrolment.course_id == session.course_id
+            )
+            if session.class_group != "All":
+                students = students.filter(Enrolment.class_group == session.class_group)
+            existing = db.query(AttendanceRecord).filter(AttendanceRecord.session_id == session.id).all()
+            recorded_ids = {record.student_id for record in existing}
+            for student in students.all():
+                if student.id not in recorded_ids:
+                    db.add(AttendanceRecord(
+                        student_id=student.id, session_id=session.id, status="absent",
+                        network_verified=False, marked_at=absent_threshold_utc,
+                        verify_detail="System marked after completed class",
+                    ))
+        db.commit()
                                 
     except IntegrityError:
         # Another request already wrote the row this one was about to insert — the unique
@@ -230,4 +194,43 @@ def _sync_class_sessions_now(db: Session):
         # the ONLY sign it failed -- which is why it is logged rather than swallowed.
         db.rollback()
         logger.exception("Class session sync failed: %s", e)
+
+
+def source_meeting_id(db: Session, session: ClassSession):
+    """Find the timetable row behind an original or replacement class."""
+    current = session
+    seen = set()
+    while current:
+        if current.meeting_id:
+            return current.meeting_id
+        parent_id = current.replacement_for_session_id
+        if not parent_id or str(parent_id) in seen:
+            return None
+        seen.add(str(parent_id))
+        current = db.get(ClassSession, parent_id)
+    return None
+
+
+def _notify_needs_attention(db: Session, session: ClassSession, meeting_id) -> None:
+    user_ids = {user_id for (user_id,) in db.query(User.id).filter(User.role == "admin").all()}
+    meeting_id = meeting_id or source_meeting_id(db, session)
+    if meeting_id:
+        meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first()
+        if meeting and meeting.lecturer_id:
+            lecturer = db.query(Lecturer).filter(Lecturer.id == meeting.lecturer_id).first()
+            if lecturer and lecturer.user_id:
+                user_ids.add(lecturer.user_id)
+    for user_id in user_ids:
+        dedupe = f"class_needs_attention:{session.id}:{user_id}"
+        exists = db.query(UserNotification.id).filter(
+            UserNotification.user_id == user_id, UserNotification.dedupe_key == dedupe
+        ).first()
+        if not exists:
+            db.add(UserNotification(
+                user_id=user_id, kind="class_needs_attention",
+                title="Class needs attention",
+                body="This class ended without being opened or cancelled. Resolve it before finalising the barred list.",
+                payload=json.dumps({"class_id": str(session.id), "course_id": str(session.course_id)}),
+                dedupe_key=dedupe,
+            ))
 

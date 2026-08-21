@@ -41,7 +41,7 @@ from db.models import (
 )
 from utils.security import require_lecturer
 from utils.db_helpers import my_course_ids, require_own_profile
-from domain.attendance import session_hours, build_attendance_sequence
+from domain.attendance import effective_planned_hours, session_hours, build_attendance_sequence
 
 # --- At-risk decision policy ----------------------------------------------
 BAR_THRESHOLD = 0.80     # university rule: < 80% attendance => barred
@@ -167,19 +167,30 @@ def recompute_risk_scores(
         db.query(Course.id, Course.planned_total_hours)
         .filter(Course.id.in_(all_course_ids)).all()
     }
+    lifecycle_by_course = {}
+    for lesson in db.query(ClassSession).filter(
+        ClassSession.course_id.in_(all_course_ids),
+        ClassSession.status.in_(["cancelled", "completed"]),
+    ).all():
+        lifecycle_by_course.setdefault(lesson.course_id, []).append(lesson)
+    total_hours_by_course = {
+        course_id: effective_planned_hours(hours, lifecycle_by_course.get(course_id, []))
+        for course_id, hours in total_hours_by_course.items()
+    }
 
     # Batch: all closed sessions per course, ordered by time (oldest first).
     # Each entry carries its contact hours = (closed_at - opened_at), default 2h.
     closed_sessions = (
         db.query(ClassSession.id, ClassSession.course_id, ClassSession.class_group,
-                 ClassSession.opened_at, ClassSession.closed_at)
-        .filter(ClassSession.is_open == False, ClassSession.course_id.in_(all_course_ids))
-        .order_by(ClassSession.course_id, ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc())
+                 ClassSession.opened_at, ClassSession.closed_at,
+                 ClassSession.scheduled_start, ClassSession.scheduled_end)
+        .filter(ClassSession.status == "completed", ClassSession.course_id.in_(all_course_ids))
+        .order_by(ClassSession.course_id, ClassSession.scheduled_start.asc().nullslast(), ClassSession.id.asc())
         .all()
     )
     sessions_by_course: dict = {}
-    for sid, cid, group, opened, closed in closed_sessions:
-        hrs = session_hours(opened, closed)
+    for sid, cid, group, opened, closed, scheduled_start, scheduled_end in closed_sessions:
+        hrs = session_hours(opened, closed, scheduled_start=scheduled_start, scheduled_end=scheduled_end)
         sessions_by_course.setdefault(cid, []).append((sid, group, hrs))
 
     # Batch: set of (student_id, session_id) counted as attended.

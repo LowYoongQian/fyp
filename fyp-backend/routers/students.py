@@ -136,15 +136,17 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
     # endpoint once counted present-only over a flat session count and treated "open but
     # past today" as held, so the app and the web dashboard disagreed for one student.
     sessions_by_course = {}
-    for sid, cid, sgroup, opened, closed_at in db.query(
+    for sid, cid, sgroup, opened, closed_at, scheduled_start, scheduled_end in db.query(
         ClassSession.id, ClassSession.course_id, ClassSession.class_group,
-        ClassSession.opened_at, ClassSession.closed_at
+        ClassSession.opened_at, ClassSession.closed_at,
+        ClassSession.scheduled_start, ClassSession.scheduled_end,
     ).filter(
         ClassSession.course_id.in_(course_ids),
-        ClassSession.is_open == False,  # noqa: E712
-    ).order_by(ClassSession.opened_at.asc().nullslast(), ClassSession.id.asc()).all():
+        ClassSession.status == "completed",
+    ).order_by(ClassSession.scheduled_start.asc().nullslast(), ClassSession.id.asc()).all():
         sessions_by_course.setdefault(cid, []).append(
-            (sid, sgroup, session_hours(opened, closed_at)))
+            (sid, sgroup, session_hours(opened, closed_at,
+                                        scheduled_start=scheduled_start, scheduled_end=scheduled_end)))
 
     attended = {
         (student.id, sid) for (sid,) in db.query(AttendanceRecord.session_id).filter(
@@ -278,6 +280,11 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
             "course_code": c.course_code,
             "course_name": c.course_name,
             "class_group": s.class_group,
+            "opened_at": iso_utc(s.opened_at),
+            "scheduled_start": iso_utc(s.scheduled_start),
+            "scheduled_end": iso_utc(s.scheduled_end),
+            "room": s.room,
+            "is_replacement": s.replacement_for_session_id is not None,
             "is_open": s.is_open,
             "already_checked_in": s.id in checked_in,
         }

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from utils.timeutil import campus_now, utcnow
+from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
@@ -8,7 +8,9 @@ from pydantic import BaseModel
 
 from domain.security_settings import get_settings, truthy
 from db.database import get_db
-from domain.scheduler import get_course_group_slots, lecture_meetings, session_end_utc
+from domain.scheduler import (
+    get_course_group_slots, lecture_meetings, session_checkin_state, session_end_utc,
+)
 from domain.session_sync import sync_class_sessions
 from db.models import (
     User, Student, Lecturer, Course, Enrolment, ClassSession,
@@ -20,13 +22,16 @@ from domain.attendance import require_session_enrolment
 from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
 from integrations.network_verify import get_client_ip, verify_network
 from schemas import (
-    SessionCreate, SessionResponse, AttendanceSubmit,
+    SessionCreate, SessionResponse, ClassCancellation, ReplacementClassCreate, AttendanceSubmit,
     AttendanceResponse, SessionAttendanceResponse, StudentAttendanceStatus
 )
 from integrations.face import (
     _extract_face_embedding, _embedding_to_floats,
     _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
+from domain.audit import log_audit_event
+from domain.class_lifecycle import barred_list_readiness, class_can_open, has_active_replacement
+from routers.attendance_features import add_notification
 
 router = APIRouter(prefix="/sessions", tags=["Attendance"])
 
@@ -48,8 +53,11 @@ def require_course_access(db: Session, current_user: User, course_id: str, actio
     return course
 
 
-def validate_session_opening(db: Session, course_id: str, class_group: str, now: datetime):
+def validate_session_opening(db: Session, course_id: str, class_group: str, now: datetime,
+                             meeting_id: str | None = None):
     slots = get_course_group_slots(db, course_id, class_group)
+    if meeting_id:
+        slots = [slot for slot in slots if str(slot.get("meeting_id")) == str(meeting_id)]
     if not slots:
         return
         
@@ -76,10 +84,10 @@ def validate_session_opening(db: Session, course_id: str, class_group: str, now:
                 
                 if open_start <= now <= end_dt:
                     valid = True
-                    break
+                    return slot
             except Exception:
                 valid = True
-                break
+                return slot
                 
     if not valid:
         slots_str = " or ".join(slot_descriptions)
@@ -87,6 +95,44 @@ def validate_session_opening(db: Session, course_id: str, class_group: str, now:
             status_code=400,
             detail=f"Cannot open session. Class is scheduled for {slots_str}. You can only open the session starting 1 hour before class."
         )
+    return None
+
+
+def _scheduled_bounds(slot: dict, local_date) -> tuple[datetime, datetime]:
+    offset = local_offset()
+    parse = lambda value: datetime.combine(local_date, datetime.strptime(value, "%H:%M").time()) - offset
+    return parse(slot["start"]), parse(slot["end"])
+
+
+def _class_group(meeting: ClassMeeting) -> str:
+    return "All" if meeting.role == "Lecture" else meeting.class_group
+
+
+def _semester_for(db: Session, course_id: str) -> str | None:
+    row = db.query(Enrolment.semester).filter(Enrolment.course_id == course_id).first()
+    return row[0] if row else None
+
+
+def _notify_course_people(db: Session, lesson: ClassSession, kind: str, title: str, body: str) -> None:
+    students = db.query(Student).join(Enrolment).filter(Enrolment.course_id == lesson.course_id)
+    if lesson.class_group != "All":
+        students = students.filter(Enrolment.class_group == lesson.class_group)
+    user_ids = {student.user_id for student in students.all() if student.user_id}
+    user_ids.update(user_id for (user_id,) in db.query(User.id).filter(User.role == "admin").all())
+    for user_id in user_ids:
+        add_notification(
+            db, user_id, kind, title, body,
+            f"{kind}:{lesson.id}:{user_id}",
+            {"class_id": str(lesson.id), "course_id": str(lesson.course_id)},
+        )
+
+
+def _audit_class_action(db: Session, user: User, action: str, lesson: ClassSession, details: str) -> None:
+    log_audit_event(
+        db, user_id=str(user.id), user_name=user.profile_name or user.email,
+        user_role=user.role, category="staff" if user.role != "admin" else "admin",
+        action=action, details=f"class={lesson.id}; course={lesson.course_id}; {details}",
+    )
 
 
 def validate_student_checkin(db: Session, course_id: str, class_group: str, now: datetime):
@@ -147,7 +193,11 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
     # Enforce session open window. Campus local time, not datetime.now(): the validator
     # compares against timetable strings ("14:00") that are campus local, and the host
     # clock is UTC on Railway — so this rejected every on-time open by 8 hours.
-    validate_session_opening(db, body.course_id, body.class_group, campus_now())
+    now_local = campus_now()
+    slot = validate_session_opening(db, body.course_id, body.class_group, now_local, body.meeting_id)
+    if not slot:
+        raise HTTPException(status_code=400, detail="No matching class is scheduled today")
+    scheduled_start, scheduled_end = _scheduled_bounds(slot, now_local.date())
 
     # Check if there is already an active session for this course and group
     active_session = db.query(ClassSession).filter(
@@ -166,31 +216,174 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
     # in. ("All" is a course-wide lecture that every enrolled student attends.)
     # The active-session guard above already ensured this group is not open, so
     # a fresh session is always created and returned (no None fallback -> no 500).
-    sess = ClassSession(
-        course_id=body.course_id,
-        opened_at=utcnow(),
-        is_open=True,
-        class_group=body.class_group,
-    )
-    db.add(sess)
+    sess = db.query(ClassSession).filter(
+        ClassSession.meeting_id == slot["meeting_id"],
+        ClassSession.scheduled_start == scheduled_start,
+    ).first()
+    if sess and sess.status == "cancelled":
+        raise HTTPException(status_code=400, detail="This class was cancelled and cannot be opened")
+    if sess and sess.status == "open":
+        raise HTTPException(status_code=400, detail="This class is already open")
+    if sess and sess.status == "completed":
+        raise HTTPException(status_code=400, detail="This class has already finished")
+    if not sess:
+        sess = ClassSession(course_id=body.course_id, meeting_id=slot["meeting_id"],
+                            scheduled_start=scheduled_start, scheduled_end=scheduled_end,
+                            class_group=body.class_group, room=slot.get("room"),
+                            semester=_semester_for(db, body.course_id))
+        db.add(sess)
+    sess.opened_at = utcnow()
+    sess.opened_by_user_id = current_user.id
+    sess.status = "open"
+    sess.is_open = True
     db.commit()
     db.refresh(sess)
     return sess
 
-# 2. Close Session (Lecturer/Admin only)
-@router.post("/{id}/close", response_model=SessionResponse)
-def close_session(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    session = get_or_404(db, ClassSession, id, "Session")
-    require_course_access(db, current_user, session.course_id, "close a session")
 
-    if not session.is_open:
-        raise HTTPException(status_code=400, detail="Session is already closed")
+@router.get("/today")
+def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    """Return today's owned timetable rows, materialized without opening attendance."""
+    today = campus_now().date()
+    day = today.strftime("%A")
+    if current_user.role == "admin":
+        meetings = db.query(ClassMeeting).filter(ClassMeeting.day == day).all()
+    else:
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+        meetings = db.query(ClassMeeting).filter(
+            ClassMeeting.day == day, ClassMeeting.lecturer_id == lecturer.id
+        ).all()
+    result = []
+    for meeting in meetings:
+        start, end = _scheduled_bounds({"start": meeting.start, "end": meeting.end}, today)
+        lesson = db.query(ClassSession).filter(
+            ClassSession.meeting_id == meeting.id, ClassSession.scheduled_start == start
+        ).first()
+        if not lesson:
+            lesson = ClassSession(
+                course_id=meeting.course_id, meeting_id=meeting.id,
+                scheduled_start=start, scheduled_end=end, status="scheduled", is_open=False,
+                class_group=_class_group(meeting), room=meeting.room,
+                semester=_semester_for(db, meeting.course_id), opened_at=None,
+            )
+            db.add(lesson)
+            db.flush()
+        course = db.query(Course).filter(Course.id == meeting.course_id).first()
+        result.append({
+            "id": lesson.id, "course_id": lesson.course_id,
+            "course_code": course.course_code if course else "", "course_name": course.course_name if course else "",
+            "class_group": lesson.class_group, "role": meeting.role, "room": lesson.room,
+            "scheduled_start": iso_utc(lesson.scheduled_start), "scheduled_end": iso_utc(lesson.scheduled_end),
+            "status": lesson.status, "cancel_reason": lesson.cancel_reason,
+            "replacement_for_session_id": lesson.replacement_for_session_id,
+        })
 
-    session.is_open = False
-    session.closed_at = utcnow()
+    day_start, day_end = _scheduled_bounds({"start": "00:00", "end": "23:59"}, today)
+    replacements = db.query(ClassSession).filter(
+        ClassSession.replacement_for_session_id.isnot(None),
+        ClassSession.scheduled_start >= day_start,
+        ClassSession.scheduled_start <= day_end,
+    )
+    if current_user.role != "admin":
+        replacements = replacements.filter(ClassSession.course_id.in_(my_course_ids(db, lecturer.id)))
+    existing_ids = {str(item["id"]) for item in result}
+    for lesson in replacements.all():
+        if str(lesson.id) in existing_ids:
+            continue
+        course = db.query(Course).filter(Course.id == lesson.course_id).first()
+        result.append({
+            "id": lesson.id, "course_id": lesson.course_id,
+            "course_code": course.course_code if course else "", "course_name": course.course_name if course else "",
+            "class_group": lesson.class_group, "role": "Replacement", "room": lesson.room,
+            "scheduled_start": iso_utc(lesson.scheduled_start), "scheduled_end": iso_utc(lesson.scheduled_end),
+            "status": lesson.status, "cancel_reason": lesson.cancel_reason,
+            "replacement_for_session_id": lesson.replacement_for_session_id,
+        })
+    result.sort(key=lambda item: item["scheduled_start"] or "")
     db.commit()
-    db.refresh(session)
-    return session
+    return result
+
+
+@router.post("/{id}/open", response_model=SessionResponse)
+def open_scheduled_class(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    lesson = get_or_404(db, ClassSession, id, "Class")
+    require_course_access(db, current_user, lesson.course_id, "open this class")
+    now = utcnow()
+    if lesson.status not in ("scheduled", "needs_attention"):
+        raise HTTPException(status_code=400, detail=f"A {lesson.status} class cannot be opened")
+    if not lesson.scheduled_start or not lesson.scheduled_end:
+        raise HTTPException(status_code=400, detail="This class has no scheduled time")
+    if not class_can_open(lesson, now):
+        raise HTTPException(status_code=400, detail="Class can only be opened from one hour before start until it ends")
+    lesson.opened_at = now
+    lesson.opened_by_user_id = current_user.id
+    lesson.status = "open"
+    lesson.is_open = True
+    db.commit()
+    db.refresh(lesson)
+    return lesson
+
+
+@router.post("/{id}/cancel", response_model=SessionResponse)
+def cancel_class(id: str, body: ClassCancellation, db: Session = Depends(get_db),
+                 current_user: User = Depends(require_lecturer)):
+    lesson = get_or_404(db, ClassSession, id, "Class")
+    course = require_course_access(db, current_user, lesson.course_id, "cancel this class")
+    if lesson.status not in ("scheduled", "needs_attention"):
+        raise HTTPException(status_code=400, detail=f"A {lesson.status} class cannot be cancelled")
+    lesson.status = "cancelled"
+    lesson.is_open = False
+    lesson.cancel_reason = body.reason
+    lesson.cancelled_at = utcnow()
+    lesson.cancelled_by_user_id = current_user.id
+    _notify_course_people(db, lesson, "class_cancelled", f"{course.course_code} class cancelled",
+                          f"The class was cancelled. Reason: {body.reason}")
+    db.commit()
+    db.refresh(lesson)
+    _audit_class_action(db, current_user, "Cancel class", lesson, f"reason={body.reason}")
+    return lesson
+
+
+@router.post("/{id}/replacement", response_model=SessionResponse, status_code=201)
+def arrange_replacement_class(id: str, body: ReplacementClassCreate,
+                              db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    cancelled = get_or_404(db, ClassSession, id, "Cancelled class")
+    course = require_course_access(db, current_user, cancelled.course_id, "arrange a replacement class")
+    if cancelled.status != "cancelled":
+        raise HTTPException(status_code=400, detail="A replacement can only be arranged for a cancelled class")
+    existing_replacements = db.query(ClassSession).filter(
+        ClassSession.replacement_for_session_id == cancelled.id
+    ).all()
+    if has_active_replacement(existing_replacements):
+        raise HTTPException(status_code=400, detail="A replacement class has already been arranged")
+    replacement = ClassSession(
+        course_id=cancelled.course_id, class_group=cancelled.class_group,
+        scheduled_start=body.scheduled_start, scheduled_end=body.scheduled_end,
+        status="scheduled", is_open=False, opened_at=None, room=body.room,
+        semester=cancelled.semester, replacement_for_session_id=cancelled.id,
+    )
+    db.add(replacement)
+    db.flush()
+    _notify_course_people(db, replacement, "replacement_class", f"{course.course_code} replacement class",
+                          f"Replacement class arranged in {body.room} from {body.scheduled_start} to {body.scheduled_end}.")
+    db.commit()
+    db.refresh(replacement)
+    _audit_class_action(db, current_user, "Arrange replacement class", replacement,
+                        f"replaces={cancelled.id}; room={body.room}")
+    return replacement
+
+
+@router.get("/barred-list-readiness")
+def get_barred_list_readiness(course_id: str | None = None, db: Session = Depends(get_db),
+                              current_user: User = Depends(require_lecturer)):
+    query = db.query(ClassSession).filter(ClassSession.status == "needs_attention")
+    if course_id:
+        require_course_access(db, current_user, course_id, "check barred-list readiness")
+        query = query.filter(ClassSession.course_id == course_id)
+    elif current_user.role != "admin":
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+        query = query.filter(ClassSession.course_id.in_(my_course_ids(db, lecturer.id)))
+    return barred_list_readiness(query.all())
 
 # A GET /sessions/open used to sit here answering "which of my classes can I check into
 # right now?" — the same question /students/me/active-sessions answers, in a different
@@ -206,12 +399,19 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     if session.is_open:
         now_utc = utcnow()
         slots = get_course_group_slots(db, session.course_id, session.class_group)
-        scheduled_end = session_end_utc(session, slots)
+        checkin_state = session_checkin_state(session, slots, now_utc)
 
-        if now_utc > scheduled_end:
+        if checkin_state == "ended":
+            scheduled_end = session_end_utc(session, slots)
             session.is_open = False
             session.closed_at = scheduled_end
+            session.status = "completed"
             db.commit()
+        elif checkin_state == "before":
+            raise HTTPException(
+                status_code=403,
+                detail="Class has not started yet. Please wait until the scheduled time to check in.",
+            )
             
     if not session.is_open:
         raise HTTPException(status_code=400, detail="Attendance check-in has closed for this session")
@@ -231,8 +431,9 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
         raise HTTPException(status_code=400, detail="You have already registered attendance for this session")
 
     cfg = get_settings(db)
-    # Enforce student check-in start time limit — campus local, same reason as /open.
-    validate_student_checkin(db, session.course_id, session.class_group, campus_now())
+    # Legacy rows have no stored bounds, so retain their weekly timetable validator.
+    if session.scheduled_start is None or session.scheduled_end is None:
+        validate_student_checkin(db, session.course_id, session.class_group, campus_now())
 
     # 1. Liveness & Face Verification
     liveness_passed = body.liveness_passed
@@ -474,7 +675,10 @@ def get_course_sessions(course_id: str, db: Session = Depends(get_db), current_u
     require_course_access(db, current_user, course_id, "view sessions")
 
     # Fetch all sessions for this course, ordered by opened_at desc
-    sessions = db.query(ClassSession).filter(ClassSession.course_id == course_id).order_by(ClassSession.opened_at.desc()).all()
+    sessions = db.query(ClassSession).filter(
+        ClassSession.course_id == course_id,
+        ClassSession.status.in_(["open", "completed"]),
+    ).order_by(ClassSession.scheduled_start.desc().nullslast()).all()
     return sessions
 
 

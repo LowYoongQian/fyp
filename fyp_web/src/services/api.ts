@@ -209,6 +209,19 @@ export interface ActiveSession {
   closed_at?: string;
   is_open: boolean;
   class_group: string;
+  meeting_id?: number | string | null;
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
+  status?: 'scheduled' | 'open' | 'completed' | 'cancelled' | 'needs_attention';
+  room?: string | null;
+  cancel_reason?: string | null;
+  replacement_for_session_id?: number | string | null;
+}
+
+export interface TodayClass extends ActiveSession {
+  course_name: string;
+  course_code: string;
+  role: string;
 }
 
 export interface LecturerDashboardSummary {
@@ -433,6 +446,10 @@ export interface StudentActiveSession {
   course_code: string;
   class_group: string;
   opened_at: string | null;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  room: string | null;
+  is_replacement: boolean;
   is_open: boolean;
   already_checked_in: boolean;
 }
@@ -466,8 +483,26 @@ export const apiService = {
     return response.data;
   },
 
-  closeSession: async (sessionId: number | string) => {
-    const response = await api.post<ActiveSession>(`/sessions/${sessionId}/close`);
+  getTodayClasses: async (): Promise<TodayClass[]> => {
+    const response = await api.get<TodayClass[]>('/sessions/today');
+    return response.data;
+  },
+
+  openTodayClass: async (classId: number | string): Promise<ActiveSession> => {
+    const response = await api.post<ActiveSession>(`/sessions/${classId}/open`);
+    return response.data;
+  },
+
+  cancelClass: async (classId: number | string, reason: string): Promise<ActiveSession> => {
+    const response = await api.post<ActiveSession>(`/sessions/${classId}/cancel`, { reason });
+    return response.data;
+  },
+
+  arrangeReplacementClass: async (
+    classId: number | string,
+    data: { scheduled_start: string; scheduled_end: string; room: string },
+  ): Promise<ActiveSession> => {
+    const response = await api.post<ActiveSession>(`/sessions/${classId}/replacement`, data);
     return response.data;
   },
 

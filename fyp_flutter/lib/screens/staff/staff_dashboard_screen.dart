@@ -52,6 +52,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
   List<dynamic> myTimetable = [];
   List<dynamic> myActiveSessions = [];
+  List<dynamic> todayClasses = [];
   List<dynamic> myCourses = [];
   List<dynamic> courseSessionsHistory = [];
   bool isFetchingHistory = false;
@@ -98,6 +99,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         fetchTimetable(),
         fetchMyCourses(),
         fetchActiveSessions(),
+        fetchTodayClasses(),
       ]);
     } catch (e) {
       debugPrint("Error loading lecturer data: $e");
@@ -182,6 +184,360 @@ class _StaffDashboardState extends State<StaffDashboard> {
     if (mounted) setState(() => myTimetable = timetable);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_timetableCacheKey, jsonEncode(timetable));
+  }
+
+  Future<void> fetchTodayClasses() async {
+    final response = await http
+        .get(
+          Uri.parse("${widget.apiBaseUrl}/sessions/today"),
+          headers: {
+            "Authorization": "Bearer ${widget.authToken}",
+            "Content-Type": "application/json",
+          },
+        )
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode == 200 && mounted) {
+      setState(() => todayClasses = jsonDecode(response.body) as List<dynamic>);
+    }
+  }
+
+  Future<void> _openTodayClass(Map<String, dynamic> lesson) async {
+    final response = await http.post(
+      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/open"),
+      headers: {"Authorization": "Bearer ${widget.authToken}"},
+    );
+    if (!mounted) return;
+    if (response.statusCode == 200) {
+      await Future.wait([fetchTodayClasses(), fetchActiveSessions()]);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Class opened. Sign-in follows the scheduled class time.',
+          ),
+          backgroundColor: Color(0xFF059669),
+        ),
+      );
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error['detail'] ?? 'Could not open class.'),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    }
+  }
+
+  Future<void> _cancelTodayClass(Map<String, dynamic> lesson) async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel class'),
+        content: TextField(
+          controller: controller,
+          minLines: 3,
+          maxLines: 5,
+          maxLength: 1000,
+          decoration: const InputDecoration(labelText: 'Reason'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.length >= 3) Navigator.pop(dialogContext, value);
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            child: const Text('Cancel class'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (reason == null) return;
+    final response = await http.post(
+      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/cancel"),
+      headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+        "Content-Type": "application/json",
+      },
+      body: jsonEncode({'reason': reason}),
+    );
+    if (!mounted) return;
+    if (response.statusCode == 200) {
+      await fetchTodayClasses();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Class cancelled. Students and administrators were notified.',
+          ),
+          backgroundColor: Color(0xFF059669),
+        ),
+      );
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error['detail'] ?? 'Could not cancel class.')),
+      );
+    }
+  }
+
+  Future<void> _arrangeReplacement(Map<String, dynamic> lesson) async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().add(const Duration(days: 1)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 180)),
+    );
+    if (date == null || !mounted) return;
+    final startTime = await showTimePicker(
+      context: context,
+      initialTime: const TimeOfDay(hour: 9, minute: 0),
+    );
+    if (startTime == null || !mounted) return;
+    final endTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(
+        hour: (startTime.hour + 2).clamp(0, 23),
+        minute: startTime.minute,
+      ),
+    );
+    if (endTime == null || !mounted) return;
+    final start = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      startTime.hour,
+      startTime.minute,
+    );
+    final end = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      endTime.hour,
+      endTime.minute,
+    );
+    if (!end.isAfter(start)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('End time must be after start time.')),
+      );
+      return;
+    }
+    final roomController = TextEditingController();
+    final room = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Replacement room'),
+        content: TextField(
+          controller: roomController,
+          maxLength: 200,
+          decoration: const InputDecoration(labelText: 'Room'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = roomController.text.trim();
+              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Arrange class'),
+          ),
+        ],
+      ),
+    );
+    roomController.dispose();
+    if (room == null) return;
+    final response = await http.post(
+      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/replacement"),
+      headers: {
+        "Authorization": "Bearer ${widget.authToken}",
+        "Content-Type": "application/json",
+      },
+      body: jsonEncode({
+        'scheduled_start': start.toUtc().toIso8601String(),
+        'scheduled_end': end.toUtc().toIso8601String(),
+        'room': room,
+      }),
+    );
+    if (!mounted) return;
+    if (response.statusCode == 201) {
+      await fetchTodayClasses();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Replacement class arranged. Students and administrators were notified.',
+          ),
+          backgroundColor: Color(0xFF059669),
+        ),
+      );
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error['detail'] ?? 'Could not arrange replacement class.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Widget _todayClassesSection(
+    Color primaryTextColor,
+    Color secondaryTextColor,
+    bool isDarkMode,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                "Today's Classes",
+                style: GoogleFonts.spaceGrotesk(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: primaryTextColor,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Refresh classes',
+              onPressed: fetchTodayClasses,
+              icon: const Icon(Icons.refresh, size: 18),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        if (todayClasses.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              'No classes scheduled today.',
+              style: GoogleFonts.inter(fontSize: 12, color: secondaryTextColor),
+            ),
+          )
+        else
+          ...todayClasses.map((raw) {
+            final lesson = Map<String, dynamic>.from(raw as Map);
+            final status = (lesson['status'] ?? 'scheduled').toString();
+            final start = DateTime.tryParse(
+              (lesson['scheduled_start'] ?? '').toString(),
+            )?.toLocal();
+            final end = DateTime.tryParse(
+              (lesson['scheduled_end'] ?? '').toString(),
+            )?.toLocal();
+            final time = start == null || end == null
+                ? ''
+                : '${TimeOfDay.fromDateTime(start).format(context)} - ${TimeOfDay.fromDateTime(end).format(context)}';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                border: Border.all(
+                  color: isDarkMode
+                      ? const Color(0xFF334155)
+                      : const Color(0xFFE2E8F0),
+                ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${lesson['course_code']} · ${lesson['role']} ${lesson['class_group'] == 'All' ? '' : lesson['class_group']}',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: primaryTextColor,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        status.replaceAll('_', ' ').toUpperCase(),
+                        style: GoogleFonts.inter(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: secondaryTextColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${lesson['course_name']}',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: primaryTextColor,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '$time · ${lesson['room'] ?? 'Room TBA'}',
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      color: secondaryTextColor,
+                    ),
+                  ),
+                  if (lesson['cancel_reason'] != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '${lesson['cancel_reason']}',
+                      style: GoogleFonts.inter(
+                        fontSize: 10,
+                        color: const Color(0xFFDC2626),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (status == 'scheduled')
+                        FilledButton.icon(
+                          onPressed: () => _openTodayClass(lesson),
+                          icon: const Icon(Icons.play_arrow, size: 16),
+                          label: const Text('Open Class'),
+                        ),
+                      if (status == 'scheduled' || status == 'needs_attention')
+                        OutlinedButton.icon(
+                          onPressed: () => _cancelTodayClass(lesson),
+                          icon: const Icon(Icons.event_busy, size: 16),
+                          label: const Text('Cancel Class'),
+                        ),
+                      if (status == 'cancelled')
+                        OutlinedButton.icon(
+                          onPressed: () => _arrangeReplacement(lesson),
+                          icon: const Icon(Icons.event_repeat, size: 16),
+                          label: const Text('Arrange Replacement'),
+                        ),
+                      if (status == 'open')
+                        const Chip(label: Text('Sign-in open')),
+                      if (status == 'completed')
+                        const Chip(label: Text('Completed')),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
   }
 
   Future<void> _pollDashboardData() async {
@@ -614,32 +970,6 @@ class _StaffDashboardState extends State<StaffDashboard> {
       'statusText': '🟢 Ready to Launch',
       'hintText': 'Unlocked for check-in.',
     };
-  }
-
-  Future<void> handleCloseSession(dynamic sessionId) async {
-    try {
-      final uri = Uri.parse(
-        "${widget.apiBaseUrl}/attendance/close-session/$sessionId",
-      );
-      final res = await http.post(
-        uri,
-        headers: {"Authorization": "Bearer ${widget.authToken}"},
-      );
-
-      if (res.statusCode == 200) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Attendance gate closed."),
-              backgroundColor: Color(0xFF059669),
-            ),
-          );
-        }
-        await fetchActiveSessions();
-      }
-    } catch (e) {
-      debugPrint("Error closing session: $e");
-    }
   }
 
   Map<String, dynamic>? _getUpcomingSlot() {
@@ -1514,6 +1844,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                     ),
                                   ],
                                 ),
+                              ),
+                              const SizedBox(height: 20),
+
+                              _todayClassesSection(
+                                primaryTextColor,
+                                secondaryTextColor,
+                                isDarkMode,
                               ),
                               const SizedBox(height: 20),
 
@@ -2814,44 +3151,6 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                 alpha: 0.5,
                                                               ),
                                                         ),
-                                                        shape: RoundedRectangleBorder(
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                8,
-                                                              ),
-                                                        ),
-                                                        textStyle:
-                                                            GoogleFonts.inter(
-                                                              fontSize: 11,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Expanded(
-                                                    child: ElevatedButton.icon(
-                                                      onPressed: () =>
-                                                          handleCloseSession(
-                                                            session['id'],
-                                                          ),
-                                                      icon: const Icon(
-                                                        Icons
-                                                            .stop_circle_outlined,
-                                                        size: 14,
-                                                      ),
-                                                      label: const Text(
-                                                        "Close Gate",
-                                                      ),
-                                                      style: ElevatedButton.styleFrom(
-                                                        backgroundColor:
-                                                            const Color(
-                                                              0xFFDC2626,
-                                                            ),
-                                                        foregroundColor:
-                                                            Colors.white,
                                                         shape: RoundedRectangleBorder(
                                                           borderRadius:
                                                               BorderRadius.circular(

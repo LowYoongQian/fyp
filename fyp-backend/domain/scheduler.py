@@ -71,6 +71,7 @@ def calculate_schedule(db: Session) -> dict:
             "day": r.day, "start": r.start, "end": r.end, "room": r.room,
             "role": r.role, "course_id": r.course_id,
             "assignment_id": r.assignment_id, "class_group": r.class_group,
+            "meeting_id": r.id,
         }
         for r in rows
     }
@@ -135,12 +136,17 @@ def slot_on_day(slots: list, local_date) -> dict | None:
 
 
 def session_window_utc(session, slots: list) -> tuple:
-    """(start, end) of this session's timetabled class, as naive UTC.
+    """(start, end) of this class, as naive UTC.
 
-    With no slot for the day, start is None and end falls back to two hours after the
-    session opened — the default the check-in guard has always applied to an
-    unscheduled session. Callers that need a start in that case decide their own rule.
+    New lifecycle rows store their exact bounds, including replacements that may run
+    outside the weekly timetable. Legacy rows fall back to their timetable slot; with
+    no matching slot, their end remains two hours after opening.
     """
+    scheduled_start = getattr(session, "scheduled_start", None)
+    scheduled_end = getattr(session, "scheduled_end", None)
+    if scheduled_start is not None and scheduled_end is not None:
+        return scheduled_start, scheduled_end
+
     offset = local_offset()
     opened_local = session.opened_at + offset
     slot = slot_on_day(slots, opened_local.date())
@@ -152,8 +158,18 @@ def session_window_utc(session, slots: list) -> tuple:
 
 
 def session_end_utc(session, slots: list) -> datetime:
-    """When this session's class is timetabled to finish, as naive UTC."""
+    """When this class finishes, as naive UTC."""
     return session_window_utc(session, slots)[1]
+
+
+def session_checkin_state(session, slots: list, now_utc: datetime) -> str:
+    """Return whether check-in is before, inside, or after the class window."""
+    scheduled_start, scheduled_end = session_window_utc(session, slots)
+    if scheduled_start is not None and now_utc < scheduled_start:
+        return "before"
+    if now_utc >= scheduled_end:
+        return "ended"
+    return "open"
 
 
 def _all_slots():
