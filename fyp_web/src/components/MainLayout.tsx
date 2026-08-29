@@ -84,7 +84,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     sessionStorage.removeItem('auth_token');
     sessionStorage.removeItem('auth_user');
     sessionStorage.removeItem('auth_session_expires_at');
-    window.history.replaceState({}, '', window.location.pathname);
+    window.history.replaceState({}, '', '/');
     clearApiCache();
     setIsLoggingOut(true);
     setIsProfileMenuOpen(false);

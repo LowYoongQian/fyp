@@ -4,7 +4,7 @@ from sqlalchemy import (
     ForeignKey, Date, DateTime, LargeBinary, Text, func, UniqueConstraint,
     CheckConstraint, Index,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
@@ -39,6 +39,24 @@ class User(Base):
     
     student               = relationship("Student", back_populates="user", uselist=False)
     lecturer              = relationship("Lecturer", back_populates="user", uselist=False)
+
+
+class AIChatSession(Base):
+    __tablename__ = "ai_chat_sessions"
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id    = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    context_state = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
+
+class AIChatMessage(Base):
+    __tablename__ = "ai_chat_messages"
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(UUID(as_uuid=False), ForeignKey("ai_chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role       = Column(String(16), nullable=False)
+    content    = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
 
 # Programmes table
 class Programme(Base):

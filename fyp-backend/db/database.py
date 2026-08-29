@@ -1,9 +1,7 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
-
-load_dotenv()
+import config  # noqa: F401  # loads fyp-backend/.env once for every entry point
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

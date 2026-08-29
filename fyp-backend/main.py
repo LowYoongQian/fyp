@@ -11,6 +11,7 @@ import hashlib
 import time
 from collections import OrderedDict
 
+import config  # Load and validate backend environment variables once at startup.
 from domain.announcements import announcement_dict
 from domain.audit import reset_audit_client_ip, set_audit_client_ip
 from domain.security_settings import is_enabled

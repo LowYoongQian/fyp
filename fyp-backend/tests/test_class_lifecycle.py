@@ -184,6 +184,54 @@ def test_cancelled_replacement_does_not_block_arranging_another_one():
     assert has_active_replacement([SimpleNamespace(status="completed")]) is True
 
 
+@pytest.mark.parametrize(
+    ("offset", "status", "expected"),
+    [
+        (timedelta(minutes=-15), "scheduled", "before"),
+        (timedelta(0), "scheduled", "started"),
+        (timedelta(minutes=10), "scheduled", "not_opened"),
+        (timedelta(minutes=10), "open", None),
+        (timedelta(minutes=10), "cancelled", None),
+    ],
+)
+def test_reminders_cover_pre_start_start_and_forgotten_gate(offset, status, expected):
+    """A lecturer gets useful checkpoints without nagging after opening or cancellation."""
+    from domain.class_lifecycle import reminder_stage
+
+    start = datetime(2026, 8, 21, 6, 0)
+    assert reminder_stage(start, start + timedelta(hours=2), status, start + offset) == expected
+
+
+def test_class_held_resolves_review_without_creating_a_replacement():
+    """Forgetting the gate must not turn a class that happened into a cancellation."""
+    from domain.class_lifecycle import mark_class_held
+
+    start = datetime(2026, 8, 21, 6, 0)
+    end = start + timedelta(hours=2)
+    lesson = SimpleNamespace(
+        status="needs_attention", is_open=False, opened_at=None, closed_at=None,
+        scheduled_start=start, scheduled_end=end, opened_by_user_id=None,
+    )
+
+    mark_class_held(lesson, "lecturer-1")
+
+    assert lesson.status == "completed"
+    assert lesson.opened_at == start
+    assert lesson.closed_at == end
+    assert lesson.opened_by_user_id == "lecturer-1"
+
+
+def test_admin_escalation_waits_for_24_hours_of_unresolved_review():
+    """Admins should see persistent omissions, not every class the instant it ends."""
+    from domain.class_lifecycle import needs_admin_escalation
+
+    end = datetime(2026, 8, 21, 8, 0)
+    lesson = SimpleNamespace(status="needs_attention", scheduled_end=end)
+
+    assert needs_admin_escalation(lesson, end + timedelta(hours=23, minutes=59)) is False
+    assert needs_admin_escalation(lesson, end + timedelta(hours=24)) is True
+
+
 def test_replacement_attention_resolves_original_meeting_for_lecturer_notification():
     from domain.session_sync import source_meeting_id
 
@@ -200,3 +248,13 @@ def test_scheduled_classes_have_no_manual_close_route():
     routes = {(method, route.path) for route in app.routes for method in getattr(route, "methods", set())}
 
     assert ("POST", "/sessions/{id}/close") not in routes
+
+
+def test_missed_classes_have_review_and_held_recovery_routes():
+    """A forgotten gate must remain discoverable and resolvable after class day."""
+    from main import app
+
+    routes = {(method, route.path) for route in app.routes for method in getattr(route, "methods", set())}
+
+    assert ("GET", "/sessions/needs-attention") in routes
+    assert ("POST", "/sessions/{id}/held") in routes

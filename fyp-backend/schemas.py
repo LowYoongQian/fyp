@@ -76,13 +76,34 @@ class TokenResponse(BaseModel):
 
 # LLM Chatbot Schemas
 class QueryRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=2000)
+    session_id: Optional[str] = Field(default=None, max_length=36)
+
+    @field_validator("question")
+    @classmethod
+    def question_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message cannot be empty")
+        return value
+
+    @field_validator("session_id")
+    @classmethod
+    def session_id_must_be_uuid(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        import uuid
+        try:
+            return str(uuid.UUID(value))
+        except ValueError as exc:
+            raise ValueError("Invalid chat session") from exc
 
 class QueryResponse(BaseModel):
     answer: str
     sql_used: Optional[str] = None
     success: bool
     row_count: int = 0
+    session_id: Optional[str] = None
 
 # Generic Response
 class MessageResponse(BaseModel):

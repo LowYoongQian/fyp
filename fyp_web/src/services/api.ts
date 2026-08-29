@@ -222,6 +222,7 @@ export interface TodayClass extends ActiveSession {
   course_name: string;
   course_code: string;
   role: string;
+  escalated?: boolean;
 }
 
 export interface LecturerDashboardSummary {
@@ -488,8 +489,18 @@ export const apiService = {
     return response.data;
   },
 
+  getClassesNeedingAttention: async (): Promise<TodayClass[]> => {
+    const response = await api.get<TodayClass[]>('/sessions/needs-attention');
+    return response.data;
+  },
+
   openTodayClass: async (classId: number | string): Promise<ActiveSession> => {
     const response = await api.post<ActiveSession>(`/sessions/${classId}/open`);
+    return response.data;
+  },
+
+  markClassHeld: async (classId: number | string): Promise<ActiveSession> => {
+    const response = await api.post<ActiveSession>(`/sessions/${classId}/held`);
     return response.data;
   },
 
@@ -529,8 +540,27 @@ export const apiService = {
     return response.data;
   },
 
-  queryNatural: async (question: string) => {
-    const response = await api.post('/query/natural', { question });
+  queryNatural: async (question: string, sessionId?: string) => {
+    const response = await api.post('/query/natural', {
+      question,
+      session_id: sessionId || null,
+    });
+    return response.data;
+  },
+
+  getNaturalHistory: async (options?: { before?: string; sessionId?: string; limit?: number }): Promise<{
+    session_id: string | null;
+    messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; created_at: string }>;
+    has_more: boolean;
+    next_cursor: string | null;
+  }> => {
+    const response = await api.get('/query/history', {
+      params: {
+        before: options?.before,
+        session_id: options?.sessionId,
+        limit: options?.limit ?? 30,
+      },
+    });
     return response.data;
   },
 

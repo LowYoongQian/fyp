@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { swalSuccess } from '../../utils/swal';
-import Swal from 'sweetalert2';
 import { ShimmerTableRows } from '../../components/Shimmer';
 import { Pet } from '../../components/Pet';
 import { readRecentStaffPages, STAFF_PAGE_LINKS, type StaffPageId } from '../../utils/staffRecentPages';
@@ -30,8 +29,8 @@ import {
   Bell,
   Mail,
   Check,
-  Clock
-  , CalendarPlus, Ban
+  Clock,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface LecturerDashboardProps {
@@ -44,9 +43,10 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
   const [enrolments, setEnrolments] = useState<any[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
   const [todayClasses, setTodayClasses] = useState<TodayClass[]>([]);
-  const [classActionId, setClassActionId] = useState<string | null>(null);
+  const [classesNeedingAttention, setClassesNeedingAttention] = useState<TodayClass[]>([]);
   const [dashboardSummary, setDashboardSummary] = useState<LecturerDashboardSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [overviewLoading, setOverviewLoading] = useState(true);
   
   // Create Session Form
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
@@ -192,97 +192,30 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
       .then(setTodayClasses)
       .catch((err) => console.error('Failed to load today classes:', err));
 
+    const attentionRequest = apiService.getClassesNeedingAttention()
+      .then(setClassesNeedingAttention)
+      .catch((err) => console.error('Failed to load classes needing review:', err));
+
     const coursesList = await coursesRequest;
     await Promise.allSettled([
       enrolmentsRequest,
       announcementsRequest,
       summaryRequest,
       todayClassesRequest,
+      attentionRequest,
       fetchActiveSessions(coursesList),
     ]);
+    setOverviewLoading(false);
   };
 
-  const refreshClasses = async () => {
-    const [today, active] = await Promise.all([
+  const refreshClassOverview = async () => {
+    const [today, attention] = await Promise.all([
       apiService.getTodayClasses(),
-      apiService.getActiveSessions(),
+      apiService.getClassesNeedingAttention(),
     ]);
     setTodayClasses(today);
-    setActiveSessions(active);
-  };
-
-  const openTodayClass = async (lesson: TodayClass) => {
-    setClassActionId(String(lesson.id));
-    try {
-      const opened = await apiService.openTodayClass(lesson.id);
-      await refreshClasses();
-      handleStartMonitor(opened.id);
-      await swalSuccess('Class opened', 'Students can check in from the scheduled start time.');
-    } catch (err: any) {
-      await Swal.fire('Could not open class', err.response?.data?.detail || 'Please try again.', 'error');
-    } finally {
-      setClassActionId(null);
-    }
-  };
-
-  const cancelTodayClass = async (lesson: TodayClass) => {
-    const result = await Swal.fire({
-      title: 'Cancel class',
-      input: 'textarea',
-      inputLabel: `${lesson.course_code} cancellation reason`,
-      inputPlaceholder: 'Reason for cancellation',
-      inputAttributes: { maxlength: '1000' },
-      showCancelButton: true,
-      confirmButtonText: 'Cancel class',
-      confirmButtonColor: '#dc2626',
-      inputValidator: value => value.trim().length < 3 ? 'Enter at least 3 characters.' : undefined,
-    });
-    if (!result.isConfirmed) return;
-    setClassActionId(String(lesson.id));
-    try {
-      await apiService.cancelClass(lesson.id, result.value.trim());
-      await refreshClasses();
-      await swalSuccess('Class cancelled', 'Students and administrators were notified.');
-    } catch (err: any) {
-      await Swal.fire('Could not cancel class', err.response?.data?.detail || 'Please try again.', 'error');
-    } finally {
-      setClassActionId(null);
-    }
-  };
-
-  const arrangeReplacement = async (lesson: TodayClass) => {
-    const result = await Swal.fire({
-      title: 'Arrange replacement class',
-      html: `
-        <div class="grid gap-3 text-left">
-          <label class="text-sm">Start<input id="replacement-start" type="datetime-local" class="swal2-input !m-0 !w-full" /></label>
-          <label class="text-sm">End<input id="replacement-end" type="datetime-local" class="swal2-input !m-0 !w-full" /></label>
-          <label class="text-sm">Room<input id="replacement-room" class="swal2-input !m-0 !w-full" maxlength="200" /></label>
-        </div>`,
-      showCancelButton: true,
-      confirmButtonText: 'Arrange class',
-      preConfirm: () => {
-        const start = (document.getElementById('replacement-start') as HTMLInputElement).value;
-        const end = (document.getElementById('replacement-end') as HTMLInputElement).value;
-        const room = (document.getElementById('replacement-room') as HTMLInputElement).value.trim();
-        if (!start || !end || !room || new Date(end) <= new Date(start)) {
-          Swal.showValidationMessage('Enter a valid start, end and room.');
-          return false;
-        }
-        return { scheduled_start: new Date(start).toISOString(), scheduled_end: new Date(end).toISOString(), room };
-      },
-    });
-    if (!result.isConfirmed || !result.value) return;
-    setClassActionId(String(lesson.id));
-    try {
-      await apiService.arrangeReplacementClass(lesson.id, result.value);
-      await refreshClasses();
-      await swalSuccess('Replacement arranged', 'Students and administrators were notified.');
-    } catch (err: any) {
-      await Swal.fire('Could not arrange class', err.response?.data?.detail || 'Please try again.', 'error');
-    } finally {
-      setClassActionId(null);
-    }
+    setClassesNeedingAttention(attention);
+    await fetchActiveSessions();
   };
 
   const fetchActiveSessions = async (coursesList?: Course[]) => {
@@ -406,66 +339,8 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
   const joinedLabel = profile?.joined_at
     ? new Date(profile.joined_at).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
     : null;
-
   return (
     <div className="space-y-6">
-      <section className="border-y border-slate-200 bg-white px-4 py-5 sm:px-6">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">Today's Classes</h2>
-            <p className="mt-1 text-xs text-slate-500">{new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-          </div>
-          <button onClick={refreshClasses} className="p-2 text-slate-500 hover:text-slate-900" title="Refresh today's classes">
-            <RefreshCw className="h-4 w-4" />
-          </button>
-        </div>
-        {todayClasses.length === 0 ? (
-          <p className="py-4 text-sm text-slate-500">No classes scheduled today.</p>
-        ) : (
-          <div className="divide-y divide-slate-200 border-y border-slate-200">
-            {todayClasses.map(lesson => {
-              const busy = classActionId === String(lesson.id);
-              const start = lesson.scheduled_start ? new Date(lesson.scheduled_start) : null;
-              const end = lesson.scheduled_end ? new Date(lesson.scheduled_end) : null;
-              return (
-                <div key={String(lesson.id)} className="grid gap-3 py-4 md:grid-cols-[1fr_auto] md:items-center">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs font-bold text-brand-blue">{lesson.course_code}</span>
-                      <span className="text-xs font-semibold text-slate-700">{lesson.role} {lesson.class_group !== 'All' ? lesson.class_group : ''}</span>
-                      <span className="rounded px-2 py-0.5 text-[10px] font-bold uppercase bg-slate-100 text-slate-600">{lesson.status?.replace('_', ' ')}</span>
-                    </div>
-                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">{lesson.course_name}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {start?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–{end?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {lesson.room || 'Room TBA'}
-                    </p>
-                    {lesson.cancel_reason && <p className="mt-1 text-xs text-red-600">{lesson.cancel_reason}</p>}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {lesson.status === 'scheduled' && (
-                      <button disabled={busy} onClick={() => openTodayClass(lesson)} className="inline-flex items-center gap-2 rounded-md bg-brand-blue px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
-                        <Play className="h-4 w-4" /> Open Class
-                      </button>
-                    )}
-                    {(lesson.status === 'scheduled' || lesson.status === 'needs_attention') && (
-                      <button disabled={busy} onClick={() => cancelTodayClass(lesson)} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-50">
-                        <Ban className="h-4 w-4" /> Cancel Class
-                      </button>
-                    )}
-                    {lesson.status === 'cancelled' && (
-                      <button disabled={busy} onClick={() => arrangeReplacement(lesson)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50">
-                        <CalendarPlus className="h-4 w-4" /> Arrange Replacement
-                      </button>
-                    )}
-                    {lesson.status === 'open' && <span className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700"><Clock className="h-4 w-4" /> Sign-in open</span>}
-                    {lesson.status === 'completed' && <span className="inline-flex items-center gap-2 text-xs font-bold text-slate-600"><Check className="h-4 w-4" /> Completed</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
       {/* Top Section Row (Profile Card, Stats grid, Shortcuts list) */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         
@@ -592,7 +467,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
         </div>
 
         {/* Shortcuts Card */}
-        <div className="xl:col-span-3 uipro-card bg-white p-5 flex flex-col justify-between">
+        <div className="xl:col-span-3 uipro-card bg-white p-5">
           <div className="pb-2.5 border-b border-slate-100 mb-3">
             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
               <Sparkles className="h-4 w-4 text-brand-blue" />
@@ -600,7 +475,11 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
             </h4>
           </div>
           <div className="grid grid-cols-1 gap-2">
-            {recentShortcuts.length > 0 ? recentShortcuts.map(page => (
+            {!user ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                <div key={`shortcut-skeleton-${i}`} className="h-8 w-full rounded-xl shimmer-placeholder" />
+              ))
+            ) : recentShortcuts.length > 0 ? recentShortcuts.map(page => (
               <button
                 key={page.id}
                 type="button"
@@ -1246,61 +1125,133 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
             </div>
           </div>
 
-          {/* Currently Active Sessions List */}
-          <div className="uipro-card bg-white/75 p-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+          {/* Compact read-only class overview */}
+          <div className="uipro-card min-w-0 bg-white p-5">
+            <div className="mb-3 flex items-center justify-between border-b border-slate-200 pb-3">
+              <h4 className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
                 <Layers className="h-4 w-4 text-brand-blue" />
-                Active Classes List
+                Class Overview
               </h4>
               <button
-                onClick={() => fetchActiveSessions()}
-                className="p-1 hover:bg-slate-50 text-slate-400 hover:text-slate-700 rounded transition-all cursor-pointer"
+                onClick={refreshClassOverview}
+                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-transparent text-slate-400 transition-colors hover:border-slate-200 hover:bg-slate-50 hover:text-brand-blue"
+                title="Refresh class overview"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
             </div>
 
-            <div className="space-y-3 max-h-[200px] overflow-y-auto pr-1">
-              {activeSessions.length === 0 ? (
-                <div className="py-6 text-center text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                  No active sessions
+            <div className="mb-3 grid grid-cols-3 gap-2">
+              <div className="flex h-14 flex-col items-center justify-center rounded-xl border border-slate-200 bg-slate-50/80 text-center">
+                {overviewLoading ? (
+                  <div className="h-4 w-6 rounded shimmer-placeholder" />
+                ) : (
+                  <div className="text-sm font-extrabold text-slate-800">{activeSessions.length}</div>
+                )}
+                <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live
                 </div>
-              ) : (
-                activeSessions.map(session => (
-                  <div
-                    key={session.id}
-                    className={`p-3 rounded-xl border transition-all flex justify-between items-center ${
-                      monitoredSessionId === session.id
-                        ? 'bg-brand-blue-light/25 border-brand-blue/20'
-                        : 'bg-slate-50/50 border-slate-100 hover:border-slate-200'
-                    }`}
-                  >
-                    <div className="min-w-0">
+              </div>
+              <div className="flex h-14 flex-col items-center justify-center rounded-xl border border-slate-200 bg-slate-50/80 text-center">
+                {overviewLoading ? (
+                  <div className="h-4 w-6 rounded shimmer-placeholder" />
+                ) : (
+                  <div className="text-sm font-extrabold text-slate-800">{todayClasses.length}</div>
+                )}
+                <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                  <span className="h-1.5 w-1.5 rounded-full bg-brand-blue" /> Today
+                </div>
+              </div>
+              <div className="flex h-14 flex-col items-center justify-center rounded-xl border border-slate-200 bg-slate-50/80 text-center">
+                {overviewLoading ? (
+                  <div className="h-4 w-6 rounded shimmer-placeholder" />
+                ) : (
+                  <div className="text-sm font-extrabold text-slate-800">{classesNeedingAttention.length}</div>
+                )}
+                <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wide text-slate-500">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Review
+                </div>
+              </div>
+            </div>
+
+            <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+              {overviewLoading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={`overview-skeleton-${i}`} className="flex min-h-[68px] items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[8.5px] font-bold text-brand-blue font-mono tracking-wider bg-brand-blue-light px-1.5 py-0.2 rounded-md">
-                          {session.course_code}
-                        </span>
-                        <span className="text-[8.5px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded-md">
-                          {session.class_group}
-                        </span>
+                        <div className="h-2.5 w-14 rounded shimmer-placeholder" />
+                        <div className="h-3.5 w-16 rounded-md shimmer-placeholder" />
                       </div>
-                      <h5 className="text-[11px] font-extrabold text-slate-800 truncate mt-1">{session.course_name}</h5>
+                      <div className="h-3 w-3/4 rounded shimmer-placeholder" />
+                      <div className="h-2 w-1/3 rounded shimmer-placeholder" />
                     </div>
-                    <div className="flex gap-1 shrink-0 ml-2">
-                      <button
-                        onClick={() => handleStartMonitor(session.id)}
-                        className={`py-1 px-2.5 rounded text-[10px] font-bold cursor-pointer transition-all ${
-                          monitoredSessionId === session.id
-                            ? 'bg-brand-blue text-white shadow-xs'
-                            : 'bg-white border border-slate-200 text-slate-650 hover:bg-slate-50'
-                        }`}
-                      >
-                        {monitoredSessionId === session.id ? 'Live' : 'View'}
-                      </button>
-                    </div>
+                    <div className="h-8 min-w-[54px] shrink-0 rounded-lg shimmer-placeholder" />
                   </div>
                 ))
+              ) : (
+                <>
+              {activeSessions.map(session => (
+                <div key={`active-${session.id}`} className="flex min-h-[68px] items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors hover:border-brand-blue/25 hover:bg-slate-50/60">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-[9px] font-extrabold text-brand-blue">{session.course_code}</span>
+                      <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[8px] font-extrabold uppercase text-emerald-700">Live</span>
+                    </div>
+                    <p className="mt-1 truncate text-[11px] font-extrabold text-slate-800">{session.course_name}</p>
+                    <p className="mt-0.5 text-[9px] font-semibold text-slate-500">{session.class_group}</p>
+                  </div>
+                  <button onClick={() => handleStartMonitor(session.id)} className="inline-flex h-8 min-w-[54px] shrink-0 items-center justify-center rounded-lg border border-brand-blue/20 bg-brand-blue-light/30 px-3 text-[9px] font-extrabold text-brand-blue transition-colors hover:border-brand-blue/35 hover:bg-brand-blue-light/60">
+                    View
+                  </button>
+                </div>
+              ))}
+
+              {todayClasses
+                .filter(lesson => !activeSessions.some(session => String(session.id) === String(lesson.id)))
+                .slice(0, Math.max(0, 2 - activeSessions.length))
+                .map(lesson => {
+                  const start = lesson.scheduled_start ? new Date(lesson.scheduled_start) : null;
+                  return (
+                    <div key={`today-${lesson.id}`} className="flex min-h-[68px] items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors hover:border-brand-blue/25 hover:bg-slate-50/60">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[9px] font-extrabold text-brand-blue">{lesson.course_code}</span>
+                          <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[8px] font-extrabold uppercase text-blue-600">{lesson.status?.replace('_', ' ')}</span>
+                        </div>
+                        <p className="mt-1 truncate text-[11px] font-extrabold text-slate-800">{lesson.course_name}</p>
+                        <p className="mt-0.5 text-[9px] font-semibold text-slate-500">
+                          {start?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {lesson.room || 'Room TBA'}
+                        </p>
+                      </div>
+                      <button onClick={() => onNavigate?.('timetable')} className="inline-flex h-8 min-w-[54px] shrink-0 items-center justify-center rounded-lg border border-brand-blue/20 bg-brand-blue-light/30 px-3 text-[9px] font-extrabold text-brand-blue transition-colors hover:border-brand-blue/35 hover:bg-brand-blue-light/60">
+                        View
+                      </button>
+                    </div>
+                  );
+                })}
+
+              {classesNeedingAttention.length > 0 && (
+                <div className="flex min-h-[68px] items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors hover:border-brand-blue/25 hover:bg-slate-50/60">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50">
+                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-extrabold text-slate-800">{classesNeedingAttention.length} classes need review</p>
+                      <p className="mt-0.5 text-[9px] font-semibold text-slate-500">Open Attendance for details.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => onNavigate?.('attendance')} className="inline-flex h-8 min-w-[54px] shrink-0 items-center justify-center rounded-lg border border-brand-blue/20 bg-brand-blue-light/30 px-3 text-[9px] font-extrabold text-brand-blue transition-colors hover:border-brand-blue/35 hover:bg-brand-blue-light/60">
+                    View
+                  </button>
+                </div>
+              )}
+
+              {activeSessions.length === 0 && todayClasses.length === 0 && classesNeedingAttention.length === 0 && (
+                <div className="py-6 text-center text-xs font-semibold text-slate-400">No class updates</div>
+              )}
+                </>
               )}
             </div>
           </div>

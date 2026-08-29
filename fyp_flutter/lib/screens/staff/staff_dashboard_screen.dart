@@ -53,6 +53,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
   List<dynamic> myTimetable = [];
   List<dynamic> myActiveSessions = [];
   List<dynamic> todayClasses = [];
+  List<dynamic> classesNeedingAttention = [];
   List<dynamic> myCourses = [];
   List<dynamic> courseSessionsHistory = [];
   bool isFetchingHistory = false;
@@ -100,6 +101,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         fetchMyCourses(),
         fetchActiveSessions(),
         fetchTodayClasses(),
+        fetchClassesNeedingAttention(),
       ]);
     } catch (e) {
       debugPrint("Error loading lecturer data: $e");
@@ -201,6 +203,24 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
+  Future<void> fetchClassesNeedingAttention() async {
+    final response = await http
+        .get(
+          Uri.parse("${widget.apiBaseUrl}/sessions/needs-attention"),
+          headers: {
+            "Authorization": "Bearer ${widget.authToken}",
+            "Content-Type": "application/json",
+          },
+        )
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode == 200 && mounted) {
+      setState(
+        () => classesNeedingAttention =
+            jsonDecode(response.body) as List<dynamic>,
+      );
+    }
+  }
+
   Future<void> _openTodayClass(Map<String, dynamic> lesson) async {
     final response = await http.post(
       Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/open"),
@@ -271,11 +291,70 @@ class _StaffDashboardState extends State<StaffDashboard> {
     );
     if (!mounted) return;
     if (response.statusCode == 200) {
-      await fetchTodayClasses();
+      await Future.wait([fetchTodayClasses(), fetchClassesNeedingAttention()]);
+      if (!mounted) return;
+      final addReplacement = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Class cancelled'),
+          content: const Text('Add a replacement class now?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Done'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              icon: const Icon(Icons.event_repeat),
+              label: const Text('Add Replacement'),
+            ),
+          ],
+        ),
+      );
+      if (addReplacement == true && mounted) {
+        await _arrangeReplacement(lesson);
+      }
+    } else {
+      final error = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error['detail'] ?? 'Could not cancel class.')),
+      );
+    }
+  }
+
+  Future<void> _markClassHeld(Map<String, dynamic> lesson) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Class held?'),
+        content: const Text(
+          'This completes the class and lets you correct student attendance.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Back'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text('Class Held'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final response = await http.post(
+      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/held"),
+      headers: {"Authorization": "Bearer ${widget.authToken}"},
+    );
+    if (!mounted) return;
+    if (response.statusCode == 200) {
+      await Future.wait([fetchTodayClasses(), fetchClassesNeedingAttention()]);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Class cancelled. Students and administrators were notified.',
+            'Class completed. Open Attendance to correct student records.',
           ),
           backgroundColor: Color(0xFF059669),
         ),
@@ -283,7 +362,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
     } else {
       final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error['detail'] ?? 'Could not cancel class.')),
+        SnackBar(
+          content: Text(error['detail'] ?? 'Could not resolve class.'),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
       );
     }
   }
@@ -520,6 +602,15 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           icon: const Icon(Icons.event_busy, size: 16),
                           label: const Text('Cancel Class'),
                         ),
+                      if (status == 'needs_attention')
+                        FilledButton.icon(
+                          onPressed: () => _markClassHeld(lesson),
+                          icon: const Icon(
+                            Icons.check_circle_outline,
+                            size: 16,
+                          ),
+                          label: const Text('Class Held'),
+                        ),
                       if (status == 'cancelled')
                         OutlinedButton.icon(
                           onPressed: () => _arrangeReplacement(lesson),
@@ -540,11 +631,142 @@ class _StaffDashboardState extends State<StaffDashboard> {
     );
   }
 
+  Widget _classesNeedingReviewSection(
+    Color primaryTextColor,
+    Color secondaryTextColor,
+    bool isDarkMode,
+  ) {
+    final todayIds = todayClasses.map((item) => '${item['id']}').toSet();
+    final reviews = classesNeedingAttention
+        .where((item) => !todayIds.contains('${item['id']}'))
+        .toList();
+    if (reviews.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDarkMode ? const Color(0xFF292619) : const Color(0xFFFFFBEB),
+        border: Border.all(
+          color: isDarkMode ? const Color(0xFF713F12) : const Color(0xFFFDE68A),
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                size: 20,
+                color: Color(0xFFD97706),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Classes Need Review',
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: primaryTextColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Confirm classes that happened, or cancel those that did not.',
+            style: GoogleFonts.inter(fontSize: 11, color: secondaryTextColor),
+          ),
+          const SizedBox(height: 10),
+          ...reviews.map((raw) {
+            final lesson = Map<String, dynamic>.from(raw as Map);
+            final start = DateTime.tryParse(
+              (lesson['scheduled_start'] ?? '').toString(),
+            )?.toLocal();
+            return Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(
+                  color: isDarkMode
+                      ? const Color(0xFF475569)
+                      : const Color(0xFFFDE68A),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${lesson['course_code']} · ${lesson['role']} ${lesson['class_group'] == 'All' ? '' : lesson['class_group']}',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: primaryTextColor,
+                          ),
+                        ),
+                      ),
+                      if (lesson['escalated'] == true)
+                        Text(
+                          'OVER 24 HOURS',
+                          style: GoogleFonts.inter(
+                            fontSize: 8,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFFDC2626),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${start == null ? 'Previous class' : MaterialLocalizations.of(context).formatMediumDate(start)} · ${lesson['room'] ?? 'Room TBA'}',
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      color: secondaryTextColor,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: () => _markClassHeld(lesson),
+                        icon: const Icon(Icons.check_circle_outline, size: 16),
+                        label: const Text('Class Held'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _cancelTodayClass(lesson),
+                        icon: const Icon(Icons.event_busy, size: 16),
+                        label: const Text('Class Cancelled'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pollDashboardData() async {
     if (!mounted || _pollInProgress) return;
     _pollInProgress = true;
     try {
-      await Future.wait([fetchTimetable(), fetchActiveSessions()]);
+      await Future.wait([
+        fetchTimetable(),
+        fetchActiveSessions(),
+        fetchTodayClasses(),
+        fetchClassesNeedingAttention(),
+      ]);
     } finally {
       _pollInProgress = false;
     }
@@ -1846,6 +2068,19 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                 ),
                               ),
                               const SizedBox(height: 20),
+
+                              _classesNeedingReviewSection(
+                                primaryTextColor,
+                                secondaryTextColor,
+                                isDarkMode,
+                              ),
+                              if (classesNeedingAttention.any(
+                                (item) => !todayClasses.any(
+                                  (today) =>
+                                      '${today['id']}' == '${item['id']}',
+                                ),
+                              ))
+                                const SizedBox(height: 20),
 
                               _todayClassesSection(
                                 primaryTextColor,

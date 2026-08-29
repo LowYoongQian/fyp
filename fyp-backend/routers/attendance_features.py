@@ -158,37 +158,6 @@ def _ensure_reminder(db: Session, current_user: User, student: Student) -> None:
         )
 
 
-def _ensure_lecturer_reminder(db: Session, current_user: User, lecturer: Lecturer) -> None:
-    rows = db.query(ClassMeeting, Course).join(Course, Course.id == ClassMeeting.course_id).filter(
-        ClassMeeting.lecturer_id == lecturer.id
-    ).all()
-    now = campus_now()
-    candidates = []
-    for meeting, course in rows:
-        try:
-            weekday = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(meeting.day)
-            starts = datetime.combine(
-                (now + timedelta(days=(weekday - now.weekday()) % 7)).date(),
-                datetime.strptime(meeting.start, "%H:%M").time(),
-            )
-            if starts < now:
-                starts += timedelta(days=7)
-            candidates.append((starts, meeting, course))
-        except (ValueError, TypeError):
-            continue
-    if not candidates:
-        return
-    starts, meeting, course = min(candidates, key=lambda item: item[0])
-    minutes = int((starts - now).total_seconds() // 60)
-    if 0 <= minutes <= 60:
-        add_notification(
-            db, current_user.id, "class_reminder", "Your class starts soon",
-            f"{course.course_code} starts at {meeting.start} in {meeting.room}.",
-            f"reminder:{meeting.id}:{starts.strftime('%Y-%m-%d')}",
-            {"meeting_id": meeting.id, "course_id": course.id, "starts_in_minutes": minutes},
-        )
-
-
 @router.get("/students/me/attendance-overview")
 def student_attendance_overview(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     student = require_own_profile(db, Student, current_user.id, "Student")
@@ -489,11 +458,6 @@ def notifications(db: Session = Depends(get_db), current_user: User = Depends(ge
         _ensure_reminder(db, current_user, student)
         ensure_course_announcement_notifications(db, current_user, student)
         db.commit()
-    elif current_user.role in ("lecturer", "admin"):
-        lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first()
-        if lecturer:
-            _ensure_lecturer_reminder(db, current_user, lecturer)
-            db.commit()
     rows = db.query(UserNotification).filter(UserNotification.user_id == current_user.id).order_by(UserNotification.created_at.desc()).limit(50).all()
     return [{
         "id": row.id, "kind": row.kind, "title": row.title, "body": row.body,

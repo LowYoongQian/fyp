@@ -8,12 +8,12 @@ from utils.timeutil import local_offset, utcnow
 from sqlalchemy.orm import Session
 from db.database import SessionLocal
 from db.models import (
-    Enrolment, ClassSession, AttendanceRecord, Student, ClassMeeting,
+    Enrolment, ClassSession, AttendanceRecord, Student, ClassMeeting, Course,
     Lecturer, User, UserNotification,
 )
 import time as time_module
 from domain.scheduler import calculate_schedule
-from domain.class_lifecycle import close_class_if_due
+from domain.class_lifecycle import close_class_if_due, needs_admin_escalation, reminder_stage
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,10 @@ def _sync_class_sessions_now(db: Session):
             for s in sessions_list if s.meeting_id and s.scheduled_start
         }
 
+        _send_timed_lecturer_reminders(
+            db, schedule_map, sessions_by_key, now_utc, now_local.date(), tz_offset,
+        )
+
         new_attention = []
         for i in range(7):
             date_check = (now_local - timedelta(days=i)).date()
@@ -157,6 +161,14 @@ def _sync_class_sessions_now(db: Session):
         db.flush()
         for session, meeting_id in new_attention:
             _notify_needs_attention(db, session, meeting_id)
+
+        overdue_attention = db.query(ClassSession).filter(
+            ClassSession.status == "needs_attention",
+            ClassSession.scheduled_end <= now_utc - timedelta(hours=24),
+        ).all()
+        for session in overdue_attention:
+            if needs_admin_escalation(session, now_utc):
+                _notify_admin_escalation(db, session)
 
         # Only completed classes create absences. Cancelled, scheduled and
         # needs_attention rows are deliberately excluded.
@@ -211,26 +223,83 @@ def source_meeting_id(db: Session, session: ClassSession):
     return None
 
 
+def _lecturer_user_id(db: Session, meeting_id):
+    if not meeting_id:
+        return None
+    meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first()
+    if not meeting or not meeting.lecturer_id:
+        return None
+    lecturer = db.query(Lecturer).filter(Lecturer.id == meeting.lecturer_id).first()
+    return lecturer.user_id if lecturer else None
+
+
+def _add_notification(db: Session, *, user_id, kind: str, title: str, body: str,
+                      dedupe_key: str, payload: dict) -> None:
+    exists = db.query(UserNotification.id).filter(
+        UserNotification.user_id == user_id,
+        UserNotification.dedupe_key == dedupe_key,
+    ).first()
+    if not exists:
+        db.add(UserNotification(
+            user_id=user_id, kind=kind, title=title, body=body,
+            payload=json.dumps(payload), dedupe_key=dedupe_key,
+        ))
+
+
+def _send_timed_lecturer_reminders(db: Session, schedule_map: dict, sessions_by_key: dict,
+                                    now_utc: datetime, today, tz_offset) -> None:
+    messages = {
+        "before": ("Class starts in 15 minutes", "Open attendance when the class begins."),
+        "started": ("Class has started", "Open attendance now if the class is being held."),
+        "not_opened": ("Attendance is not open", "The class started 10 minutes ago. Open it or review the class status."),
+    }
+    for slot in schedule_map.values():
+        if slot.get("day") != today.strftime("%A") or not slot.get("meeting_id"):
+            continue
+        start_utc = datetime.combine(today, datetime.strptime(slot["start"], "%H:%M").time()) - tz_offset
+        end_utc = datetime.combine(today, datetime.strptime(slot["end"], "%H:%M").time()) - tz_offset
+        session = sessions_by_key.get((str(slot["meeting_id"]), start_utc))
+        stage = reminder_stage(start_utc, end_utc, session.status if session else "scheduled", now_utc)
+        if not stage:
+            continue
+        user_id = _lecturer_user_id(db, slot["meeting_id"])
+        if not user_id:
+            continue
+        course = db.query(Course).filter(Course.id == slot["course_id"]).first()
+        course_code = course.course_code if course else "Your class"
+        title, instruction = messages[stage]
+        _add_notification(
+            db, user_id=user_id, kind="class_reminder",
+            title=f"{course_code}: {title}",
+            body=f"{slot['start']}–{slot['end']} in {slot.get('room') or 'Room TBA'}. {instruction}",
+            dedupe_key=f"class_reminder:{stage}:{slot['meeting_id']}:{today.isoformat()}",
+            payload={"meeting_id": str(slot["meeting_id"]), "stage": stage, "date": today.isoformat()},
+        )
+
+
 def _notify_needs_attention(db: Session, session: ClassSession, meeting_id) -> None:
-    user_ids = {user_id for (user_id,) in db.query(User.id).filter(User.role == "admin").all()}
     meeting_id = meeting_id or source_meeting_id(db, session)
-    if meeting_id:
-        meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first()
-        if meeting and meeting.lecturer_id:
-            lecturer = db.query(Lecturer).filter(Lecturer.id == meeting.lecturer_id).first()
-            if lecturer and lecturer.user_id:
-                user_ids.add(lecturer.user_id)
+    lecturer_user_id = _lecturer_user_id(db, meeting_id)
+    user_ids = {lecturer_user_id} if lecturer_user_id else {
+        user_id for (user_id,) in db.query(User.id).filter(User.role == "admin").all()
+    }
     for user_id in user_ids:
-        dedupe = f"class_needs_attention:{session.id}:{user_id}"
-        exists = db.query(UserNotification.id).filter(
-            UserNotification.user_id == user_id, UserNotification.dedupe_key == dedupe
-        ).first()
-        if not exists:
-            db.add(UserNotification(
-                user_id=user_id, kind="class_needs_attention",
-                title="Class needs attention",
-                body="This class ended without being opened or cancelled. Resolve it before finalising the barred list.",
-                payload=json.dumps({"class_id": str(session.id), "course_id": str(session.course_id)}),
-                dedupe_key=dedupe,
-            ))
+        _add_notification(
+            db, user_id=user_id, kind="class_needs_attention",
+            title="Class needs review",
+            body="This class ended without attendance being opened. Mark it as held or cancelled.",
+            dedupe_key=f"class_needs_attention:{session.id}:{user_id}",
+            payload={"class_id": str(session.id), "course_id": str(session.course_id)},
+        )
+
+
+def _notify_admin_escalation(db: Session, session: ClassSession) -> None:
+    for (user_id,) in db.query(User.id).filter(User.role == "admin").all():
+        _add_notification(
+            db, user_id=user_id, kind="class_attention_escalated",
+            title="Unresolved class review",
+            body="A class has remained unresolved for more than 24 hours.",
+            dedupe_key=f"class_attention_escalated:{session.id}:{user_id}",
+            payload={"class_id": str(session.id), "course_id": str(session.course_id)},
+        )
 

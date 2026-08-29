@@ -290,13 +290,44 @@ export const ShimmerDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Side: Performance Gauge, Announcements (Span 1) */}
+        {/* Right Side: Performance Gauge, Class Overview, Announcements (Span 1) */}
         <div className="space-y-6">
           <div className="uipro-card bg-white p-5 flex flex-col items-center space-y-4">
             <ShimmerText width="w-1/2" height="h-4" className="self-start" />
             <ShimmerCircle size="w-32 h-20 rounded-t-full" />
             <ShimmerText width="w-1/4" height="h-5" />
             <ShimmerText width="w-2/3" height="h-3" />
+          </div>
+
+          {/* Class Overview Card */}
+          <div className="uipro-card bg-white p-5 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <ShimmerText width="w-1/2" height="h-4" />
+              <ShimmerCircle size="w-8 h-8" />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex h-14 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50/80">
+                  <ShimmerText width="w-6" height="h-4" />
+                  <ShimmerText width="w-10" height="h-2" />
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex min-h-[68px] items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <ShimmerText width="w-14" height="h-2.5" />
+                      <ShimmerText width="w-16" height="h-3.5" className="rounded-md" />
+                    </div>
+                    <ShimmerText width="w-3/4" height="h-3" />
+                    <ShimmerText width="w-1/3" height="h-2" />
+                  </div>
+                  <ShimmerText width="w-[54px]" height="h-8" className="shrink-0 rounded-lg" />
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="uipro-card bg-white p-5 space-y-4">

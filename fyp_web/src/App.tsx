@@ -74,14 +74,17 @@ const ROLE_TABS: Record<'student' | 'lecturer' | 'admin', Set<string>> = {
 const DEFAULT_TABS = { student: 'student_dashboard', lecturer: 'dashboard', admin: 'admin_dashboard' } as const;
 
 function tabFromLocation(): string | null {
-  const route = window.location.hash.replace(/^#\/?/, '').replace(/\/$/, '');
+  const pathRoute = window.location.pathname.replace(/^\/+|\/+$/g, '');
+  // Keep old bookmarked hash links working once, then writeTabLocation migrates them.
+  const hashRoute = window.location.hash.replace(/^#\/?/, '').replace(/\/$/, '');
+  const route = pathRoute || hashRoute;
   return ROUTE_TABS[route] || null;
 }
 
 function writeTabLocation(tab: string, replace = false) {
   const route = TAB_ROUTES[tab];
   if (!route) return;
-  const nextUrl = `${window.location.pathname}${window.location.search}#/${route}`;
+  const nextUrl = `/${route}${window.location.search}`;
   window.history[replace ? 'replaceState' : 'pushState']({ tab }, '', nextUrl);
 }
 
@@ -116,8 +119,10 @@ const DashboardContent: React.FC = () => {
         : DEFAULT_TABS[user.role];
       setCurrentTab(nextTab);
       writeTabLocation(nextTab, true);
+    } else if (!loading && window.location.pathname !== '/') {
+      window.history.replaceState({}, '', '/');
     }
-  }, [user]);
+  }, [loading, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -131,10 +136,8 @@ const DashboardContent: React.FC = () => {
       if (requestedTab !== nextTab) writeTabLocation(nextTab, true);
     };
     window.addEventListener('popstate', restoreLocation);
-    window.addEventListener('hashchange', restoreLocation);
     return () => {
       window.removeEventListener('popstate', restoreLocation);
-      window.removeEventListener('hashchange', restoreLocation);
     };
   }, [user]);
 

@@ -11,7 +11,7 @@ from db.database import get_db
 from domain.scheduler import (
     get_course_group_slots, lecture_meetings, session_checkin_state, session_end_utc,
 )
-from domain.session_sync import sync_class_sessions
+from domain.session_sync import source_meeting_id, sync_class_sessions
 from db.models import (
     User, Student, Lecturer, Course, Enrolment, ClassSession,
     AttendanceRecord, CampusNetwork, SecuritySetting, FaceEmbedding,
@@ -30,7 +30,10 @@ from integrations.face import (
     _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
 from domain.audit import log_audit_event
-from domain.class_lifecycle import barred_list_readiness, class_can_open, has_active_replacement
+from domain.class_lifecycle import (
+    barred_list_readiness, class_can_open, has_active_replacement,
+    mark_class_held, needs_admin_escalation,
+)
 from routers.attendance_features import add_notification
 
 router = APIRouter(prefix="/sessions", tags=["Attendance"])
@@ -304,6 +307,38 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
     return result
 
 
+@router.get("/needs-attention")
+def get_classes_needing_attention(db: Session = Depends(get_db),
+                                  current_user: User = Depends(require_lecturer)):
+    """Return every unresolved class the lecturer can act on, not only today's."""
+    query = db.query(ClassSession).filter(ClassSession.status == "needs_attention")
+    if current_user.role != "admin":
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+        query = query.filter(ClassSession.course_id.in_(my_course_ids(db, lecturer.id)))
+
+    result = []
+    now = utcnow()
+    for lesson in query.order_by(ClassSession.scheduled_start.desc()).all():
+        course = db.query(Course).filter(Course.id == lesson.course_id).first()
+        meeting_id = source_meeting_id(db, lesson)
+        meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first() if meeting_id else None
+        result.append({
+            "id": lesson.id, "course_id": lesson.course_id,
+            "course_code": course.course_code if course else "",
+            "course_name": course.course_name if course else "",
+            "class_group": lesson.class_group,
+            "role": meeting.role if meeting else "Replacement",
+            "room": lesson.room,
+            "scheduled_start": iso_utc(lesson.scheduled_start),
+            "scheduled_end": iso_utc(lesson.scheduled_end),
+            "status": lesson.status,
+            "cancel_reason": lesson.cancel_reason,
+            "replacement_for_session_id": lesson.replacement_for_session_id,
+            "escalated": needs_admin_escalation(lesson, now),
+        })
+    return result
+
+
 @router.post("/{id}/open", response_model=SessionResponse)
 def open_scheduled_class(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     lesson = get_or_404(db, ClassSession, id, "Class")
@@ -321,6 +356,24 @@ def open_scheduled_class(id: str, db: Session = Depends(get_db), current_user: U
     lesson.is_open = True
     db.commit()
     db.refresh(lesson)
+    return lesson
+
+
+@router.post("/{id}/held", response_model=SessionResponse)
+def mark_missed_class_as_held(id: str, db: Session = Depends(get_db),
+                              current_user: User = Depends(require_lecturer)):
+    lesson = get_or_404(db, ClassSession, id, "Class")
+    require_course_access(db, current_user, lesson.course_id, "resolve this class")
+    try:
+        mark_class_held(lesson, current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(lesson)
+    _audit_class_action(
+        db, current_user, "Confirm class held", lesson,
+        "Attendance was not opened; class confirmed after review",
+    )
     return lesson
 
 
