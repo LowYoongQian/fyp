@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import uuid
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
 import httpx
@@ -32,6 +33,27 @@ _ATTACK = re.compile(r"(ignore (all |your )?(instructions|prompt)|system prompt|
 _WRITE_REQUEST = re.compile(r"^\s*(?:please\s+)?(?:mark|change|set|update|delete|remove|add|create)\b", re.I)
 _MEMORY_WORTHY = re.compile(r"\b(previous|previously|remember|discuss|last week|worried|concerned)\b", re.I)
 _INTERRUPTED_REPLY = "Apologies, service interrupted."
+
+# Each planned question can cost an OpenRouter call, so one lecturer must not be
+# able to drain the shared quota. ponytail: in-process counter, fine for the
+# single worker this runs on; move to Redis if the API is ever scaled out.
+_RATE_LIMIT, _RATE_WINDOW = 20, 60.0
+_recent_calls: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _enforce_rate_limit(user_id: str) -> None:
+    now = time.monotonic()
+    calls = _recent_calls[user_id]
+    while calls and now - calls[0] > _RATE_WINDOW:
+        calls.popleft()
+    if len(calls) >= _RATE_LIMIT:
+        retry_after = int(_RATE_WINDOW - (now - calls[0])) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many questions. Please wait {retry_after}s before asking again.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    calls.append(now)
 
 
 def validate_sql(sql: str) -> tuple[bool, str]:
@@ -415,6 +437,7 @@ async def _store_embedding(db: Session, message_id: str, content: str) -> None:
 @router.post("/natural", response_model=QueryResponse)
 async def natural_query(body: QueryRequest, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     started, row_count, plan = time.perf_counter(), 0, {}
+    _enforce_rate_limit(current_user.id)
     session = _owned_session(db, body.session_id, current_user.id)
     recent = _chronological_messages(
         db.query(AIChatMessage)

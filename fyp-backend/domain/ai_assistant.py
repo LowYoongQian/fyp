@@ -52,6 +52,14 @@ _GENERIC_STUDENT = {
 }
 
 
+_NOT_NAME = re.compile(
+    r"\b(how|many|who|which|what|when|where|why|does|do|is|are|was|were|the|and|or"
+    r"|in|on|at|of|all|every|present|absent|group|lecturer|total|count|number"
+    r"|below|above|average)\b",
+    re.I,
+)
+
+
 def _clean_name(value: str) -> str:
     value = re.sub(r"^(?:give me|show me|show|list|what is|what's|how often does|why is|is|what about)\s+", "", value, flags=re.I)
     value = re.sub(r"^student\s+", "", value, flags=re.I)
@@ -73,7 +81,11 @@ def extract_student_hint(question: str) -> str | None:
         match = re.search(pattern, question.strip(), re.I)
         if match:
             candidate = _clean_name(match.group(1))
-            if candidate.casefold() not in _GENERIC_STUDENT and not re.search(r"\b(all|below|above|average)\b", candidate, re.I):
+            if (
+                candidate.casefold() not in _GENERIC_STUDENT
+                and not _NOT_NAME.search(candidate)
+                and len(candidate.split()) <= 4
+            ):
                 return candidate
     return None
 
@@ -115,7 +127,9 @@ def deterministic_plan(question: str) -> AIPlan | None:
         return AIPlan(intent="risk_list", threshold=float(threshold.group(1)) if threshold else 80, group=group)
     if re.search(r"\baverage\b.*\battendance\b|\battendance\b.*\baverage\b", question, re.I):
         return AIPlan(intent="course_average", course_code=course_code, group=group)
-    if re.search(r"\battendance\b.*\b(all|every)\s+students?\b", question, re.I):
+    if re.search(r"\battendance\b.*\b(all|every)\s+students?\b", question, re.I) or re.search(
+        r"\b(all|every)\s+(?:students?\s+|student\s+)?attendance\b", question, re.I
+    ):
         return AIPlan(intent="course_attendance", course_code=course_code, group=group)
     if re.search(r"\bhow many\b.*\bpresent\b", question, re.I):
         return AIPlan(intent="present_count", course_code=course_code, group=group)

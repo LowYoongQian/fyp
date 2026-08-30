@@ -1,5 +1,6 @@
 """Security and intent boundaries for the Smart Attendance AI Assistant."""
 import asyncio
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -201,6 +202,44 @@ def test_named_student_requests_never_route_to_risk_list(question, intent, stude
     plan = deterministic_plan(question)
     assert plan.intent == intent
     assert plan.student_hint == student
+
+
+@pytest.mark.parametrize(
+    ("question", "intent"),
+    [
+        # A bulk request must reach the whole-course answer, not a student lookup.
+        ("show me all attendance", "course_attendance"),
+        ("show me all student attendance", "course_attendance"),
+        ("show me every student attendance", "course_attendance"),
+        # Question words are not names, so these must not become a student lookup.
+        ("How many students are present in G1 group sessions?", "present_count"),
+        ("how many courses does the lecturer teach", None),
+    ],
+)
+def test_bulk_and_question_phrasing_do_not_become_a_student_lookup(question, intent):
+    plan = deterministic_plan(question)
+    assert (plan.intent if plan else None) == intent
+
+
+def test_rate_limit_allows_the_budget_then_blocks_only_that_user():
+    llm._recent_calls.clear()
+    for _ in range(llm._RATE_LIMIT):
+        llm._enforce_rate_limit("lecturer-a")
+    with pytest.raises(HTTPException) as exc:
+        llm._enforce_rate_limit("lecturer-a")
+    assert exc.value.status_code == 429
+    assert exc.value.headers["Retry-After"]
+    llm._enforce_rate_limit("lecturer-b")  # a second lecturer keeps their own budget
+    llm._recent_calls.clear()
+
+
+def test_rate_limit_window_expires():
+    llm._recent_calls.clear()
+    stale = time.monotonic() - llm._RATE_WINDOW - 1
+    llm._recent_calls["lecturer-c"].extend([stale] * llm._RATE_LIMIT)
+    llm._enforce_rate_limit("lecturer-c")  # stale calls must not count against the budget
+    assert len(llm._recent_calls["lecturer-c"]) == 1
+    llm._recent_calls.clear()
 
 
 def test_show_students_below_threshold_is_a_list_not_a_named_student():
