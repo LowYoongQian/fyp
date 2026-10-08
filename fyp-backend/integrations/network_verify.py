@@ -10,10 +10,9 @@ Security layers:
 The source-IP check is the one that actually enforces "you must be on campus".
 """
 import ipaddress
-import subprocess
 import socket
-import re
-from typing import Optional, List, Tuple
+import subprocess
+from typing import List, Optional, Tuple
 
 
 def normalize_client_ip(value: Optional[str]) -> str:

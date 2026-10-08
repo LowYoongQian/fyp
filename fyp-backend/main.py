@@ -1,24 +1,40 @@
+import asyncio
+import hashlib
+import logging
+import os
+import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import text
-import asyncio
-import logging
-import os
-import hashlib
-import time
-from collections import OrderedDict
+from starlette.middleware.base import BaseHTTPMiddleware
 
-import config  # Load and validate backend environment variables once at startup.
+from db.database import SessionLocal, engine
 from domain.announcements import announcement_dict
 from domain.audit import reset_audit_client_ip, set_audit_client_ip
 from domain.security_settings import is_enabled
 from domain.session_sync import sync_class_sessions
-from db.database import SessionLocal, engine
 from integrations.network_verify import get_client_ip, get_server_local_ip
-from routers import auth, llm, sessions, students, admin_students, admin_staff, admin_academic, admin_attendance, admin_config, student_self, analytics, lecturers, admin_reports, admin_audit, attendance_features, medical_leave
+from routers import (
+    admin_academic,
+    admin_attendance,
+    admin_audit,
+    admin_config,
+    admin_reports,
+    admin_staff,
+    admin_students,
+    analytics,
+    attendance_features,
+    auth,
+    lecturers,
+    llm,
+    medical_leave,
+    sessions,
+    student_self,
+    students,
+)
 
 # Schema is owned by Alembic (`alembic upgrade head`, which the Procfile/Dockerfile run
 # before uvicorn starts). Data seeds live in seed.py. Nothing here touches the database
@@ -346,6 +362,7 @@ def health():
 
 if __name__ == "__main__":
     import os
+
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)

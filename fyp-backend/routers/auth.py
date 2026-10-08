@@ -1,24 +1,29 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-
-from utils.timeutil import iso_utc, utcnow
-from db.database import get_db
-from datetime import datetime, timedelta
 import hashlib
 import html
 import os
 import secrets
-import httpx
-from db.models import User, Student, Lecturer
-from utils.security import hash_password, verify_password, create_access_token
-from schemas import LoginRequest, RegisterRequest, TokenResponse
-from utils.db_helpers import ensure_unique, require_email_domain
-from pydantic import BaseModel
+from datetime import timedelta
 from typing import Optional
 from urllib.parse import quote
-from utils.security import get_current_user
+
+import httpx
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from db.database import get_db
+from db.models import Lecturer, Student, User
+from schemas import LoginRequest, RegisterRequest, TokenResponse
+from utils.db_helpers import ensure_unique, require_email_domain
+from utils.security import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
+from utils.timeutil import iso_utc, utcnow
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -109,7 +114,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     try:
         user.last_login_at = utcnow()
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
 
     resp = {

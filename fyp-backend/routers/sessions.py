@@ -1,41 +1,63 @@
 from datetime import datetime, timedelta
-from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends, Request
-from sqlalchemy.orm import Session
-from domain.medical_leave import apply_approved_medical_leave
-from sqlalchemy.exc import IntegrityError
-from pydantic import BaseModel
 
-from domain.security_settings import get_settings, truthy
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
 from db.database import get_db
-from domain.scheduler import (
-    get_course_group_slots, lecture_meetings, session_checkin_state, session_end_utc,
-)
-from domain.session_sync import source_meeting_id, sync_class_sessions
 from db.models import (
-    User, Student, Lecturer, Course, Enrolment, ClassSession,
-    AttendanceRecord, CampusNetwork, SecuritySetting, FaceEmbedding,
-    CourseStaffAssignment, ClassMeeting
+    AttendanceRecord,
+    CampusNetwork,
+    ClassMeeting,
+    ClassSession,
+    Course,
+    Enrolment,
+    FaceEmbedding,
+    Lecturer,
+    Student,
+    User,
 )
-from utils.security import require_lecturer, require_student
 from domain.attendance import require_session_enrolment
-from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
-from integrations.network_verify import get_client_ip, verify_network
-from schemas import (
-    SessionCreate, SessionResponse, ClassCancellation, ReplacementClassCreate, AttendanceSubmit,
-    AttendanceResponse, SessionAttendanceResponse, StudentAttendanceStatus
-)
-from integrations.face import (
-    _extract_face_embedding, _embedding_to_floats,
-    _cosine_distance, _FACE_MATCH_THRESHOLD,
-)
 from domain.audit import log_audit_event
 from domain.class_lifecycle import (
-    barred_list_readiness, class_can_open, has_active_replacement,
-    mark_class_held, needs_admin_escalation,
+    barred_list_readiness,
+    class_can_open,
+    has_active_replacement,
+    mark_class_held,
+    needs_admin_escalation,
 )
+from domain.medical_leave import apply_approved_medical_leave
+from domain.scheduler import (
+    get_course_group_slots,
+    lecture_meetings,
+    session_checkin_state,
+    session_end_utc,
+)
+from domain.security_settings import get_settings, truthy
+from domain.session_sync import source_meeting_id, sync_class_sessions
+from integrations.face import (
+    _FACE_MATCH_THRESHOLD,
+    _cosine_distance,
+    _embedding_to_floats,
+    _extract_face_embedding,
+)
+from integrations.network_verify import get_client_ip, verify_network
 from routers.attendance_features import add_notification
+from schemas import (
+    AttendanceResponse,
+    AttendanceSubmit,
+    ClassCancellation,
+    ReplacementClassCreate,
+    SessionAttendanceResponse,
+    SessionCreate,
+    SessionResponse,
+    StudentAttendanceStatus,
+)
+from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
+from utils.security import require_lecturer, require_student
+from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
 
 router = APIRouter(prefix="/sessions", tags=["Attendance"])
 

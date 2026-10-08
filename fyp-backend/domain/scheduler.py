@@ -1,7 +1,9 @@
 import random
 from datetime import datetime, timedelta
+
 from sqlalchemy.orm import Session
-from db.models import Course, CourseStaffAssignment, ClassMeeting, Enrolment
+
+from db.models import ClassMeeting, Course, CourseStaffAssignment, Enrolment
 from utils.timeutil import local_offset
 
 # ---------------------------------------------------------------------------

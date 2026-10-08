@@ -1,16 +1,23 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session, joinedload
+
 from db.database import get_db
-from db.models import User, Lecturer, Course, Enrolment, ClassSession, AttendanceRecord, RiskScore, Alert
-from utils.security import require_admin, hash_password
-from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
-from domain.audit import log_admin_action
-from schemas import (
-    AdminStaffCreate, AdminStaffUpdate,
-    MessageResponse
+from db.models import (
+    Alert,
+    AttendanceRecord,
+    ClassSession,
+    Course,
+    Enrolment,
+    Lecturer,
+    RiskScore,
+    User,
 )
+from domain.audit import log_admin_action
+from schemas import AdminStaffCreate, AdminStaffUpdate, MessageResponse
+from utils.db_helpers import ensure_unique, get_or_404, require_email_domain
+from utils.security import hash_password, require_admin
 
 router = APIRouter(prefix="/admin", tags=["Admin Staff"])
 

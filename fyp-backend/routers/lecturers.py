@@ -1,28 +1,44 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from datetime import datetime, timezone
-from utils.timeutil import iso_utc, utcnow
-from typing import List, Optional
 import os
 import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
 
-from domain.announcements import announcement_dict, visible_announcements
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 from db.database import get_db
-from domain.scheduler import (
-    calculate_schedule, lecture_meetings,
-    meeting_key_for, session_end_utc, slots_for_assignment,
-)
 from db.models import (
-    User, Lecturer, Course, CourseStaffAssignment, Enrolment, Alert, Student, Announcement,
-    ClassMeeting, ClassSession, AttendanceRecord, UserNotification
+    Alert,
+    Announcement,
+    AttendanceRecord,
+    ClassMeeting,
+    ClassSession,
+    Course,
+    CourseStaffAssignment,
+    Enrolment,
+    Lecturer,
+    Student,
+    User,
+    UserNotification,
 )
-from integrations.announcement_files import ALLOWED_TYPES, download as download_announcement_file, upload as upload_announcement_file
+from domain.announcements import announcement_dict, visible_announcements
+from domain.scheduler import (
+    calculate_schedule,
+    lecture_meetings,
+    meeting_key_for,
+    session_end_utc,
+    slots_for_assignment,
+)
+from integrations.announcement_files import ALLOWED_TYPES
+from integrations.announcement_files import download as download_announcement_file
+from integrations.announcement_files import upload as upload_announcement_file
 from routers.attendance_features import add_notification
-from utils.security import require_lecturer
 from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
+from utils.security import require_lecturer
+from utils.timeutil import iso_utc, utcnow
 
 router = APIRouter(prefix="/lecturers", tags=["Lecturers"])
 

@@ -1,17 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy.orm import Session
-from typing import List, Optional, Any
 from datetime import datetime
+from typing import Any, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import User, StudentFeedback, AttendanceRecord, Student, ClassSession, Course
-from utils.security import require_admin
-from utils.db_helpers import get_or_404
-from db.models import AttendanceRequest
-from domain.medical_leave import review_attendance_request
+from db.models import (
+    AttendanceRecord,
+    AttendanceRequest,
+    ClassSession,
+    Course,
+    Student,
+    StudentFeedback,
+    User,
+)
 from domain.audit import log_admin_action
+from domain.medical_leave import review_attendance_request
 from integrations.medical_leave import download_private_document
+from utils.db_helpers import get_or_404
+from utils.security import require_admin
 from utils.timeutil import iso_utc
 
 router = APIRouter(prefix="/admin/reports", tags=["Admin Reports"])
