@@ -26,6 +26,7 @@ api.interceptors.request.use((config) => {
 type ApiCacheEntry = { data: any; timestamp: number };
 const apiCache = new Map<string, ApiCacheEntry>();
 const pendingGets = new Map<string, Promise<any>>();
+let cacheGeneration = 0;
 const CACHE_TTL = 60000;
 const CACHE_PREFIX = 'sas_api_cache:';
 const NO_CLIENT_CACHE = ['/sessions', '/students/me/active-sessions', '/students/me/attendance', '/students/me/attendance-sessions', '/lecturers/me/dashboard-summary', '/admin/sessions'];
@@ -43,6 +44,7 @@ const isRealtimeUrl = (url: string) => NO_CLIENT_CACHE.some(path => url === path
 const storageKey = (key: string) => `${CACHE_PREFIX}${key}`;
 
 export const clearApiCache = () => {
+  cacheGeneration++;
   apiCache.clear();
   pendingGets.clear();
   for (let index = sessionStorage.length - 1; index >= 0; index--) {
@@ -75,7 +77,10 @@ export const cachedGet = async (url: string, params?: any): Promise<any> => {
   const pending = pendingGets.get(cacheKey);
   if (pending) return pending;
 
+  const generation = cacheGeneration;
   const request = api.get(url, { params }).then(response => {
+    // A response started before logout or a save must not restore stale cache.
+    if (generation !== cacheGeneration) return response.data;
     const entry = { data: response.data, timestamp: Date.now() };
     apiCache.set(cacheKey, entry);
     try {
@@ -84,17 +89,19 @@ export const cachedGet = async (url: string, params?: any): Promise<any> => {
       // Storage can be unavailable or full; the in-memory cache still works.
     }
     return response.data;
-  }).finally(() => pendingGets.delete(cacheKey));
+  }).finally(() => {
+    if (pendingGets.get(cacheKey) === request) pendingGets.delete(cacheKey);
+  });
   pendingGets.set(cacheKey, request);
   return request;
 };
 
-// Invalidate memory cache whenever a mutating request (POST, PUT, DELETE) succeeds
+// Invalidate both cache layers whenever a mutation succeeds.
 api.interceptors.response.use(
   (response) => {
     const method = response.config.method?.toUpperCase();
-    if (method && ['POST', 'PUT', 'DELETE'].includes(method)) {
-      apiCache.clear();
+    if (method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      clearApiCache();
     }
     return response;
   },
@@ -887,6 +894,11 @@ export const apiService = {
   },
 
   // Admin Reports & Audit Logs API
+  studentGetFeedback: async (): Promise<StudentFeedbackReport[]> => (await api.get('/students/me/feedback')).data,
+  studentCreateFeedback: async (data: FormData): Promise<StudentFeedbackReport> =>
+    (await api.post('/students/me/feedback', data, { headers: { 'Content-Type': undefined } })).data,
+  downloadFeedbackAttachment: async (id: string, admin = false): Promise<Blob> =>
+    (await api.get(`${admin ? '/admin/reports' : '/students/me'}/feedback/${encodeURIComponent(id)}/attachment`, { responseType: 'blob' })).data,
   getAdminFeedback: async (status?: string, category?: string) => {
     const params = new URLSearchParams();
     if (status && status !== 'All') params.append('status', status);
@@ -894,7 +906,7 @@ export const apiService = {
     const response = await api.get<StudentFeedbackReport[]>(`/admin/reports/feedback?${params.toString()}`);
     return response.data;
   },
-  updateAdminFeedback: async (feedbackId: string, data: { status: string; admin_notes?: string }) => {
+  updateAdminFeedback: async (feedbackId: string, data: { status: string; admin_notes?: string; student_response?: string }) => {
     const response = await api.put<StudentFeedbackReport>(`/admin/reports/feedback/${feedbackId}`, data);
     return response.data;
   },
@@ -936,6 +948,9 @@ export const apiService = {
 };
 
 export interface StudentFeedbackReport {
+  priority: 'Low' | 'Medium' | 'High' | 'Urgent';
+  attachment_name?: string | null;
+  attachment_type?: string | null;
   id: string;
   student_id?: string;
   student_name: string;
@@ -945,6 +960,7 @@ export interface StudentFeedbackReport {
   message: string;
   status: string;
   admin_notes?: string;
+  student_response?: string | null;
   created_at: string;
 }
 

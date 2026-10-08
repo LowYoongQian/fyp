@@ -11,16 +11,19 @@ import {
   X,
   Mail
 } from 'lucide-react';
+import { apiService } from '../../services/api';
+import type { StudentFeedbackReport } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { swalSuccess, swalError } from '../../utils/swal';
 
 interface ComplaintTicket {
   id: string;
-  category: 'Attendance Discrepancy' | 'Face Verification Issue' | 'Lecturer Feedback' | 'System Bug' | 'General Inquiry';
+  category: string;
   priority: 'Low' | 'Medium' | 'High' | 'Urgent';
   subject: string;
   message: string;
   attachmentName?: string;
-  status: 'Open' | 'In Review' | 'Resolved' | 'Closed';
+  status: string;
   createdAt: string;
   adminResponse?: string;
   resolvedAt?: string;
@@ -39,60 +42,45 @@ export const StudentContact: React.FC = () => {
   const [message, setMessage] = useState('');
   const [attachment, setAttachment] = useState<File | null>(null);
 
-  // Load from local storage or set initial mock tickets
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const toTicket = (row: StudentFeedbackReport): ComplaintTicket => ({
+    id: row.id, category: row.category, priority: row.priority, subject: row.subject,
+    message: row.message, attachmentName: row.attachment_name || undefined,
+    status: row.status === 'Pending' ? 'Open' : row.status === 'In Progress' ? 'In Review' : row.status,
+    createdAt: new Date(row.created_at.endsWith('Z') || /[+-]\d\d:\d\d$/.test(row.created_at) ? row.created_at : row.created_at + 'Z').toLocaleString(),
+    adminResponse: row.student_response || undefined,
+  });
   useEffect(() => {
-    const saved = localStorage.getItem('student_contact_tickets');
-    if (saved) {
-      try {
-        setTickets(JSON.parse(saved));
-        return;
-      } catch (e) {
-        console.error("Failed to parse saved tickets", e);
-      }
-    }
+    let active = true;
+    setTickets([]);
+    setLoading(true);
+    setLoadError(false);
+    apiService.studentGetFeedback().then(rows => {
+      if (active) setTickets(rows.map(toTicket));
+    }).catch(() => { if (active) setLoadError(true); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [user?.user_id]);
 
-    // Default mock tickets
-    const initialTickets: ComplaintTicket[] = [
-      {
-        id: 'TKT-2026-84920',
-        category: 'Attendance Discrepancy',
-        priority: 'High',
-        subject: 'Marked absent for BMCS2073 Lecture on 24th July despite attending',
-        message: 'I was present in Lab 1 for the entire 2-hour session. My face scan failed due to lighting conditions. Lecturer Dr. Low informed me to lodge an admin inquiry for attendance credit.',
-        attachmentName: 'Lecture_Photo_24July.jpg',
-        status: 'In Review',
-        createdAt: '2026-07-24 04:30 PM',
-        adminResponse: 'Admin Support: Request received. Verifying WiFi AP logs and lecturer roster.'
-      },
-      {
-        id: 'TKT-2026-72810',
-        category: 'Face Verification Issue',
-        priority: 'Medium',
-        subject: 'Face enrollment update needed after haircut/glasses change',
-        message: 'Hi Admin, I recently updated my spectacles and the kiosk scanner gives a 65% match warning. Requesting face re-registration.',
-        status: 'Resolved',
-        createdAt: '2026-07-15 10:20 AM',
-        adminResponse: 'Admin Support: Face biometric profile reset. Please re-capture face at Student Affairs Kiosk.',
-        resolvedAt: '2026-07-16 02:00 PM'
-      }
-    ];
-
-    setTickets(initialTickets);
-    localStorage.setItem('student_contact_tickets', JSON.stringify(initialTickets));
-  }, []);
-
-  const saveTickets = (newList: ComplaintTicket[]) => {
-    setTickets(newList);
-    localStorage.setItem('student_contact_tickets', JSON.stringify(newList));
+  const downloadAttachment = async (ticket: ComplaintTicket) => {
+    try {
+      const blob = await apiService.downloadFeedbackAttachment(ticket.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = ticket.attachmentName || 'attachment'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { swalError('Download Failed', 'Please try again.'); }
   };
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setAttachment(e.target.files[0]);
     }
   };
 
-  const handleSubmitTicket = (e: React.FormEvent) => {
+  const handleSubmitTicket = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!subject.trim()) {
@@ -105,38 +93,25 @@ export const StudentContact: React.FC = () => {
       return;
     }
 
-    const newTicket: ComplaintTicket = {
-      id: `TKT-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`,
-      category: category,
-      priority: priority,
-      subject: subject.trim(),
-      message: message.trim(),
-      attachmentName: attachment ? attachment.name : undefined,
-      status: 'Open',
-      createdAt: new Date().toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    };
-
-    const updated = [newTicket, ...tickets];
-    saveTickets(updated);
-
-    // Reset Form
-    setSubject('');
-    setMessage('');
-    setAttachment(null);
-    setIsModalOpen(false);
-
-    swalSuccess(
-      'Complaint Ticket Created',
-      `Ticket ID ${newTicket.id} submitted to Admin Helpdesk. Response will be posted here.`
-    );
+    if (submitting) return;
+    if (attachment && (attachment.size > 5 * 1024 * 1024 || !['application/pdf', 'image/png', 'image/jpeg'].includes(attachment.type))) {
+      swalError('Invalid Attachment', 'Choose a PDF, PNG or JPEG up to 5 MB.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const data = new FormData();
+      data.append('subject', subject.trim()); data.append('message', message.trim());
+      data.append('category', category); data.append('priority', priority);
+      if (attachment) data.append('attachment', attachment);
+      const created = await apiService.studentCreateFeedback(data);
+      setTickets(previous => [toTicket(created), ...previous]);
+      setSubject(''); setMessage(''); setAttachment(null); setIsModalOpen(false);
+      swalSuccess('Complaint Ticket Created', `Ticket ID ${created.id} submitted to Admin Helpdesk. Response will be posted here.`);
+    } catch {
+      swalError('Submission Failed', 'Your ticket could not be confirmed. Your form has been kept; check your connection and try again.');
+    } finally { setSubmitting(false); }
   };
-
   // Filtered List
   const filteredTickets = tickets.filter(t => {
     const matchesStatus = filterStatus === 'All' || t.status === filterStatus;
@@ -171,6 +146,7 @@ export const StudentContact: React.FC = () => {
         </div>
 
         <button
+          disabled={loading}
           onClick={() => setIsModalOpen(true)}
           className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-white text-indigo-800 hover:bg-slate-100 dark:bg-indigo-600 dark:text-white dark:hover:bg-indigo-500 font-semibold text-sm transition-all shadow-md cursor-pointer shrink-0"
         >
@@ -179,6 +155,8 @@ export const StudentContact: React.FC = () => {
         </button>
       </div>
 
+      {loading && <p role="status">Loading your tickets...</p>}
+      {loadError && <p role="alert">Unable to load your tickets. Please refresh and try again.</p>}
       {/* Stats Grid (Theme Synced) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex items-center gap-4 shadow-xs">
@@ -254,7 +232,7 @@ export const StudentContact: React.FC = () => {
 
       {/* Tickets List Cards (Theme Synced) */}
       <div className="space-y-4">
-        {filteredTickets.length === 0 ? (
+        {loading || loadError ? null : filteredTickets.length === 0 ? (
           <div className="uipro-card bg-white dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-800 p-12 text-center space-y-3 shadow-xs">
             <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 dark:text-slate-500 mx-auto">
               <MessageSquare className="w-6 h-6" />
@@ -327,6 +305,7 @@ export const StudentContact: React.FC = () => {
                 </p>
               </div>
 
+              {ticket.attachmentName && <button type="button" onClick={() => downloadAttachment(ticket)} className="text-sm text-indigo-600 underline">Download {ticket.attachmentName}</button>}
               {/* Admin Response Box */}
               {ticket.adminResponse && (
                 <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-500/20 rounded-xl p-3.5 space-y-1">
@@ -358,7 +337,7 @@ export const StudentContact: React.FC = () => {
                 </div>
               </div>
               <button
-                onClick={() => setIsModalOpen(false)}
+                disabled={submitting} onClick={() => setIsModalOpen(false)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -444,7 +423,7 @@ export const StudentContact: React.FC = () => {
                   </div>
                   <label className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium cursor-pointer transition-colors shrink-0">
                     {attachment ? 'Change' : 'Browse'}
-                    <input type="file" onChange={handleFileChange} className="hidden" />
+                    <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={handleFileChange} className="hidden" />
                   </label>
                 </div>
               </div>
@@ -453,16 +432,16 @@ export const StudentContact: React.FC = () => {
               <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  disabled={submitting} onClick={() => setIsModalOpen(false)}
                   className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition-all cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="submit" disabled={submitting}
                   className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-md cursor-pointer"
                 >
-                  Submit Ticket
+                  {submitting ? 'Submitting...' : 'Submit Ticket'}
                 </button>
               </div>
             </form>

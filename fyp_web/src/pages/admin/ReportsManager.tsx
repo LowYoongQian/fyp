@@ -201,7 +201,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
       setUpdatingFeedbackId(feedbackId);
       await apiService.updateAdminFeedback(feedbackId, {
         status,
-        admin_notes: adminNoteInput || undefined
+        student_response: adminNoteInput
       });
       await swalSuccess('Status Updated', `Feedback report status marked as '${status}'.`);
       setSelectedFeedback(null);
@@ -311,7 +311,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 <CustomDropdown<string>
                   label="Category"
                   value={feedbackCategoryFilter}
-                  options={['All', 'Attendance Issue', 'App Bug', 'Network Error', 'General']}
+                  options={['All', 'Attendance Discrepancy', 'Face Verification Issue', 'Lecturer Feedback', 'System Bug', 'General Inquiry', 'Attendance Issue', 'App Bug', 'Network Error', 'General']}
                   onChange={(val: string) => setFeedbackCategoryFilter(val)}
                 />
               </>
@@ -385,7 +385,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                       </td>
                       <td className="py-4 px-4 text-right">
                         <button
-                          onClick={() => { setSelectedFeedback(f); setAdminNoteInput(f.admin_notes || ''); }}
+                          onClick={() => { setSelectedFeedback(f); setAdminNoteInput(f.student_response || ''); }}
                           className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer"
                         >
                           <Eye className="h-3.5 w-3.5" /> View Report
@@ -517,6 +517,16 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               <div>
                 <label className="text-slate-400 font-medium">Subject</label>
                 <div className="font-semibold text-slate-800 dark:text-slate-200 text-sm mt-0.5">{selectedFeedback.subject}</div>
+                <p>Priority: {selectedFeedback.priority || 'Medium'}</p>
+                {selectedFeedback.attachment_name && <button type="button" className="text-blue-600 underline" onClick={async () => {
+                  try {
+                    const blob = await apiService.downloadFeedbackAttachment(selectedFeedback.id, true);
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url; link.download = selectedFeedback.attachment_name || 'attachment'; link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  } catch { swalError('Download Failed', 'Please try again.'); }
+                }}>Download {selectedFeedback.attachment_name}</button>}
               </div>
 
               <div>
@@ -527,7 +537,8 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               </div>
 
               <div>
-                <label className="text-slate-400 font-medium">Admin Response / Internal Notes</label>
+                <label className="text-slate-400 font-medium">Response to Student (visible to the student)</label>
+                {selectedFeedback.admin_notes && <p className="my-2 whitespace-pre-wrap">Previous internal notes (admin only): {selectedFeedback.admin_notes}</p>}
                 <textarea
                   rows={3}
                   value={adminNoteInput}

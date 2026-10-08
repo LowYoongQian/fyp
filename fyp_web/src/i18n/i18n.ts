@@ -55,6 +55,7 @@ const languageListeners = new Set<() => void>();
 let pageObserver: MutationObserver | null = null;
 let pendingPageTranslation = false;
 const originalText = new WeakMap<Text, string>();
+const renderedText = new WeakMap<Text, string>();
 const originalAttributes = new WeakMap<Element, Map<string, string>>();
 
 // Try loading from local storage cache initially
@@ -156,9 +157,15 @@ export const applyPageTranslations = (): void => {
   for (const textNode of textNodes) {
     const parent = textNode.parentElement;
     if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE'].includes(parent.tagName)) continue;
-    const source = originalText.get(textNode) ?? textNode.nodeValue ?? '';
+    const current = textNode.nodeValue ?? '';
+    // React may reuse a text node for new data (file names, status, counts).
+    // Only restore an old source when the node still contains our translation.
+    const source = current === renderedText.get(textNode)
+      ? originalText.get(textNode) ?? current
+      : current;
     originalText.set(textNode, source);
     const translated = translateValue(source, replacements);
+    renderedText.set(textNode, translated);
     if (textNode.nodeValue !== translated) textNode.nodeValue = translated;
   }
 

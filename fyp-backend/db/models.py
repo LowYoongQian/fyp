@@ -430,6 +430,11 @@ class StudentFeedback(Base):
     subject       = Column(String, nullable=False)
     category      = Column(String, nullable=False, default="General")  # 'Attendance Issue', 'App Bug', 'Network Error', 'General'
     message       = Column(Text, nullable=False)
+    priority      = Column(String, nullable=False, default="Medium", server_default="Medium")
+    attachment_path = Column(String, nullable=True)
+    attachment_name = Column(String, nullable=True)
+    attachment_type = Column(String, nullable=True)
+    student_response = Column(Text, nullable=True)
     status        = Column(String, nullable=False, default="Pending") # 'Pending', 'In Progress', 'Resolved'
     admin_notes   = Column(Text, nullable=True)
     created_at    = Column(DateTime, server_default=func.now())

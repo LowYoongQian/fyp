@@ -44,11 +44,53 @@ export const StudentDashboard: React.FC = () => {
   const [activeSessions, setActiveSessions] = useState<StudentActiveSession[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [loadedUserId, setLoadedUserId] = useState<string | number | null>(null);
   const [recoveryEmailVerified, setRecoveryEmailVerified] = useState<boolean | null>(null);
   const [recoveryTipSkipped, setRecoveryTipSkipped] = useState(false);
 
   useEffect(() => {
-    loadStudentData();
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(false);
+    setStudent(null);
+    setEnrolments([]);
+    setActiveSessions([]);
+    setAnnouncements([]);
+    setRecoveryEmailVerified(null);
+    setRecoveryTipSkipped(false);
+    // Remove the legacy shared cache; API caching already isolates accounts.
+    for (const key of ['cached_student_profile', 'cached_student_enrolments', 'cached_student_active_sessions']) {
+      try { localStorage.removeItem(key); } catch { /* Storage may be unavailable. */ }
+    }
+    if (!user) return;
+    const loadStudentData = async () => {
+      try {
+        const [profile, enrolmentsList, activeSessionsList, notices, accountProfile] = await Promise.all([
+          apiService.studentGetProfile(),
+          apiService.studentGetEnrolments(),
+          apiService.studentGetActiveSessions(),
+          apiService.studentGetAnnouncements(),
+          apiService.getUserProfile().catch(() => null),
+        ]);
+        if (cancelled) return;
+        setStudent(profile);
+        setEnrolments(enrolmentsList);
+        setActiveSessions(activeSessionsList);
+        setAnnouncements(notices);
+        if (accountProfile) setRecoveryEmailVerified(accountProfile.recovery_email_verified === true);
+      } catch (err) {
+        if (!cancelled) setLoadError(true);
+        console.error('Failed to load student dashboard data:', err);
+      } finally {
+        if (!cancelled) {
+          setLoadedUserId(user.user_id);
+          setLoading(false);
+        }
+      }
+    };
+    void loadStudentData();
+    return () => { cancelled = true; };
   }, [user]);
 
   useEffect(() => {
@@ -56,58 +98,6 @@ export const StudentDashboard: React.FC = () => {
     window.addEventListener('recovery-email-verified', handleRecoveryEmailVerified);
     return () => window.removeEventListener('recovery-email-verified', handleRecoveryEmailVerified);
   }, []);
-
-  const loadStudentData = async () => {
-    // 1. Try loading from cache first
-    const cachedProfile = localStorage.getItem('cached_student_profile');
-    const cachedEnrolments = localStorage.getItem('cached_student_enrolments');
-    const cachedSessions = localStorage.getItem('cached_student_active_sessions');
-
-    let hasCached = false;
-    if (cachedProfile && cachedEnrolments && cachedSessions) {
-      try {
-        setStudent(JSON.parse(cachedProfile));
-        setEnrolments(JSON.parse(cachedEnrolments));
-        setActiveSessions(JSON.parse(cachedSessions));
-        setLoading(false);
-        hasCached = true;
-      } catch (e) {
-        console.error("Failed to parse cached data:", e);
-      }
-    }
-
-    if (!hasCached) {
-      setLoading(true);
-    }
-
-    try {
-      // 2. Fetch fresh data from backend
-      const [profile, enrolmentsList, activeSessionsList, notices, accountProfile] = await Promise.all([
-        apiService.studentGetProfile(),
-        apiService.studentGetEnrolments(),
-        apiService.studentGetActiveSessions(),
-        apiService.studentGetAnnouncements(),
-        apiService.getUserProfile().catch(() => null),
-      ]);
-
-      setStudent(profile);
-      setEnrolments(enrolmentsList);
-      setActiveSessions(activeSessionsList);
-      setAnnouncements(notices);
-      if (accountProfile) {
-        setRecoveryEmailVerified(accountProfile.recovery_email_verified === true);
-      }
-
-      // Save fresh data to local cache
-      localStorage.setItem('cached_student_profile', JSON.stringify(profile));
-      localStorage.setItem('cached_student_enrolments', JSON.stringify(enrolmentsList));
-      localStorage.setItem('cached_student_active_sessions', JSON.stringify(activeSessionsList));
-    } catch (err) {
-      console.error("Failed to load student dashboard data:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const downloadNoticeFile = async (notice: Announcement) => {
     const blob = await apiService.studentDownloadAnnouncementAttachment(notice.id);
@@ -183,7 +173,7 @@ export const StudentDashboard: React.FC = () => {
     { name: 'Unexcused Absent', value: 1, color: '#EF4444' },
   ];
 
-  if (loading) {
+  if (loading || loadedUserId !== user?.user_id) {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
@@ -197,6 +187,11 @@ export const StudentDashboard: React.FC = () => {
     );
   }
 
+  if (loadError) {
+    return <div role="alert" className="p-6 text-center">
+      <p>Unable to load your dashboard. Please check your connection and refresh the page.</p>
+    </div>;
+  }
   return (
     <div className="space-y-6 pb-12">
       {/* Active Session Warning / Gate Notification */}

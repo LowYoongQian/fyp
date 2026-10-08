@@ -1,7 +1,19 @@
+import logging
+import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,12 +29,14 @@ from db.models import (
 )
 from domain.audit import log_admin_action
 from domain.medical_leave import review_attendance_request
+from integrations import feedback_files
 from integrations.medical_leave import download_private_document
 from utils.db_helpers import get_or_404
-from utils.security import require_admin
+from utils.security import require_admin, require_student
 from utils.timeutil import iso_utc
 
 router = APIRouter(prefix="/admin/reports", tags=["Admin Reports"])
+student_router = APIRouter(prefix="/students/me/feedback", tags=["Student Feedback"])
 
 # --- Pydantic Schemas ---
 class StudentFeedbackResponse(BaseModel):
@@ -33,16 +47,21 @@ class StudentFeedbackResponse(BaseModel):
     subject: str
     category: str
     message: str
+    priority: str = "Medium"
+    attachment_name: Optional[str] = None
+    attachment_type: Optional[str] = None
     status: str
     admin_notes: Optional[str] = ""
+    student_response: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
 
 class FeedbackUpdate(BaseModel):
-    status: str
+    status: Literal["Pending", "In Progress", "Resolved"]
     admin_notes: Optional[str] = None
+    student_response: Optional[str] = None
 
 class MCReportResponse(BaseModel):
     id: Any
@@ -71,6 +90,91 @@ class MCReportUpdate(BaseModel):
 
 # --- Endpoints ---
 
+def _feedback_student(db, user):
+    student = db.query(Student).filter(Student.user_id == user.id).first()
+    if not student:
+        raise HTTPException(404, "Student profile not found")
+    return student
+
+
+def _feedback_attachment(item):
+    if not item.attachment_path:
+        raise HTTPException(404, "Attachment not found")
+    try:
+        data = feedback_files.download(item.attachment_path)
+    except Exception as exc:
+        raise HTTPException(503, "Attachment download failed. Please try again.") from exc
+    return Response(data, media_type=item.attachment_type, headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "attachment; filename*=UTF-8''" + quote(item.attachment_name, safe=""),
+    })
+
+
+@student_router.get("", response_model=List[StudentFeedbackResponse], response_model_exclude={"__all__": {"admin_notes"}})
+def student_feedback_list(db: Session = Depends(get_db), user: User = Depends(require_student)):
+    student = _feedback_student(db, user)
+    return db.query(StudentFeedback).filter(StudentFeedback.student_id == student.id).order_by(StudentFeedback.created_at.desc()).all()
+
+
+@student_router.post("", response_model=StudentFeedbackResponse, response_model_exclude={"admin_notes"}, status_code=201)
+async def student_feedback_create(
+    subject: str = Form(..., min_length=1, max_length=200),
+    message: str = Form(..., min_length=1, max_length=10000),
+    category: Literal["Attendance Discrepancy", "Face Verification Issue", "Lecturer Feedback", "System Bug", "General Inquiry"] = Form(...),
+    priority: Literal["Low", "Medium", "High", "Urgent"] = Form("Medium"),
+    attachment: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db), user: User = Depends(require_student),
+):
+    student = _feedback_student(db, user)
+    if not subject.strip() or not message.strip():
+        raise HTTPException(422, "Subject and message cannot be blank")
+    item = StudentFeedback(id=str(uuid.uuid4()), student_id=student.id, student_name=student.name,
+                           student_code=student.student_code, subject=subject.strip(), message=message.strip(),
+                           category=category, priority=priority, status="Pending")
+    if attachment:
+        data = await attachment.read(feedback_files.MAX_SIZE + 1)
+        mime = attachment.content_type
+        signatures = {"application/pdf": b"%PDF-", "image/png": b"\x89PNG\r\n\x1a\n", "image/jpeg": b"\xff\xd8\xff"}
+        if not data or len(data) > feedback_files.MAX_SIZE:
+            raise HTTPException(422, "Attachment must be between 1 byte and 5 MB")
+        if mime not in signatures or not data.startswith(signatures[mime]):
+            raise HTTPException(422, "Upload a PDF, PNG or JPEG file")
+        item.attachment_path = f"{student.id}/{item.id}"
+        item.attachment_name = (attachment.filename or "attachment").replace("\\", "/").split("/")[-1][:255] or "attachment"
+        item.attachment_type = mime
+        try:
+            feedback_files.upload(item.attachment_path, data, mime)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Feedback attachment upload failed")
+            raise HTTPException(503, "Attachment upload failed. Your ticket was not submitted.") from exc
+    db.add(item)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if item.attachment_path:
+            try:
+                feedback_files.delete(item.attachment_path)
+            except Exception:
+                logging.getLogger(__name__).exception("Failed to remove uncommitted feedback attachment")
+        raise
+    db.refresh(item)
+    return item
+
+
+@student_router.get("/{feedback_id}/attachment")
+def student_feedback_attachment(feedback_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depends(require_student)):
+    student = _feedback_student(db, user)
+    item = db.query(StudentFeedback).filter(StudentFeedback.id == str(feedback_id), StudentFeedback.student_id == student.id).first()
+    if not item:
+        raise HTTPException(404, "Feedback not found")
+    return _feedback_attachment(item)
+
+
+@router.get("/feedback/{feedback_id}/attachment")
+def admin_feedback_attachment(feedback_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return _feedback_attachment(get_or_404(db, StudentFeedback, str(feedback_id), detail="Feedback not found"))
+
 @router.get("/feedback", response_model=List[StudentFeedbackResponse])
 def get_feedback_reports(
     status: Optional[str] = Query(None),
@@ -88,7 +192,7 @@ def get_feedback_reports(
 
 @router.put("/feedback/{feedback_id}", response_model=StudentFeedbackResponse)
 def update_feedback_status(
-    feedback_id: str,
+    feedback_id: uuid.UUID,
     body: FeedbackUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
@@ -97,6 +201,8 @@ def update_feedback_status(
     item.status = body.status
     if body.admin_notes is not None:
         item.admin_notes = body.admin_notes
+    if body.student_response is not None:
+        item.student_response = body.student_response
     db.commit()
     db.refresh(item)
     return item

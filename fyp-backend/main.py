@@ -48,6 +48,8 @@ from routers import (
 # cache there means a student cannot see a class that just opened, and still sees the
 # entry for one that just closed. Correctness beats the saved round trip on these.
 NO_STORE_PREFIXES = (
+    "/students/me/feedback",
+    "/admin/reports/feedback",
     "/admin/reports/mc",
     "/sessions/",              # open / active / per-session register
     "/students/me/active-sessions",
@@ -299,6 +301,7 @@ app.include_router(student_self.router)
 app.include_router(analytics.router)
 app.include_router(lecturers.router)
 app.include_router(admin_reports.router)
+app.include_router(admin_reports.student_router)
 app.include_router(admin_audit.router)
 app.include_router(attendance_features.router)
 app.include_router(medical_leave.router)
