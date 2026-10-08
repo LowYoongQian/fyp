@@ -137,6 +137,15 @@ def slot_on_day(slots: list, local_date) -> dict | None:
     return max(same_day, key=lambda s: s["end"]) if same_day else None
 
 
+def slot_bounds_local(slot: dict, local_date) -> tuple[datetime, datetime]:
+    """Reject malformed or non-positive timetable windows."""
+    start = datetime.combine(local_date, datetime.strptime(slot["start"], "%H:%M").time())
+    end = datetime.combine(local_date, datetime.strptime(slot["end"], "%H:%M").time())
+    if end <= start:
+        raise ValueError("Class end must be after start")
+    return start, end
+
+
 def session_window_utc(session, slots: list) -> tuple:
     """(start, end) of this class, as naive UTC.
 
@@ -147,6 +156,8 @@ def session_window_utc(session, slots: list) -> tuple:
     scheduled_start = getattr(session, "scheduled_start", None)
     scheduled_end = getattr(session, "scheduled_end", None)
     if scheduled_start is not None and scheduled_end is not None:
+        if scheduled_end <= scheduled_start:
+            raise ValueError("Class end must be after start")
         return scheduled_start, scheduled_end
 
     offset = local_offset()
@@ -154,9 +165,8 @@ def session_window_utc(session, slots: list) -> tuple:
     slot = slot_on_day(slots, opened_local.date())
     if not slot:
         return None, session.opened_at + timedelta(hours=2)
-    on_date = lambda hhmm: datetime.combine(
-        opened_local.date(), datetime.strptime(hhmm, "%H:%M").time()) - offset
-    return on_date(slot["start"]), on_date(slot["end"])
+    start, end = slot_bounds_local(slot, opened_local.date())
+    return start - offset, end - offset
 
 
 def session_end_utc(session, slots: list) -> datetime:

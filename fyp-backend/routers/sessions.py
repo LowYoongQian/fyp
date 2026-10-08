@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -34,6 +35,7 @@ from domain.scheduler import (
     lecture_meetings,
     session_checkin_state,
     session_end_utc,
+    slot_bounds_local,
 )
 from domain.security_settings import get_settings, truthy
 from domain.session_sync import source_meeting_id, sync_class_sessions
@@ -100,20 +102,16 @@ def validate_session_opening(db: Session, course_id: str, class_group: str, now:
         
         if day.lower() == current_day.lower():
             try:
-                sh, sm = map(int, start_s.split(":"))
-                eh, em = map(int, end_s.split(":"))
-                
-                start_dt = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-                end_dt = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+                start_dt, end_dt = slot_bounds_local(slot, now.date())
                 
                 open_start = start_dt - timedelta(hours=1)
                 
                 if open_start <= now <= end_dt:
                     valid = True
                     return slot
-            except Exception:
-                valid = True
-                return slot
+            except (ValueError, TypeError, KeyError) as exc:
+                logging.getLogger(__name__).warning("Invalid timetable for course %s, group %s", course_id, class_group)
+                raise HTTPException(400, "Class time configuration is invalid. Please contact an administrator.") from exc
                 
     if not valid:
         slots_str = " or ".join(slot_descriptions)
@@ -126,8 +124,8 @@ def validate_session_opening(db: Session, course_id: str, class_group: str, now:
 
 def _scheduled_bounds(slot: dict, local_date) -> tuple[datetime, datetime]:
     offset = local_offset()
-    parse = lambda value: datetime.combine(local_date, datetime.strptime(value, "%H:%M").time()) - offset
-    return parse(slot["start"]), parse(slot["end"])
+    start, end = slot_bounds_local(slot, local_date)
+    return start - offset, end - offset
 
 
 def _class_group(meeting: ClassMeeting) -> str:
@@ -180,21 +178,17 @@ def validate_student_checkin(db: Session, course_id: str, class_group: str, now:
         
         if day.lower() == current_day.lower():
             try:
-                sh, sm = map(int, start_s.split(":"))
-                eh, em = map(int, end_s.split(":"))
+                start_dt, end_dt = slot_bounds_local(slot, now.date())
                 
-                start_dt = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-                end_dt = now.replace(hour=eh, minute=em, second=0, microsecond=0)
-                
-                if start_dt <= now <= end_dt:
+                if start_dt <= now < end_dt:
                     valid = True
                     break
                 elif now < start_dt:
                     if start_dt - timedelta(hours=1) <= now:
                         is_early = True
-            except Exception:
-                valid = True
-                break
+            except (ValueError, TypeError, KeyError) as exc:
+                logging.getLogger(__name__).warning("Invalid timetable for course %s, group %s", course_id, class_group)
+                raise HTTPException(403, "Class time configuration is invalid. Please contact an administrator.") from exc
                 
     if not valid:
         if is_early:
@@ -476,7 +470,11 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     if session.is_open:
         now_utc = utcnow()
         slots = get_course_group_slots(db, session.course_id, session.class_group)
-        checkin_state = session_checkin_state(session, slots, now_utc)
+        try:
+            checkin_state = session_checkin_state(session, slots, now_utc)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            logging.getLogger(__name__).warning("Invalid check-in time for session %s", id)
+            raise HTTPException(403, "Class time configuration is invalid. Please contact an administrator.") from exc
 
         if checkin_state == "ended":
             scheduled_end = session_end_utc(session, slots)
