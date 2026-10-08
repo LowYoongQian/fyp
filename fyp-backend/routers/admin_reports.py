@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
 from datetime import datetime
@@ -8,6 +8,11 @@ from db.database import get_db
 from db.models import User, StudentFeedback, AttendanceRecord, Student, ClassSession, Course
 from utils.security import require_admin
 from utils.db_helpers import get_or_404
+from db.models import AttendanceRequest
+from domain.medical_leave import review_attendance_request
+from domain.audit import log_admin_action
+from integrations.medical_leave import download_private_document
+from utils.timeutil import iso_utc
 
 router = APIRouter(prefix="/admin/reports", tags=["Admin Reports"])
 
@@ -33,6 +38,12 @@ class FeedbackUpdate(BaseModel):
 
 class MCReportResponse(BaseModel):
     id: Any
+    source: str = "attendance"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    reason: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
     student_id: Any
     student_name: str
     student_code: str
@@ -48,6 +59,7 @@ class MCReportResponse(BaseModel):
 
 class MCReportUpdate(BaseModel):
     status: str
+    source: str = "attendance"
 
 # --- Endpoints ---
 
@@ -129,12 +141,46 @@ def get_mc_reports(
             "student_code": r.student_code,
             "course_name": r.course_name,
             "course_code": r.course_code,
-            "mc_proof_url": r.mc_proof_url or "https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?auto=format&fit=crop&q=80&w=800",
+            "mc_proof_url": r.mc_proof_url,
             "timestamp": r.marked_at,   # outward key kept: the web report table reads it
             "status": "Approved" if r.status == "mc_approved" else "Rejected" if r.status == "mc_rejected" else "Pending",
             "flag_reason": r.flag_reason or "Medical Leave Certificate"
         })
-    return reports
+    requests = db.query(AttendanceRequest, Student, Course).join(
+        Student, Student.id == AttendanceRequest.student_id,
+    ).join(Course, Course.id == AttendanceRequest.course_id).filter(
+        AttendanceRequest.request_type == "leave", AttendanceRequest.proof_path.isnot(None),
+    )
+    if status and status != "All":
+        requests = requests.filter(AttendanceRequest.status == status.lower())
+    for row, student, course in requests.all():
+        reports.append({
+            "id": row.id, "source": "request", "student_id": student.id,
+            "student_name": student.name, "student_code": student.student_code,
+            "course_name": course.course_name, "course_code": course.course_code,
+            "timestamp": iso_utc(row.created_at), "status": row.status.title(),
+            "start_date": row.start_date.isoformat() if row.start_date else None,
+            "end_date": row.end_date.isoformat() if row.end_date else None,
+            "reason": row.reason, "file_name": row.proof_file_name,
+            "file_type": row.proof_mime_type, "flag_reason": row.reviewer_note,
+        })
+    return sorted(reports, key=lambda item: str(item["timestamp"]), reverse=True)
+
+
+@router.get("/mc/{request_id}/proof")
+def get_mc_proof(request_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    row = db.query(AttendanceRequest).filter(
+        AttendanceRequest.id == request_id, AttendanceRequest.request_type == "leave",
+        AttendanceRequest.proof_path.isnot(None),
+    ).first()
+    if not row:
+        raise HTTPException(404, "Medical proof not found")
+    try:
+        data = download_private_document(row.proof_path)
+    except Exception as exc:
+        raise HTTPException(503, "Download failed") from exc
+    return Response(data, media_type=row.proof_mime_type or "application/octet-stream",
+                    headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.put("/mc/{record_id}", response_model=dict)
@@ -144,6 +190,19 @@ def update_mc_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
+    if body.source == "request":
+        row = db.query(AttendanceRequest).filter(
+            AttendanceRequest.id == record_id, AttendanceRequest.request_type == "leave",
+            AttendanceRequest.proof_path.isnot(None),
+        ).with_for_update().first()
+        if not row:
+            raise HTTPException(404, "Medical leave request not found")
+        review_attendance_request(db, row, body.status.strip().lower(), current_user.id, "")
+        db.commit()
+        log_admin_action(db, current_user, "REVIEW_MEDICAL_LEAVE", f"Request {row.id}: {row.status}")
+        return {"message": f"MC status updated to {body.status}"}
+    if body.source != "attendance":
+        raise HTTPException(400, "Invalid MC source")
     rec = get_or_404(db, AttendanceRecord, str(record_id), detail="Attendance record not found")
     new_status = body.status.lower()
     if new_status == "approved":

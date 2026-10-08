@@ -3,6 +3,7 @@ from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
+from domain.medical_leave import apply_approved_medical_leave
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
@@ -366,6 +367,7 @@ def mark_missed_class_as_held(id: str, db: Session = Depends(get_db),
     require_course_access(db, current_user, lesson.course_id, "resolve this class")
     try:
         mark_class_held(lesson, current_user.id)
+        apply_approved_medical_leave(db, lesson)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()

@@ -121,3 +121,6 @@ opencode.json
 /docs
 /scripts
 /tests
+
+# Local backend tests and their fixtures, scripts, reports and screenshots.
+/fyp-backend/tests/

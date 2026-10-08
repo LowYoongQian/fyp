@@ -32,6 +32,7 @@ from routers import auth, llm, sessions, students, admin_students, admin_staff, 
 # cache there means a student cannot see a class that just opened, and still sees the
 # entry for one that just closed. Correctness beats the saved round trip on these.
 NO_STORE_PREFIXES = (
+    "/admin/reports/mc",
     "/sessions/",              # open / active / per-session register
     "/students/me/active-sessions",
     "/students/me/attendance",

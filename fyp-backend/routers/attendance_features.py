@@ -1,3 +1,4 @@
+from domain.medical_leave import review_attendance_request
 import json
 import math
 from datetime import datetime, timedelta
@@ -421,7 +422,7 @@ def review_request(request_id: str, body: AttendanceRequestReview, db: Session =
     decision = body.status.strip().lower()
     if decision not in ("approved", "rejected"):
         raise HTTPException(400, "Status must be approved or rejected")
-    row = db.get(AttendanceRequest, request_id)
+    row = db.query(AttendanceRequest).filter(AttendanceRequest.id == request_id).with_for_update().first()
     if not row:
         raise HTTPException(404, "Request not found")
     if row.status != "pending":
@@ -430,23 +431,9 @@ def review_request(request_id: str, body: AttendanceRequestReview, db: Session =
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         if row.course_id not in my_course_ids(db, lecturer.id):
             raise HTTPException(403, "This request is outside your courses")
-    if decision == "approved" and row.session_id:
-        record = db.query(AttendanceRecord).filter(
-            AttendanceRecord.student_id == row.student_id, AttendanceRecord.session_id == row.session_id
-        ).first()
-        if record:
-            record.status = "leave" if row.request_type == "leave" else "present"
-            record.method = "staff_adjustment"
-        else:
-            db.add(AttendanceRecord(student_id=row.student_id, session_id=row.session_id,
-                                    status="leave" if row.request_type == "leave" else "present",
-                                    method="staff_adjustment"))
-    row.status, row.reviewer_user_id, row.reviewer_note, row.reviewed_at = decision, current_user.id, body.note.strip() or None, utcnow()
+    review_attendance_request(db, row, decision, current_user.id, body.note)
     student = db.get(Student, row.student_id)
     course = db.get(Course, row.course_id)
-    add_notification(db, student.user_id, "request_decision", f"Request {decision}",
-                     f"Your {row.request_type} request for {course.course_code} was {decision}.",
-                     f"request:{row.id}:{decision}", {"request_id": row.id})
     db.commit()
     return _request_dict(row, course, student)
 

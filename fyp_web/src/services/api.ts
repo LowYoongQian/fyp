@@ -245,7 +245,7 @@ export interface StudentAttendance {
   student_id: number | string;
   student_name: string;
   student_code: string;
-  status: 'present' | 'absent';
+  status: 'present' | 'absent' | 'leave';
   marked_at: string | null;
   confidence_score: number | null;
   source_ip?: string | null;
@@ -333,7 +333,7 @@ export interface AdminAttendanceRecord {
   student_id: number | string;
   student_name: string;
   student_code: string;
-  status: 'present' | 'absent';
+  status: 'present' | 'absent' | 'leave';
   marked_at: string | null;
   confidence_score: number | null;
   wifi_verified: boolean;
@@ -393,7 +393,7 @@ export interface StudentAttendanceRecord {
   course_id: number | string | null;
   course_code: string;
   course_name: string;
-  status: 'present' | 'absent';
+  status: 'present' | 'absent' | 'leave';
   marked_at: string | null;
   confidence_score: number | null;
   network_verified: boolean | null;
@@ -796,6 +796,7 @@ export const apiService = {
   },
   studentSubmitMedicalLeave: async (data: FormData, onProgress?: (percent: number) => void): Promise<MedicalLeaveRecord> => {
     const response = await api.post('/students/me/medical-leave', data, {
+      headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: event => {
         const ratio = event.progress ?? (event.total ? event.loaded / event.total : null);
         onProgress?.(ratio === null ? 70 : Math.min(80, Math.max(5, Math.round(ratio * 80))));
@@ -903,8 +904,12 @@ export const apiService = {
     const response = await api.get<MCReportItem[]>(`/admin/reports/mc?${params.toString()}`);
     return response.data;
   },
-  updateAdminMCReport: async (recordId: string, status: string) => {
-    const response = await api.put(`/admin/reports/mc/${recordId}`, { status });
+  getAdminMCProof: async (requestId: string): Promise<Blob> => {
+    const response = await api.get(`/admin/reports/mc/${encodeURIComponent(requestId)}/proof`, { responseType: 'blob' });
+    return response.data;
+  },
+  updateAdminMCReport: async (recordId: string, status: string, source: MCReportItem['source'] = 'attendance') => {
+    const response = await api.put(`/admin/reports/mc/${recordId}`, { status, source });
     return response.data;
   },
   getAdminAuditLogs: async (category?: string, search?: string) => {
@@ -945,6 +950,12 @@ export interface StudentFeedbackReport {
 
 export interface MCReportItem {
   id: string;
+  source?: 'request' | 'attendance';
+  start_date?: string | null;
+  end_date?: string | null;
+  reason?: string | null;
+  file_name?: string | null;
+  file_type?: string | null;
   student_id: string;
   student_name: string;
   student_code: string;

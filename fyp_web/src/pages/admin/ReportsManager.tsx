@@ -138,6 +138,34 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
   const [mcSearch, setMcSearch] = useState('');
   const [selectedMc, setSelectedMc] = useState<MCReportItem | null>(null);
   const [updatingMcId, setUpdatingMcId] = useState<string | null>(null);
+  const [proofUrl, setProofUrl] = useState<string | null>(null);
+  const [proofType, setProofType] = useState('');
+  const [proofError, setProofError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    setProofUrl(null);
+    setProofError('');
+    setProofType(selectedMc?.file_type || '');
+    if (selectedMc?.source === 'request') {
+      apiService.getAdminMCProof(selectedMc.id).then(blob => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setProofType(blob.type || selectedMc.file_type || '');
+        setProofUrl(objectUrl);
+      }).catch(() => {
+        if (active) setProofError('Unable to load the submitted document. Close and reopen this report to retry.');
+      });
+    } else if (selectedMc) {
+      setProofUrl(selectedMc.mc_proof_url || null);
+      if (!selectedMc.mc_proof_url) setProofError('No document is attached to this record.');
+    }
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [selectedMc]);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -159,6 +187,10 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
       }
     } catch (err: any) {
       console.error("Failed to load report data:", err);
+      if (subTab === 'mc') {
+        setMcList([]);
+        await swalError('Unable to load MC reports', 'Please try again. The list could not be refreshed.');
+      }
     } finally {
       setLoading(false);
     }
@@ -182,7 +214,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
     }
   };
 
-  const handleUpdateMcStatus = async (recordId: string, status: string) => {
+  const handleUpdateMcStatus = async (report: MCReportItem, status: string) => {
     const isApprove = status === 'Approved';
     const confirm = await swalConfirm(
       `${status} MC Report?`,
@@ -192,13 +224,13 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
     if (!confirm) return;
 
     try {
-      setUpdatingMcId(recordId);
-      await apiService.updateAdminMCReport(recordId, status);
+      setUpdatingMcId(report.id);
+      await apiService.updateAdminMCReport(report.id, status, report.source);
       await swalSuccess('MC Updated', `Medical Certificate has been ${status.toLowerCase()}.`);
       setSelectedMc(null);
       loadData();
     } catch (err: any) {
-      await swalError('Update Failed', err.message);
+      await swalError('Update Failed', err.response?.data?.detail || err.message);
     } finally {
       setUpdatingMcId(null);
     }
@@ -378,7 +410,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
                     <th className="py-3 px-4">Student</th>
-                    <th className="py-3 px-4">Course</th>
+                    <th className="py-3 px-4">Course / Leave Dates</th>
                     <th className="py-3 px-4">Date Submitted</th>
                     <th className="py-3 px-4">Reason / Notes</th>
                     <th className="py-3 px-4">Status</th>
@@ -387,7 +419,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
                   {paginatedMc.map((m) => (
-                    <tr key={m.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                    <tr key={`${m.source || 'attendance'}:${m.id}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="py-4 px-4 font-medium text-slate-900 dark:text-white">
                         <div>{m.student_name}</div>
                         <div className="text-[11px] text-slate-400 font-mono">{m.student_code}</div>
@@ -395,12 +427,13 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                       <td className="py-4 px-4 text-slate-800 dark:text-slate-200 font-medium">
                         <div>{m.course_name}</div>
                         <div className="text-[11px] text-slate-400 font-mono">{m.course_code}</div>
+                        {m.start_date && <div className="mt-1">{m.start_date} to {m.end_date}</div>}
                       </td>
                       <td className="py-4 px-4 text-slate-500 dark:text-slate-400">
                         {new Date(m.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </td>
                       <td className="py-4 px-4 text-slate-600 dark:text-slate-300 max-w-xs truncate">
-                        {m.flag_reason || "Medical Leave Certificate"}
+                        {m.reason || m.flag_reason || "Medical Leave Certificate"}
                       </td>
                       <td className="py-4 px-4">
                         <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide inline-flex items-center gap-1.5 ${
@@ -529,7 +562,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
       {/* MC PROOF INSPECTOR MODAL */}
       {selectedMc && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl animate-fade-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-5 shadow-2xl animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
               <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <FileCheck className="h-5 w-5 text-brand-blue" />
@@ -554,16 +587,27 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 </div>
               </div>
 
-              {/* Image Preview */}
+              <div className="text-slate-700 dark:text-slate-300 space-y-2">
+                <p>Status: <strong>{selectedMc.status}</strong></p>
+                {selectedMc.start_date && <p>Leave dates: {selectedMc.start_date} to {selectedMc.end_date}</p>}
+                <p className="whitespace-pre-wrap">Reason: {selectedMc.reason || selectedMc.flag_reason || 'Not provided'}</p>
+              </div>
+
+              {/* Submitted document preview */}
               <div>
                 <label className="text-slate-400 font-medium block mb-2">Uploaded Document Proof</label>
-                <div className="relative rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-950 max-h-64 flex items-center justify-center">
-                  <img
-                    src={selectedMc.mc_proof_url}
-                    alt="Medical Certificate Proof"
-                    className="max-h-64 object-contain"
-                  />
-                </div>
+                {proofError ? <p role="alert" className="text-rose-600">{proofError}</p> : proofUrl ? (
+                  <>
+                    <div className="relative rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-950 max-h-64 flex items-center justify-center">
+                      {proofType === 'application/pdf' || selectedMc.file_name?.toLowerCase().endsWith('.pdf') ? (
+                        <iframe title="Medical Certificate PDF" src={proofUrl} className="w-full h-64" />
+                      ) : (
+                        <img src={proofUrl} alt="Medical Certificate Proof" className="max-h-64 object-contain" />
+                      )}
+                    </div>
+                    <a href={proofUrl} target="_blank" rel="noopener noreferrer" className="inline-block mt-2 text-brand-blue underline">Open submitted document</a>
+                  </>
+                ) : <p className="text-slate-500">Loading submitted document...</p>}
               </div>
             </div>
 
@@ -578,15 +622,15 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleUpdateMcStatus(selectedMc.id, 'Rejected')}
-                  disabled={updatingMcId === selectedMc.id}
+                  onClick={() => handleUpdateMcStatus(selectedMc, 'Rejected')}
+                  disabled={updatingMcId === selectedMc.id || (selectedMc.source === 'request' && selectedMc.status !== 'Pending')}
                   className="px-4 py-2 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5"
                 >
                   <XCircle className="h-4 w-4" /> Reject MC
                 </button>
                 <button
-                  onClick={() => handleUpdateMcStatus(selectedMc.id, 'Approved')}
-                  disabled={updatingMcId === selectedMc.id}
+                  onClick={() => handleUpdateMcStatus(selectedMc, 'Approved')}
+                  disabled={updatingMcId === selectedMc.id || (selectedMc.source === 'request' && selectedMc.status !== 'Pending')}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm"
                 >
                   <CheckCircle2 className="h-4 w-4" /> Approve MC

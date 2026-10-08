@@ -10,7 +10,7 @@ interface DailyAttendanceRecord {
   studentCode: string;
   studentEmail: string;
   classGroup: string;
-  status: 'pending' | 'present' | 'absent';
+  status: 'pending' | 'present' | 'absent' | 'leave';
   markedAt?: string;
   deviceIp?: string;
 }
@@ -269,9 +269,11 @@ export const Attendance: React.FC = () => {
           const studentDetail = students.find(stud => stud.id === s.student_id);
           const email = studentDetail ? studentDetail.email : '';
           
-          let finalStatus: 'pending' | 'present' | 'absent' = 'pending';
+          let finalStatus: DailyAttendanceRecord['status'] = 'pending';
           if (s.status === 'present') {
             finalStatus = 'present';
+          } else if (s.status === 'leave') {
+            finalStatus = 'leave';
           } else if (s.status === 'absent') {
             finalStatus = data.is_open ? 'pending' : 'absent';
           } else {
@@ -418,9 +420,10 @@ export const Attendance: React.FC = () => {
       summary.total += 1;
       if (record.status === 'present') summary.present += 1;
       if (record.status === 'absent') summary.absent += 1;
+      if (record.status === 'leave') summary.leave += 1;
       return summary;
     },
-    { total: 0, present: 0, absent: 0 }
+    { total: 0, present: 0, absent: 0, leave: 0 }
   ), [records]);
 
   const availableSessionDates = React.useMemo(() => {
@@ -505,7 +508,7 @@ export const Attendance: React.FC = () => {
         </div>
 
         {/* Stats summary banner */}
-        <div key={`attendance-stats-${stats.present}-${stats.absent}-${stats.total}`} className="flex items-center gap-4 bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2 text-xs font-semibold text-slate-650">
+        <div key={`attendance-stats-${stats.present}-${stats.absent}-${stats.leave}-${stats.total}`} className="flex flex-wrap items-center gap-4 bg-slate-50 border border-slate-200/60 rounded-xl px-4 py-2 text-xs font-semibold text-slate-650">
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-success-green animate-pulse" />
             <span>Present: <strong className="text-slate-800">{stats.present}</strong></span>
@@ -515,6 +518,8 @@ export const Attendance: React.FC = () => {
             <span className="w-2 h-2 rounded-full bg-danger-red" />
             <span>Absent: <strong className="text-slate-800">{stats.absent}</strong></span>
           </div>
+          <div className="w-[1px] h-4 bg-slate-200" />
+          <span>On Leave: <strong className="text-slate-800">{stats.leave}</strong></span>
           <div className="w-[1px] h-4 bg-slate-200" />
           <span>Total: <strong className="text-slate-800">{stats.total}</strong></span>
         </div>
@@ -966,6 +971,9 @@ export const Attendance: React.FC = () => {
                       if (record.status === 'present') {
                         statusBadgeClass = 'bg-emerald-50 text-emerald-600 border border-emerald-200/50';
                         statusText = 'Present';
+                      } else if (record.status === 'leave') {
+                        statusBadgeClass = 'bg-slate-100 text-slate-600 border border-slate-200/50';
+                        statusText = 'On Leave';
                       } else if (record.status === 'absent') {
                         statusBadgeClass = 'bg-rose-50 text-rose-600 border border-rose-200/50';
                         statusText = 'Absent';

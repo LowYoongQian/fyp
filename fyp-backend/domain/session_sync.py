@@ -13,6 +13,7 @@ from db.models import (
 )
 import time as time_module
 from domain.scheduler import calculate_schedule
+from domain.medical_leave import apply_approved_medical_leave
 from domain.class_lifecycle import close_class_if_due, needs_admin_escalation, reminder_stage
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,7 @@ def _sync_class_sessions_now(db: Session):
         # Only completed classes create absences. Cancelled, scheduled and
         # needs_attention rows are deliberately excluded.
         for session in sessions_list:
+            apply_approved_medical_leave(db, session)
             if session.status != "completed" or not session.scheduled_end:
                 continue
             class_date = (session.scheduled_end + tz_offset).date()
