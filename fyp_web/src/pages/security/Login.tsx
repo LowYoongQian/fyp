@@ -4,7 +4,7 @@ import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, 
 import { swalError, swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
 import Swal from 'sweetalert2';
-import sasLogoLocal from '../../assets/saslogo.png';
+import sasLogoLocal from '../../assets/saslogo.webp';
 
 export type SceneId = 'early_morning' | 'morning' | 'noon' | 'afternoon' | 'evening' | 'night' | 'late_night';
 
@@ -551,16 +551,17 @@ export const Login: React.FC = () => {
   // Real-Time Malaysia (UTC+8) Time State
   const [timeState, setTimeState] = useState(() => getMalaysiaTimeDetails());
   
-  // Supabase Storage & Database System Logo with Local Asset Fallback
-  const SUPABASE_LOGO_URL = 'https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/images/Logo/saslogo.png';
-  const [logoSrc, setLogoSrc] = useState<string>(SUPABASE_LOGO_URL);
+  // Keep the optimized local logo for the normal/default case. A custom logo
+  // configured by an administrator can still replace it through the API.
+  const DEFAULT_REMOTE_LOGO_URL = 'https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/images/Logo/saslogo.png';
+  const [logoSrc, setLogoSrc] = useState<string>(sasLogoLocal);
 
   useEffect(() => {
     // Attempt fetching remote logo from API / Supabase setting
     fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/public/logo`)
       .then(res => res.json())
       .then(data => {
-        if (data && data.logo_url) {
+        if (data && data.logo_url && data.logo_url !== DEFAULT_REMOTE_LOGO_URL) {
           setLogoSrc(data.logo_url);
         }
       })

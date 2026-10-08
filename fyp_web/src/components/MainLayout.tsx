@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { UserProfileModal } from './UserProfileModal';
 import { UserSettingsModal } from './UserSettingsModal';
-import sasLogo from '../assets/saslogo.png';
+import sasLogo from '../assets/saslogo.webp';
 import {
   LayoutDashboard,
   BarChart3,

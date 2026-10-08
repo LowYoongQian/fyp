@@ -1,26 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MainLayout } from './components/MainLayout';
-import { Login } from './pages/security/Login';
-import { LecturerDashboard } from './pages/staff/LecturerDashboard';
-import { Analytics } from './pages/staff/Analytics';
-import { AtRisk } from './pages/staff/AtRisk';
-import { Chatbot } from './pages/staff/Chatbot';
-import { CourseAnnouncements } from './pages/staff/CourseAnnouncements';
-import { StudentsManager } from './pages/admin/StudentsManager';
-import { StaffManager } from './pages/admin/StaffManager';
-import { AnnouncementManager } from './pages/admin/AnnouncementManager';
-import { CampusNetworkManager } from './pages/admin/CampusNetworkManager';
-import { ReportsManager } from './pages/admin/ReportsManager';
-import { AuditManager } from './pages/admin/AuditManager';
-import { Timetable } from './pages/staff/Timetable';
-import { Attendance } from './pages/staff/Attendance';
-import { AdminDashboard } from './pages/admin/AdminDashboard';
-import { AcademicManager } from './pages/admin/AcademicManager';
-import { AttendanceManager } from './pages/admin/AttendanceManager';
-import { StudentDashboard } from './pages/student/StudentDashboard';
-import { StudentMC } from './pages/student/StudentMC';
-import { StudentContact } from './pages/student/StudentContact';
 import {
   ShimmerPage,
   ShimmerTimetable,
@@ -34,6 +14,29 @@ import {
 import './App.css';
 import { applyThemePreference, getAccountThemePreference, resetThemeOnLogout } from './theme/themePreference';
 import { recordRecentStaffPage } from './utils/staffRecentPages';
+
+// Keep the login screen and role pages out of the first download. Each screen is
+// fetched only when it is needed, so students do not download admin and staff code.
+const Login = lazy(() => import('./pages/security/Login').then(module => ({ default: module.Login })));
+const LecturerDashboard = lazy(() => import('./pages/staff/LecturerDashboard').then(module => ({ default: module.LecturerDashboard })));
+const Analytics = lazy(() => import('./pages/staff/Analytics').then(module => ({ default: module.Analytics })));
+const AtRisk = lazy(() => import('./pages/staff/AtRisk').then(module => ({ default: module.AtRisk })));
+const Chatbot = lazy(() => import('./pages/staff/Chatbot').then(module => ({ default: module.Chatbot })));
+const CourseAnnouncements = lazy(() => import('./pages/staff/CourseAnnouncements').then(module => ({ default: module.CourseAnnouncements })));
+const StudentsManager = lazy(() => import('./pages/admin/StudentsManager').then(module => ({ default: module.StudentsManager })));
+const StaffManager = lazy(() => import('./pages/admin/StaffManager').then(module => ({ default: module.StaffManager })));
+const AnnouncementManager = lazy(() => import('./pages/admin/AnnouncementManager').then(module => ({ default: module.AnnouncementManager })));
+const CampusNetworkManager = lazy(() => import('./pages/admin/CampusNetworkManager').then(module => ({ default: module.CampusNetworkManager })));
+const ReportsManager = lazy(() => import('./pages/admin/ReportsManager').then(module => ({ default: module.ReportsManager })));
+const AuditManager = lazy(() => import('./pages/admin/AuditManager').then(module => ({ default: module.AuditManager })));
+const Timetable = lazy(() => import('./pages/staff/Timetable').then(module => ({ default: module.Timetable })));
+const Attendance = lazy(() => import('./pages/staff/Attendance').then(module => ({ default: module.Attendance })));
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
+const AcademicManager = lazy(() => import('./pages/admin/AcademicManager').then(module => ({ default: module.AcademicManager })));
+const AttendanceManager = lazy(() => import('./pages/admin/AttendanceManager').then(module => ({ default: module.AttendanceManager })));
+const StudentDashboard = lazy(() => import('./pages/student/StudentDashboard').then(module => ({ default: module.StudentDashboard })));
+const StudentMC = lazy(() => import('./pages/student/StudentMC').then(module => ({ default: module.StudentMC })));
+const StudentContact = lazy(() => import('./pages/student/StudentContact').then(module => ({ default: module.StudentContact })));
 
 const TAB_ROUTES: Record<string, string> = {
   dashboard: 'staff/dashboard',
@@ -194,7 +197,11 @@ const DashboardContent: React.FC = () => {
   }
 
   if (!isAuthenticated) {
-    return <Login />;
+    return (
+      <Suspense fallback={<ShimmerPage />}>
+        <Login />
+      </Suspense>
+    );
   }
 
   const renderActiveTab = () => {
@@ -293,7 +300,9 @@ const DashboardContent: React.FC = () => {
       setCurrentTab={handleTabChange}
       isLoading={tabLoading}
     >
-      {renderActiveTab()}
+      <Suspense fallback={<ShimmerPage />}>
+        {renderActiveTab()}
+      </Suspense>
     </MainLayout>
   );
 };
