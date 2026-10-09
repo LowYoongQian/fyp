@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { dashboardAttendance } from './dashboardAttendance';
 import { apiService } from '../../services/api';
 import type { Announcement, StudentProfile, StudentEnrolmentDetail, StudentActiveSession } from '../../services/api';
 import {
@@ -43,6 +44,8 @@ export const StudentDashboard: React.FC = () => {
   const [enrolments, setEnrolments] = useState<StudentEnrolmentDetail[]>([]);
   const [activeSessions, setActiveSessions] = useState<StudentActiveSession[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [completedCourses, setCompletedCourses] = useState<string[]>([]);
+  const [statistics, setStatistics] = useState(() => dashboardAttendance([]));
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [loadedUserId, setLoadedUserId] = useState<string | number | null>(null);
@@ -55,6 +58,8 @@ export const StudentDashboard: React.FC = () => {
     setLoadError(false);
     setStudent(null);
     setEnrolments([]);
+    setStatistics(dashboardAttendance([]));
+    setCompletedCourses([]);
     setActiveSessions([]);
     setAnnouncements([]);
     setRecoveryEmailVerified(null);
@@ -66,14 +71,17 @@ export const StudentDashboard: React.FC = () => {
     if (!user) return;
     const loadStudentData = async () => {
       try {
-        const [profile, enrolmentsList, activeSessionsList, notices, accountProfile] = await Promise.all([
+        const [profile, enrolmentsList, activeSessionsList, notices, accountProfile, sessions] = await Promise.all([
           apiService.studentGetProfile(),
           apiService.studentGetEnrolments(),
           apiService.studentGetActiveSessions(),
           apiService.studentGetAnnouncements(),
           apiService.getUserProfile().catch(() => null),
+          apiService.studentGetAttendanceSessions(),
         ]);
         if (cancelled) return;
+        setStatistics(dashboardAttendance(sessions));
+        setCompletedCourses([...new Set(sessions.map(session => String(session.course_id)))]);
         setStudent(profile);
         setEnrolments(enrolmentsList);
         setActiveSessions(activeSessionsList);
@@ -117,61 +125,26 @@ export const StudentDashboard: React.FC = () => {
 
   // Get attendance percentage from enrolment detail
   const getAttendanceRateForCourse = (courseId: number | string) => {
+    if (!completedCourses.includes(String(courseId))) return null;
     const enrolment = enrolments.find(e => String(e.course_id) === String(courseId));
     return enrolment && typeof enrolment.attendance_rate === 'number'
       ? enrolment.attendance_rate
-      : 100;
+      : null;
   };
 
-  const overallAttendance = enrolments.length > 0
-    ? Math.round(enrolments.reduce((acc, curr) => acc + getAttendanceRateForCourse(curr.course_id), 0) / enrolments.length)
-    : 95;
-
-  const totalCreditHours = enrolments.reduce((acc, curr) => {
-    return acc + (typeof curr.credit_hours === 'number' ? curr.credit_hours : 3.0);
-  }, 0);
-
-  // ----------------------------------------------------
-  // Chart Data Preparation (Semester Analytics)
-  // ----------------------------------------------------
-  
-  // 1. Weekly Attendance Trend Data (Weeks 1 to 12)
-  const weeklyTrendData = [
-    { week: 'Wk 1', rate: 100, target: 80 },
-    { week: 'Wk 2', rate: 100, target: 80 },
-    { week: 'Wk 3', rate: 95, target: 80 },
-    { week: 'Wk 4', rate: 90, target: 80 },
-    { week: 'Wk 5', rate: 95, target: 80 },
-    { week: 'Wk 6', rate: 88, target: 80 },
-    { week: 'Wk 7', rate: 92, target: 80 },
-    { week: 'Wk 8', rate: 96, target: 80 },
-    { week: 'Wk 9', rate: 94, target: 80 },
-    { week: 'Wk 10', rate: 98, target: 80 },
-    { week: 'Wk 11', rate: 95, target: 80 },
-    { week: 'Wk 12', rate: overallAttendance, target: 80 },
-  ];
-
-  // 2. Course Comparison Bar Chart Data
-  const courseComparisonData = enrolments.length > 0
-    ? enrolments.map(e => ({
-        code: e.course_code,
-        name: e.course_name,
-        rate: getAttendanceRateForCourse(e.course_id),
-      }))
-    : [
-        { code: 'BMCS2073', name: 'Software Info Security', rate: 96 },
-        { code: 'BMCS2013', name: 'Data Structures & Algo', rate: 88 },
-        { code: 'BMCS2083', name: 'Cloud Computing Infra', rate: 92 },
-        { code: 'BMCS3013', name: 'Final Year Project 1', rate: 100 },
-      ];
-
-  // 3. Attendance Status Donut Chart Data
-  const statusPieData = [
-    { name: 'Verified Present', value: 24, color: '#10B981' },
-    { name: 'Late Arrival', value: 2, color: '#F59E0B' },
-    { name: 'Excused (MC)', value: 2, color: '#3B82F6' },
-    { name: 'Unexcused Absent', value: 1, color: '#EF4444' },
-  ];
+  const overallAttendance = statistics.overall;
+  const attendanceLabel = overallAttendance === null ? 'No completed classes' : `${overallAttendance}%`;
+  const hasLowCourse = enrolments.some(e => typeof e.attendance_rate === 'number' && e.attendance_rate < 80);
+  const standing = overallAttendance === null ? 'No completed classes'
+    : hasLowCourse ? 'Below 80% in at least one course — review course attendance'
+    : 'No course below the 80% attendance threshold';
+  const totalCreditHours = enrolments.reduce((acc, curr) => acc + (curr.credit_hours ?? 0), 0);
+  const weeklyTrendData = statistics.weekly;
+  const courseComparisonData = enrolments.map(e => ({
+    code: e.course_code, name: e.course_name, rate: getAttendanceRateForCourse(e.course_id),
+  }));
+  const statusPieData = statistics.breakdown;
+  const completedCount = statusPieData.reduce((sum, item) => sum + item.value, 0);
 
   if (loading || loadedUserId !== user?.user_id) {
     return (
@@ -302,10 +275,10 @@ export const StudentDashboard: React.FC = () => {
         <div className="uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-xs flex items-center justify-between">
           <div className="space-y-1">
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">Attendance Rate</span>
-            <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{overallAttendance}%</span>
+            <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{attendanceLabel}</span>
             <div className="flex items-center gap-1">
               <Activity className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">Good Standing (&gt;80% Safe Zone)</span>
+              <span className={`text-[10px] font-semibold ${hasLowCourse ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>{standing}</span>
             </div>
           </div>
           <div className="p-3 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-xl">
@@ -362,10 +335,10 @@ export const StudentDashboard: React.FC = () => {
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider pl-1 flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-            <span>Attendance Analytics & Future Trend Insights :</span>
+            <span>Attendance Analytics :</span>
           </h3>
           <span className="text-[10px] font-mono font-semibold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-500/20">
-            Semester 1 Analytics
+            All recorded completed classes
           </span>
         </div>
 
@@ -378,7 +351,7 @@ export const StudentDashboard: React.FC = () => {
                   <span>Weekly Attendance Health Trend</span>
                 </h4>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Tracking weekly check-in consistency against the <strong className="text-amber-600 dark:text-amber-400">80% Exam Barring Threshold</strong>.
+                  Weekly attendance by contact hours; approved MC counts toward attendance. Reference: <strong className="text-amber-600 dark:text-amber-400">80% attendance threshold</strong>.
                 </p>
               </div>
               <div className="flex items-center gap-2 text-[10px]">
@@ -394,7 +367,7 @@ export const StudentDashboard: React.FC = () => {
             </div>
 
             <div className="h-60 w-full pt-2">
-              <ResponsiveContainer width="100%" height="100%">
+              {weeklyTrendData.length ? (<ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={weeklyTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                   <defs>
                     <linearGradient id="attendanceGradient" x1="0" y1="0" x2="0" y2="1">
@@ -404,7 +377,7 @@ export const StudentDashboard: React.FC = () => {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#94A3B8" opacity={0.3} />
                   <XAxis dataKey="week" stroke="#64748B" fontSize={11} tickLine={false} />
-                  <YAxis stroke="#64748B" fontSize={11} domain={[50, 100]} tickLine={false} />
+                  <YAxis stroke="#64748B" fontSize={11} domain={[0, 100]} tickLine={false} />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: 'var(--theme-surface)',
@@ -418,7 +391,7 @@ export const StudentDashboard: React.FC = () => {
                   <ReferenceLine y={80} stroke="#F59E0B" strokeDasharray="4 4" label={{ value: '80% Requirement', fill: '#D97706', fontSize: 10, position: 'insideTopRight' }} />
                   <Area type="monotone" dataKey="rate" stroke="#3B82F6" strokeWidth={3} fillOpacity={1} fill="url(#attendanceGradient)" />
                 </AreaChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer>) : <p>No completed classes yet.</p>}
             </div>
           </div>
 
@@ -429,11 +402,11 @@ export const StudentDashboard: React.FC = () => {
                 <PieIcon className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <span>Session Status Breakdown</span>
               </h4>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">Total 29 completed class sessions this semester.</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">{completedCount} completed class sessions.</p>
             </div>
 
             <div className="h-44 w-full relative flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
+              {completedCount ? (<ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
                     data={statusPieData}
@@ -458,31 +431,15 @@ export const StudentDashboard: React.FC = () => {
                     }}
                   />
                 </PieChart>
-              </ResponsiveContainer>
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
-                <span className="text-lg font-bold text-slate-900 dark:text-slate-100 font-space">{overallAttendance}%</span>
-                <span className="text-[9px] text-slate-500 dark:text-slate-400 font-medium">Safe Zone</span>
-              </div>
+              </ResponsiveContainer>) : <p>No completed classes yet.</p>}
+              {completedCount > 0 && <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                <span className="text-lg font-bold text-slate-900 dark:text-slate-100 font-space">{attendanceLabel}</span>
+                <span className="text-[9px] text-slate-500 dark:text-slate-400 font-medium">Completed classes</span>
+              </div>}
             </div>
 
-            {/* Legend */}
             <div className="grid grid-cols-2 gap-2 text-[10px] pt-1">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
-                <span className="text-slate-700 dark:text-slate-300 font-medium truncate">24 Verified</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
-                <span className="text-slate-700 dark:text-slate-300 font-medium truncate">2 Late</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0" />
-                <span className="text-slate-700 dark:text-slate-300 font-medium truncate">2 Excused (MC)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0" />
-                <span className="text-slate-700 dark:text-slate-300 font-medium truncate">1 Absent</span>
-              </div>
+              {statusPieData.map(entry => <span key={entry.name}>{entry.value} {entry.name}</span>)}
             </div>
           </div>
         </div>
@@ -503,7 +460,7 @@ export const StudentDashboard: React.FC = () => {
           </div>
 
           <div className="h-48 w-full pt-2">
-            <ResponsiveContainer width="100%" height="100%">
+            {courseComparisonData.length ? (<ResponsiveContainer width="100%" height="100%">
               <BarChart data={courseComparisonData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#94A3B8" opacity={0.3} />
                 <XAxis dataKey="code" stroke="#64748B" fontSize={11} tickLine={false} />
@@ -523,12 +480,12 @@ export const StudentDashboard: React.FC = () => {
                   {courseComparisonData.map((entry, index) => (
                     <Cell
                       key={`cell-${index}`}
-                      fill={entry.rate >= 90 ? '#10B981' : entry.rate >= 80 ? '#3B82F6' : '#EF4444'}
+                      fill={(entry.rate ?? 0) >= 90 ? '#10B981' : (entry.rate ?? 0) >= 80 ? '#3B82F6' : '#EF4444'}
                     />
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>) : <p>No enrolled courses yet.</p>}
           </div>
         </div>
       </div>
@@ -573,14 +530,14 @@ export const StudentDashboard: React.FC = () => {
                     <div className="flex items-center gap-3">
                       <div className="text-right">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Attendance</span>
-                        <span className={`text-xs font-extrabold ${rate < 80 ? 'text-red-600 dark:text-red-400' : rate < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                          {rate}%
+                        <span className={`text-xs font-extrabold ${(rate ?? 0) < 80 ? 'text-red-600 dark:text-red-400' : (rate ?? 0) < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {rate === null ? 'No completed classes' : `${rate}%`}
                         </span>
                       </div>
                       <div className="w-12 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                         <div 
-                          className={`h-full rounded-full ${rate < 80 ? 'bg-red-500' : rate < 90 ? 'bg-amber-500' : 'bg-emerald-500'}`} 
-                          style={{ width: `${rate}%` }} 
+                          className={`h-full rounded-full ${(rate ?? 0) < 80 ? 'bg-red-500' : (rate ?? 0) < 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                          style={{ width: `${rate ?? 0}%` }}
                         />
                       </div>
                     </div>

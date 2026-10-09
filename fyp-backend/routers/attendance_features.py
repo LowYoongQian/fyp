@@ -348,6 +348,11 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
             "device_id": record.device_id if record else None,
             "opened_at": iso_utc(session.opened_at),
             "closed_at": iso_utc(session.closed_at),
+            "scheduled_start": iso_utc(session.scheduled_start),
+            "contact_hours": session_hours(
+                session.opened_at, session.closed_at,
+                scheduled_start=session.scheduled_start, scheduled_end=session.scheduled_end,
+            ),
             "week_number": ((session.opened_at.date() - semester_start).days // 7) + 1 if semester_start else 1,
         }
 

@@ -445,6 +445,8 @@ export interface StudentAttendanceSession {
   opened_at: string | null;
   closed_at: string | null;
   week_number: number;
+  scheduled_start?: string | null;
+  contact_hours?: number;
 }
 
 export interface StudentActiveSession {
