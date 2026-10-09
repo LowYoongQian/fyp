@@ -11,9 +11,9 @@ import 'package:sqflite/sqflite.dart';
 //   1. Attendance history cache — stores records fetched from the server so
 //      the student dashboard can render offline without a network call.
 //   2. Pending check-in queue — when a check-in POST fails because the server
-//      is unreachable, the payload is queued here.  Call syncPendingCheckIns()
-//      once connectivity is restored; it replays each queued item and removes
-//      successfully submitted entries.
+//      is unreachable, the payload is queued under the original account/server.
+//      AppRoot reconciles queued attempts on resume, refresh and while foregrounded.
+//      Completed entries keep their status but discard the captured photo.
 //
 // Device identity:
 //   getOrCreateDeviceId() generates a stable UUID-like fingerprint on first
@@ -29,7 +29,10 @@ class LocalCacheService {
     final dbPath = p.join(await getDatabasesPath(), 'attendance_cache.db');
     _db = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        await _upgradeQueue(db);
+      },
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE attendance_cache (
@@ -51,6 +54,7 @@ class LocalCacheService {
             queued_at     TEXT NOT NULL
           )
         ''');
+        await _upgradeQueue(db);
       },
     );
     return _db!;
@@ -92,44 +96,93 @@ class LocalCacheService {
 
   // ── Pending check-in queue ────────────────────────────────────────────────
 
-  static Future<void> enqueueCheckIn(dynamic sessionId, Map<String, dynamic> payload) async {
-    if (kIsWeb) return;
+  static Future<void> _upgradeQueue(Database db) async {
+    for (final column in [
+      "owner TEXT NOT NULL DEFAULT ''",
+      "server TEXT NOT NULL DEFAULT ''",
+      "request_id TEXT NOT NULL DEFAULT ''",
+      "status TEXT NOT NULL DEFAULT 'pending'",
+      "last_error TEXT NOT NULL DEFAULT ''",
+    ]) {
+      await db.execute('ALTER TABLE pending_checkins ADD COLUMN $column');
+    }
+    // Old rows have no trustworthy owner. Keep a notice, never replay their photos.
+    await db.update('pending_checkins', {
+      'payload_json': '{}',
+      'status': 'legacy',
+      'last_error':
+          'An old offline attempt has no account identity. Contact your lecturer.',
+    });
+    await db.execute(
+      "CREATE UNIQUE INDEX pending_owner_session ON pending_checkins(owner, server, session_id) WHERE owner != ''",
+    );
+  }
+
+  static Future<void> enqueueCheckIn(
+    String owner,
+    String server,
+    dynamic sessionId,
+    String requestId,
+    DateTime capturedAt,
+    Map<String, dynamic> payload,
+  ) async {
+    if (kIsWeb) {
+      throw StateError('Offline check-in storage requires the mobile app');
+    }
+    if (owner.isEmpty) throw StateError('Sign in before saving attendance');
     final db = await _open();
-    await db.insert('pending_checkins', {
-      'session_id':   sessionId.toString(),
+    final values = <String, Object?>{
+      'owner': owner,
+      'server': server,
+      'session_id': sessionId.toString(),
+      'request_id': requestId,
       'payload_json': jsonEncode(payload),
-      'queued_at':    DateTime.now().toIso8601String(),
+      'queued_at': capturedAt.toUtc().toIso8601String(),
+      'status': 'pending',
+    };
+    await db.transaction((txn) async {
+      final existing = await txn.query('pending_checkins',
+        where: 'owner = ? AND server = ? AND session_id = ?',
+        whereArgs: [owner, server, sessionId.toString()]);
+      if (existing.isEmpty) {
+        await txn.insert('pending_checkins', values);
+      } else if (['failed', 'rejected', 'cancelled'].contains(existing.first['status'])) {
+        // A fresh user-initiated attempt may retry; an automatic replay cannot.
+        await txn.update('pending_checkins', {...values, 'last_error': ''},
+          where: 'id = ?', whereArgs: [existing.first['id']]);
+      }
     });
   }
 
-  /// Replay all queued check-ins.  [submitFn] receives (sessionId, payload)
-  /// and should return true on success, false on failure (network still down).
-  /// Successfully submitted items are removed; failed ones stay for the next
-  /// sync attempt.
-  static Future<int> syncPendingCheckIns(
-    Future<bool> Function(dynamic sessionId, Map<String, dynamic> payload) submitFn,
+  static Future<List<Map<String, Object?>>> pendingCheckIns(
+    String owner,
+    String server,
   ) async {
-    if (kIsWeb) return 0;
-    final db = await _open();
-    final pending = await db.query('pending_checkins', orderBy: 'queued_at ASC');
-    int synced = 0;
-    for (final row in pending) {
-      final sessionId = row['session_id'];
-      final payload   = jsonDecode(row['payload_json'] as String) as Map<String, dynamic>;
-      final ok = await submitFn(sessionId, payload);
-      if (ok) {
-        await db.delete('pending_checkins', where: 'id = ?', whereArgs: [row['id']]);
-        synced++;
-      }
-    }
-    return synced;
+    if (kIsWeb || owner.isEmpty) return [];
+    return (await _open()).query(
+      'pending_checkins',
+      where: "(owner = ? AND server = ?) OR status = 'legacy'",
+      whereArgs: [owner, server],
+      orderBy: 'queued_at ASC',
+    );
   }
 
-  static Future<int> pendingCount() async {
-    if (kIsWeb) return 0;
-    final db = await _open();
-    final result = await db.rawQuery('SELECT COUNT(*) as c FROM pending_checkins');
-    return (result.first['c'] is num) ? (result.first['c'] as num).toInt() : (int.tryParse(result.first['c'].toString()) ?? 0);
+  static Future<void> updateCheckIn(
+    int id,
+    String owner,
+    String status,
+    String message,
+  ) async {
+    final values = <String, Object?>{'status': status, 'last_error': message};
+    if (status != 'pending') values['payload_json'] = '{}';
+    await (await _open()).update(
+      'pending_checkins',
+      values,
+      where: status == 'synced'
+          ? 'id = ? AND owner = ?'
+          : "id = ? AND owner = ? AND status NOT IN ('synced', 'excused')",
+      whereArgs: [id, owner],
+    );
   }
 
   // ── Device identity ───────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
+import 'services/offline_checkin_sync.dart';
 import 'services/server_discovery_service.dart';
 import 'services/user_service.dart';
 import 'config/app_config.dart';
@@ -263,7 +264,11 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
+  String _studentUserId = "";
+  Timer? _offlineTimer;
+  bool _offlineBusy = false;
+  List<Map<String, Object?>> _offlineRows = [];
   int selectedTab = 0; // 0: Home, 1: Student Portal, 2: Staff Portal
 
   String studentAuthToken = "";
@@ -295,7 +300,70 @@ class _AppRootState extends State<AppRoot> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _offlineTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(_syncOffline());
+      }
+    });
     _initApp();
+  }
+
+  @override
+  void dispose() {
+    _offlineTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_syncOffline());
+  }
+
+  Future<void> _syncOffline() async {
+    if (_offlineBusy || !isStudentLoggedIn || _studentUserId.isEmpty || kIsWeb) return;
+    _offlineBusy = true;
+    final owner = _studentUserId, token = studentAuthToken, server = ApiConfig.getEffectiveUrl();
+    bool current() => mounted && owner == _studentUserId && token == studentAuthToken && server == ApiConfig.getEffectiveUrl();
+    final client = http.Client();
+    bool recorded = false;
+    try {
+      final rows = await LocalCacheService.pendingCheckIns(owner, server);
+      if (current()) setState(() => _offlineRows = rows);
+      for (final row in rows) {
+        if (!current()) break;
+        if (row['owner'] != owner || !['pending', 'needs_review'].contains(row['status'])) continue;
+        final result = await syncOfflineCheckIn(client: client, server: server, token: token,
+          row: row, stillCurrent: current,
+          networkFacts: () async => (await NetworkInfoService.collect()).toPayload());
+        await LocalCacheService.updateCheckIn(row['id'] as int, owner, result.status, result.message);
+        recorded = recorded || result.status == 'synced';
+        if (result.status == 'pending') break;
+      }
+      final updated = await LocalCacheService.pendingCheckIns(owner, server);
+      if (current()) setState(() => _offlineRows = updated);
+    } catch (e) {
+      debugPrint('Offline check-in processing deferred: ${e.runtimeType}');
+    } finally {
+      client.close();
+      _offlineBusy = false;
+    }
+    if (recorded && current() && !isSyncing) unawaited(syncData(context));
+  }
+
+  String _offlineLabel(Map<String, Object?> row) {
+    return switch (row['status']) {
+      'synced' => 'Attendance recorded',
+      'excused' => 'Approved leave already recorded',
+      'needs_review' => 'Pending lecturer review — not marked present',
+      'approved' => 'Request approved — refresh attendance',
+      'rejected' => 'Attendance request rejected',
+      'cancelled' => 'Attendance request cancelled',
+      'failed' => 'Needs attention: ${row['last_error']}',
+      'legacy' => '${row['last_error']}',
+      _ => 'Waiting for sync — attendance not confirmed',
+    };
   }
 
   Future<void> _initApp() async {
@@ -521,6 +589,8 @@ class _AppRootState extends State<AppRoot> {
       // Save state
       setState(() {
         if (portalType == 'student') {
+          _studentUserId = authData['user_id']?.toString() ?? '';
+          _offlineRows = [];
           studentAuthToken = token;
           studentId = sId;
           studentEmail = resolvedEmail;
@@ -811,6 +881,7 @@ class _AppRootState extends State<AppRoot> {
 
   // Load attendance history + today's check-in status + course timetable from backend.
   Future<void> syncData(BuildContext context) async {
+    await _syncOffline();
     final prefs = await SharedPreferences.getInstance();
 
     // 1. Try loading cached data first for instant user rendering
@@ -1123,6 +1194,10 @@ class _AppRootState extends State<AppRoot> {
     int? challengeMs,
     Map<String, dynamic>? extraDetails,
   }) async {
+    final owner = _studentUserId, token = studentAuthToken, server = ApiConfig.getEffectiveUrl();
+    final requestId = newCheckInId();
+    final capturedAt = DateTime.now().toUtc();
+    bool current() => mounted && owner == _studentUserId && token == studentAuthToken;
     setState(() => isSyncing = true);
     try {
       // 1. Collect live network facts for location corroboration.
@@ -1135,7 +1210,7 @@ class _AppRootState extends State<AppRoot> {
           : ssid;
 
       // 2. Submit to the backend (authoritative path — no direct DB write).
-      final apiUrl = ApiConfig.getEffectiveUrl();
+      final apiUrl = server;
       final http.Response response;
       final deviceId = await LocalCacheService.getOrCreateDeviceId();
       Map<String, dynamic> checkInPayload = {
@@ -1148,37 +1223,44 @@ class _AppRootState extends State<AppRoot> {
         'liveness_challenge_ms': challengeMs,
         'device_id': deviceId,
       };
+      if (!current()) return;
       try {
         response = await http
             .post(
               Uri.parse('$apiUrl/sessions/$sessionId/attend'),
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': 'Bearer $studentAuthToken',
+                'Authorization': 'Bearer $token',
               },
               body: jsonEncode(checkInPayload),
             )
             .timeout(const Duration(seconds: 15));
       } on TimeoutException {
-        await LocalCacheService.enqueueCheckIn(sessionId, checkInPayload);
-        if (mounted) {
+        await LocalCacheService.enqueueCheckIn(owner, server, sessionId, requestId, capturedAt, checkInPayload);
+        if (current()) {
+          _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
+          if (!current()) return;
+          setState(() {});
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                "Server unreachable — check-in queued and will sync when back online.",
+                "Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.",
               ),
               backgroundColor: Color(0xFFF59E0B),
             ),
           );
         }
         return;
-      } catch (_) {
-        await LocalCacheService.enqueueCheckIn(sessionId, checkInPayload);
-        if (mounted) {
+      } on http.ClientException {
+        await LocalCacheService.enqueueCheckIn(owner, server, sessionId, requestId, capturedAt, checkInPayload);
+        if (current()) {
+          _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
+          if (!current()) return;
+          setState(() {});
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                "No connection — check-in queued and will sync when back online.",
+                "Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.",
               ),
               backgroundColor: Color(0xFFF59E0B),
             ),
@@ -1187,6 +1269,7 @@ class _AppRootState extends State<AppRoot> {
         return;
       }
 
+      if (!current()) return;
       if (response.statusCode != 200) {
         String error = 'Verification failed';
         try {
@@ -1214,6 +1297,12 @@ class _AppRootState extends State<AppRoot> {
         resJson = jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {}
 
+      for (final row in await LocalCacheService.pendingCheckIns(owner, server)) {
+        if (row['owner'] == owner && row['session_id'].toString() == sessionId.toString()) {
+          await LocalCacheService.updateCheckIn(row['id'] as int, owner, 'synced', 'Attendance recorded.');
+        }
+      }
+      if (!current()) return;
       setState(() => isFaceRegistered = true);
       await syncData(context);
 
@@ -1239,7 +1328,7 @@ class _AppRootState extends State<AppRoot> {
         livenessPassed: liveVerified,
       );
     } catch (e) {
-      showErrorDialog(e.toString().replaceAll("Exception: ", ""), context);
+      if (current()) showErrorDialog(e.toString().replaceAll("Exception: ", ""), context);
     } finally {
       if (mounted) setState(() => isSyncing = false);
     }
@@ -1917,6 +2006,8 @@ class _AppRootState extends State<AppRoot> {
   void handleStudentLogout() {
     setState(() {
       studentAuthToken = "";
+      _studentUserId = "";
+      _offlineRows = [];
       isStudentLoggedIn = false;
       isCheckedInToday = false;
       attendanceHistory = [];
@@ -2182,7 +2273,21 @@ class _AppRootState extends State<AppRoot> {
             ),
         ],
       ),
-      bottomNavigationBar: _buildBottomNavigationBar(),
+      bottomNavigationBar: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.isNotEmpty)
+          SafeArea(top: false, child: ListTile(
+            leading: const Icon(Icons.sync),
+            title: Text('Saved attendance attempts (${_offlineRows.length})'),
+            subtitle: Text(_offlineRows.map(_offlineLabel).toSet().join(' · '), maxLines: 2),
+            onTap: () => showModalBottomSheet(context: context, builder: (ctx) => ListView(
+              children: [for (final row in _offlineRows) ListTile(
+                title: Text('Class ${row['session_id']}'),
+                subtitle: Text('${_offlineLabel(row)}\n${row['queued_at']}\n${row['last_error']}'),
+              ), TextButton(onPressed: () { Navigator.pop(ctx); unawaited(_syncOffline()); }, child: const Text('Retry / refresh'))],
+            )),
+          )),
+        _buildBottomNavigationBar(),
+      ]),
     );
   }
 

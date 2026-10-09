@@ -2,6 +2,7 @@ from domain.medical_leave import review_attendance_request
 import json
 import math
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,7 +13,8 @@ from db.models import (
     Announcement, AttendanceRecord, AttendanceRequest, ClassMeeting, ClassSession, Course,
     CourseStaffAssignment, Enrolment, Lecturer, Student, User, UserNotification,
 )
-from domain.attendance import session_hours
+from domain.attendance import session_hours, require_session_enrolment
+from domain.scheduler import get_course_group_slots, session_checkin_state
 from domain.announcements import visible_announcements
 from utils.db_helpers import my_course_ids, require_own_profile
 from utils.security import get_current_user, require_lecturer, require_student
@@ -359,6 +361,57 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
     return [session_dict(session, course) for session, course in reversed(assigned_sessions)]
 
 
+class OfflineRecovery(BaseModel):
+    client_request_id: UUID
+    captured_at: datetime
+
+
+@router.post("/students/me/offline-checkins/{session_id}/reconcile")
+def reconcile_offline_checkin(session_id: str, body: OfflineRecovery,
+                             db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    """Reconcile by authenticated student + class; never trust a device timestamp as attendance."""
+    student = require_own_profile(db, Student, current_user.id, "Student")
+    session = db.query(ClassSession).filter(ClassSession.id == session_id).with_for_update().first()
+    if not session:
+        raise HTTPException(404, "Class session not found")
+    require_session_enrolment(db, session, student.id, status_code=403)
+    record = db.query(AttendanceRecord).filter(
+        AttendanceRecord.student_id == student.id, AttendanceRecord.session_id == session_id,
+    ).first()
+    if record and record.status in ("present", "leave"):
+        return {"status": "synced" if record.status == "present" else "excused"}
+    # Reuse any correction for this student/class, including a previous rejection.
+    # Serializing on the class also prevents concurrent retries creating two requests.
+    prior = db.query(AttendanceRequest).filter(
+        AttendanceRequest.student_id == student.id, AttendanceRequest.session_id == session_id,
+        AttendanceRequest.request_type == "correction",
+    ).order_by(AttendanceRequest.created_at.desc()).first()
+    if prior:
+        return {"status": "needs_review" if prior.status == "pending" else prior.status,
+                "request_id": prior.id, "message": prior.reviewer_note or ""}
+    if session.status in ("cancelled", "scheduled"):
+        raise HTTPException(409, "This class is not eligible for offline recovery")
+    if session.is_open:
+        try:
+            state = session_checkin_state(session, get_course_group_slots(db, session.course_id, session.class_group), utcnow())
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise HTTPException(409, "Invalid class time; contact your lecturer") from exc
+        if state == "before":
+            raise HTTPException(409, "Class has not started")
+        if state != "ended":
+            return {"status": "retry_checkin"}
+    if not session.is_open and session.status != "completed":
+        raise HTTPException(409, "Class was not completed; contact your lecturer")
+    reason = (f"Offline attendance recovery. Client request: {body.client_request_id}. "
+              f"Device-reported capture time (unverified): {body.captured_at.isoformat()}. "
+              "The app could not confirm submission before check-in closed. "
+              "Please verify attendance independently; this is not proof of presence.")
+    result = create_student_request(AttendanceRequestCreate(
+        course_id=session.course_id, session_id=session.id, request_type="correction", reason=reason,
+    ), db, current_user)
+    return {"status": "needs_review", "request_id": result["id"]}
+
+
 @router.post("/students/me/attendance-requests", status_code=201)
 def create_student_request(body: AttendanceRequestCreate, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
     student = require_own_profile(db, Student, current_user.id, "Student")
@@ -369,7 +422,7 @@ def create_student_request(body: AttendanceRequestCreate, db: Session = Depends(
     course = db.get(Course, body.course_id)
     if not enrolment or not course:
         raise HTTPException(404, "Enrolled course not found")
-    session = db.get(ClassSession, body.session_id) if body.session_id else None
+    session = db.query(ClassSession).filter(ClassSession.id == body.session_id).with_for_update().first() if body.session_id else None
     if not session:
         raise HTTPException(400, "Select the class session for this request")
     if session and (session.course_id != course.id or session.class_group not in ("All", enrolment.class_group)):
