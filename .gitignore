@@ -123,4 +123,30 @@ opencode.json
 /tests
 
 # Local backend tests and their fixtures, scripts, reports and screenshots.
-/fyp-backend/tests/
+/fyp-backend/tests/*
+/fyp-backend/pytest.ini
+
+# Local web and Flutter tests (kept on disk, not versioned).
+/fyp_web/tests/
+/fyp_flutter/test/
+
+# Conventional test locations outside the folders above (narrow patterns, no *test*).
+__tests__/
+integration_test/
+test_*.py
+*_test.py
+*_test.dart
+*.test.[jt]s
+*.test.[jt]sx
+*.test.mjs
+*.test.cjs
+*.spec.[jt]s
+*.spec.[jt]sx
+*.spec.mjs
+*.spec.cjs
+
+# Only the consolidated root changelog is versioned.
+*.[mM][dD]
+!/CHANGELOG.md
+/output/report/
+/review-workflow/

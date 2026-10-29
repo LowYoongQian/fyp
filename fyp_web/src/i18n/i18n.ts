@@ -57,6 +57,7 @@ let pendingPageTranslation = false;
 const originalText = new WeakMap<Text, string>();
 const renderedText = new WeakMap<Text, string>();
 const originalAttributes = new WeakMap<Element, Map<string, string>>();
+const appliedAttributes = new WeakMap<Element, Map<string, string>>();
 
 // Try loading from local storage cache initially
 try {
@@ -171,17 +172,26 @@ export const applyPageTranslations = (): void => {
 
   for (const element of document.querySelectorAll<HTMLElement>('[placeholder], [title], [aria-label]')) {
     let attributes = originalAttributes.get(element);
+    let lastAppliedAttributes = appliedAttributes.get(element);
     if (!attributes) {
       attributes = new Map();
       originalAttributes.set(element, attributes);
     }
+    if (!lastAppliedAttributes) {
+      lastAppliedAttributes = new Map();
+      appliedAttributes.set(element, lastAppliedAttributes);
+    }
     for (const attribute of ['placeholder', 'title', 'aria-label']) {
       const current = element.getAttribute(attribute);
       if (current === null) continue;
+      const lastApplied = lastAppliedAttributes.get(attribute);
+      if (!attributes.has(attribute) || (lastApplied !== undefined && current !== lastApplied)) {
+        attributes.set(attribute, current);
+      }
       const source = attributes.get(attribute) ?? current;
-      attributes.set(attribute, source);
       const translated = translateValue(source, replacements);
       if (current !== translated) element.setAttribute(attribute, translated);
+      lastAppliedAttributes.set(attribute, translated);
     }
   }
 };

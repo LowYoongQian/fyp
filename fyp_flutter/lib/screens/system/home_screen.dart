@@ -24,13 +24,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final List<Map<String, dynamic>> gridItems = [
     {'title': 'News', 'icon': Icons.campaign, 'color': Color(0xFF3B82F6)},
-    {'title': 'Online Application', 'icon': Icons.assignment_outlined, 'color': Color(0xFFEF4444)},
-    {'title': 'Programme Offered', 'icon': Icons.school_outlined, 'color': Color(0xFF10B981)},
-    {'title': 'KL Campus Tour', 'icon': Icons.explore_outlined, 'color': Color(0xFF8B5CF6)},
     {'title': 'Contact Us', 'icon': Icons.phone_outlined, 'color': Color(0xFFF59E0B)},
-    {'title': 'Library', 'icon': Icons.menu_book_outlined, 'color': Color(0xFF06B6D4)},
-    {'title': 'Events', 'icon': Icons.event_note_outlined, 'color': Color(0xFFEC4899)},
-    {'title': 'More', 'icon': Icons.more_horiz_outlined, 'color': Color(0xFF64748B)},
   ];
 
   @override
@@ -296,10 +290,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 4,
-                      crossAxisSpacing: 10,
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 24,
                       mainAxisSpacing: 16,
-                      childAspectRatio: 0.82,
+                      childAspectRatio: 1.6,
                     ),
                     itemCount: gridItems.length,
                     itemBuilder: (context, index) {

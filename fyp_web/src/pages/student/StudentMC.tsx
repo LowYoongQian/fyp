@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { TextInput, TextArea } from '../../components/LimitedTextField';
+import { FloatingPanel } from '../../components/FloatingPanel';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   FileText,
@@ -20,7 +22,15 @@ import {
   Check
 } from 'lucide-react';
 import { swalSuccess, swalError } from '../../utils/swal';
-import { apiService, type MedicalLeaveRecord, type StudentEnrolmentDetail } from '../../services/api';
+import { apiService, type MedicalLeaveRecord } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
+import { useLiveResource } from '../../hooks/useLiveResource';
+import { RecordsStatus } from '../../components/RecordsStatus';
+import { RecordPagination } from '../../components/RecordPagination';
+import { apiErrorMessage } from '../../utils/apiError';
+import { SubmissionTime, SubmissionTimeFilter } from '../../components/SubmissionTime';
+import { matchesSubmissionRange, submissionFilterParams, type SubmissionRange } from '../../utils/submissionTime';
+import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 
 interface MCRecord {
   id: string;
@@ -45,19 +55,19 @@ const toMCRecord = (row: MedicalLeaveRecord): MCRecord => ({
   reason: row.reason, fileName: row.file_name, fileType: row.file_type,
   fileSize: `${(row.file_size / 1024 / 1024).toFixed(2)} MB`,
   status: `${row.status.charAt(0).toUpperCase()}${row.status.slice(1)}` as MCRecord['status'],
-  submittedAt: new Date(row.submitted_at).toLocaleString(), remarks: row.remarks || undefined,
+  submittedAt: row.submitted_at, remarks: row.remarks || undefined,
   aiSummary: row.ai_summary,
 });
 
 export const StudentMC: React.FC = () => {
-  const [mcList, setMcList] = useState<MCRecord[]>([]);
+  const { user } = useAuth();
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [submissionRange, setSubmissionRange] = useState<SubmissionRange>({ from: '', to: '' });
   
   // Modal & Form state
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedCourse, setSelectedCourse] = useState('');
-  const [enrolledCourses, setEnrolledCourses] = useState<Array<{ id: string; code: string; name: string; group: string }>>([]);
+  const [courseSelection, setSelectedCourse] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [reason, setReason] = useState('');
@@ -67,14 +77,28 @@ export const StudentMC: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [dragActive, setDragActive] = useState<boolean>(false);
-  const [aiResult, setAiResult] = useState<{ verdict: string; confidence: number; summary: string } | null>(null);
+  const [aiResult, setAiResult] = useState<{ verdict: string; confidence: number | null; summary: string } | null>(null);
 
   // Selected MC preview modal
   const [previewMC, setPreviewMC] = useState<MCRecord | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
-  const checkingTimerRef = useRef<number | null>(null);
+  const search = useDebouncedSearch(searchQuery);
+  const pageKey = JSON.stringify([user?.user_id, filterStatus, search, submissionRange]);
+  const [pageSelection, setPageSelection] = useState({ key: '', page: 1 });
+  const currentPage = pageSelection.key === pageKey ? pageSelection.page : 1;
+  const setCurrentPage = (page: number) => setPageSelection({ key: pageKey, page });
+  const loadRecords = useCallback(async (signal: AbortSignal) => {
+    const [enrolments, result] = await Promise.all([apiService.studentGetEnrolments(),
+      apiService.studentMedicalPage({ page: currentPage, per_page: 8, search, status: filterStatus,
+        ...submissionFilterParams(submissionRange) }, signal)]);
+    return { ...result, courses: enrolments.map(item => ({ id: String(item.course_id), code: item.course_code, name: item.course_name, group: item.class_group })), records: result.items.map(toMCRecord) };
+  }, [currentPage, search, filterStatus, submissionRange]);
+  const { data, setData, loading, error, refresh } = useLiveResource(loadRecords, JSON.stringify([pageKey, currentPage]), ['medical']);
+  const enrolledCourses = data?.courses || [];
+  const mcList = data?.records || [];
+  const selectedCourse = enrolledCourses.some(course => course.id === courseSelection) ? courseSelection : enrolledCourses[0]?.id || '';
 
   useEffect(() => {
     if (!isModalOpen && !previewMC) return;
@@ -86,6 +110,7 @@ export const StudentMC: React.FC = () => {
     const focusTimer = window.setTimeout(() => dialogRef.current?.focus(), 0);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (isUploading) return;
         setIsModalOpen(false);
         setPreviewMC(null);
         return;
@@ -117,11 +142,7 @@ export const StudentMC: React.FC = () => {
       document.body.style.overflow = previousOverflow;
       previousFocus?.focus();
     };
-  }, [isModalOpen, previewMC]);
-
-  useEffect(() => () => {
-    if (checkingTimerRef.current !== null) window.clearInterval(checkingTimerRef.current);
-  }, []);
+  }, [isModalOpen, previewMC, isUploading]);
 
   // Quick reason preset tags
   const quickReasons = [
@@ -131,17 +152,6 @@ export const StudentMC: React.FC = () => {
     'Dental Emergency Surgery',
     'Hospitalization / Outpatient Admission'
   ];
-
-  useEffect(() => {
-    Promise.all([apiService.studentGetEnrolments(), apiService.studentGetMedicalLeave()])
-      .then(([enrolments, records]: [StudentEnrolmentDetail[], MedicalLeaveRecord[]]) => {
-        const courses = enrolments.map(item => ({ id: String(item.course_id), code: item.course_code, name: item.course_name, group: item.class_group }));
-        setEnrolledCourses(courses);
-        setSelectedCourse(current => current || courses[0]?.id || '');
-        setMcList(records.map(toMCRecord));
-      })
-      .catch(() => swalError('Load Failed', 'Could not load medical leave data.'));
-  }, []);
 
   // Handle Drag & Drop
   const handleDrag = (e: React.DragEvent) => {
@@ -181,6 +191,7 @@ export const StudentMC: React.FC = () => {
   };
 
   const handleFileSelected = (selectedFile: File) => {
+    if (isUploading || aiResult) return;
     const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
     if (!validTypes.includes(selectedFile.type)) {
       swalError('Invalid File Format', 'Please upload a PDF document or PNG/JPG image file.');
@@ -198,6 +209,7 @@ export const StudentMC: React.FC = () => {
   };
 
   const removeFile = () => {
+    if (isUploading) return;
     setFile(null);
     setUploadProgress(0);
     setIsUploading(false);
@@ -207,6 +219,7 @@ export const StudentMC: React.FC = () => {
 
   const handleSubmitMC = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUploading || aiResult) return;
 
     if (!file) {
       swalError('Document Missing', 'Please upload your medical document.');
@@ -228,8 +241,8 @@ export const StudentMC: React.FC = () => {
       return;
     }
 
-    if (endDate <= startDate) {
-      swalError('Invalid End Date', 'End date must be after the start date.');
+    if (endDate < startDate) {
+      swalError('Invalid End Date', 'End date cannot be before the start date.');
       return;
     }
 
@@ -237,73 +250,67 @@ export const StudentMC: React.FC = () => {
     const data = new FormData();
     data.append('course_id', selectedCourse); data.append('start_date', startDate);
     data.append('end_date', endDate); data.append('reason', reason.trim()); data.append('proof', file);
-    setIsUploading(true); setUploadProgress(5); setAiResult(null);
+    setIsUploading(true); setUploadProgress(0); setAiResult(null);
     try {
-      const saved = await apiService.studentSubmitMedicalLeave(data, percent => {
-        setUploadProgress(percent);
-        if (percent >= 80 && checkingTimerRef.current === null) {
-          checkingTimerRef.current = window.setInterval(() => {
-            setUploadProgress(current => Math.min(95, current + 1));
-          }, 300);
-        }
+      const saved = await apiService.studentSubmitMedicalLeave(data, setUploadProgress);
+      setUploadProgress(100);
+      setData(current => {
+        const record = toMCRecord(saved);
+        const matches = (filterStatus === 'All' || filterStatus === record.status)
+          && matchesSubmissionRange(record.submittedAt, submissionRange)
+          && [record.id, record.courseCode, record.courseName, record.reason].some(value => value.toLowerCase().includes(search.toLowerCase()));
+        return { ...current!, courses: current?.courses || enrolledCourses,
+          records: matches ? [record, ...(current?.records || []).filter(row => row.id !== record.id)].slice(0, 8) : current?.records || [],
+          total: (current?.total || 0) + (matches ? 1 : 0), stats: { ...current?.stats, pending: (current?.stats.pending || 0) + 1 } };
       });
-      if (checkingTimerRef.current !== null) window.clearInterval(checkingTimerRef.current);
-      checkingTimerRef.current = null;
-      setUploadProgress(100); setMcList(current => [toMCRecord(saved), ...current]);
-      setAiResult({ verdict: saved.ai_verdict || 'needs_review', confidence: saved.ai_confidence || 0, summary: saved.ai_summary || 'Document needs staff review.' });
+      setCurrentPage(1);
+      void refresh();
+      setAiResult({ verdict: saved.ai_verdict || 'needs_review', confidence: saved.ai_confidence ?? null, summary: saved.ai_summary || 'Document needs staff review.' });
       swalSuccess('Leave Submitted', 'Your medical leave was sent for staff review.');
-    } catch (error: any) {
-      if (checkingTimerRef.current !== null) window.clearInterval(checkingTimerRef.current);
-      checkingTimerRef.current = null;
+    } catch (error) {
       setUploadProgress(0);
-      const detail = error?.response?.data?.detail;
-      swalError('Submit Failed', typeof detail === 'string' ? detail : 'Could not submit medical leave.');
+      swalError('Submit Failed', apiErrorMessage(error, 'Could not submit medical leave.'));
     } finally { setIsUploading(false); }
   };
 
-  // Filtered List
-  const filteredRecords = mcList.filter(rec => {
-    const matchesFilter = filterStatus === 'All' || rec.status === filterStatus;
-    const matchesSearch =
-      rec.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rec.courseCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rec.courseName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rec.reason.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
-
-  const totalCount = mcList.length;
-  const pendingCount = mcList.filter(m => m.status === 'Pending').length;
-  const approvedCount = mcList.filter(m => m.status === 'Approved').length;
-  const rejectedCount = mcList.filter(m => m.status === 'Rejected').length;
+  const filteredRecords = mcList;
+  const totalCount = data === undefined ? '—' : Object.values(data.stats).reduce((sum, value) => sum + value, 0);
+  const pendingCount = data === undefined ? '—' : data.stats.pending || 0;
+  const approvedCount = data === undefined ? '—' : data.stats.approved || 0;
+  const rejectedCount = data === undefined ? '—' : data.stats.rejected || 0;
+  const page = data?.page || currentPage;
+  const paginatedRecords = mcList;
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12 max-w-7xl mx-auto">
       {/* Header Banner (Theme Dynamic) */}
-      <div className="uipro-card relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-br from-blue-700 via-indigo-800 to-slate-900 dark:from-blue-950/90 dark:via-indigo-950/95 dark:to-slate-950/95 p-6 rounded-2xl border border-blue-300 dark:border-blue-500/20 shadow-premium text-white">
+      <div className="uipro-card relative flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
         <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 dark:bg-blue-500/10 rounded-full -mr-16 -mt-16 blur-2xl pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-48 h-48 bg-white/10 dark:bg-indigo-500/10 rounded-full -ml-16 -mb-16 blur-2xl pointer-events-none" />
         <div className="relative z-10 space-y-1">
-          <div className="flex items-center gap-2 text-blue-200 dark:text-blue-400 font-semibold text-xs uppercase tracking-wider">
+          <div className="flex items-center gap-2 text-brand-blue dark:text-blue-400 font-semibold text-xs uppercase tracking-wider">
             <FileCheck className="w-4 h-4" />
             <span>Medical Leave</span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight font-space text-white">
+          <h1 className="text-2xl font-bold tracking-tight font-space text-slate-900 dark:text-white">
             Medical Leave Requests
           </h1>
-          <p className="text-sm text-slate-200 dark:text-slate-400 max-w-2xl">
+          <p className="text-sm text-slate-500 dark:text-slate-400 max-w-2xl">
             Upload your medical proof and track its status.
           </p>
         </div>
 
         <button
+          disabled={loading || enrolledCourses.length === 0}
           onClick={() => { setAiResult(null); setUploadProgress(0); setIsModalOpen(true); }}
-          className="relative z-10 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-white text-brand-blue hover:bg-blue-50 dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500 font-semibold text-sm transition-all shadow-md cursor-pointer shrink-0"
+          className="relative z-10 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-brand-blue text-white hover:bg-blue-700 font-semibold text-sm transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
         >
           <Plus className="w-4 h-4" />
           <span>New Request</span>
         </button>
       </div>
+
+      {data && enrolledCourses.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">You need an enrolled course before applying for medical leave.</p>}
 
       {/* Summary Cards (Theme Synced) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -368,7 +375,7 @@ export const StudentMC: React.FC = () => {
 
         <div className="relative flex-grow md:max-w-xs">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
-          <input
+          <TextInput showCounter={false}
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
@@ -378,16 +385,18 @@ export const StudentMC: React.FC = () => {
         </div>
       </div>
 
+      <SubmissionTimeFilter value={submissionRange} onChange={setSubmissionRange} />
+      <RecordsStatus loading={loading} error={error} retry={() => void refresh()} />
       {/* MC Submissions List / Table (Theme Synced) */}
       <div className="uipro-card bg-white dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
-        {filteredRecords.length === 0 ? (
+        {data === undefined ? null : filteredRecords.length === 0 ? (
           <div className="p-12 text-center space-y-3">
             <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 dark:text-slate-500 mx-auto">
               <FileText className="w-6 h-6" />
             </div>
             <div className="text-slate-800 dark:text-slate-300 font-medium text-sm">No Requests</div>
             <p className="text-slate-500 dark:text-slate-400 text-xs max-w-sm mx-auto">
-              {searchQuery || filterStatus !== 'All'
+              {searchQuery || filterStatus !== 'All' || submissionRange.from || submissionRange.to
                 ? 'No requests match your search or filter.'
                 : 'You have no medical leave requests.'}
             </p>
@@ -407,11 +416,11 @@ export const StudentMC: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 text-xs">
-                {filteredRecords.map(rec => (
+                {paginatedRecords.map(rec => (
                   <tr key={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                     <td className="py-3.5 px-4 font-mono font-medium text-blue-600 dark:text-blue-400">
                       <div>{rec.id}</div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-500 font-sans">{rec.submittedAt}</div>
+                      <div className="mt-2 font-sans"><span className="block mb-1 text-[10px] text-slate-400">Submitted</span><SubmissionTime value={rec.submittedAt} /></div>
                     </td>
 
                     <td className="py-3.5 px-4">
@@ -478,6 +487,8 @@ export const StudentMC: React.FC = () => {
         )}
       </div>
 
+      {data !== undefined && <RecordPagination page={page} pageSize={8} total={data.total} onChange={setCurrentPage} />}
+
       {/* Modal: Submit New MC */}
       {isModalOpen && createPortal((
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
@@ -501,6 +512,8 @@ export const StudentMC: React.FC = () => {
                 </div>
               </div>
               <button
+                disabled={isUploading}
+                aria-label="Close medical leave form"
                 onClick={() => setIsModalOpen(false)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer"
               >
@@ -510,6 +523,7 @@ export const StudentMC: React.FC = () => {
 
             {/* Modal Body */}
             <form onSubmit={handleSubmitMC} className="p-6 space-y-5 overflow-y-auto">
+              <fieldset disabled={isUploading || !!aiResult} className="space-y-5">
               {/* Select Course */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Course</label>
@@ -532,7 +546,6 @@ export const StudentMC: React.FC = () => {
                       setStartDate(() => value);
                       setEndDate('');
                     }}
-                    minDate={getLocalDateValue()}
                     placeholder="Select start date"
                   />
                 </div>
@@ -543,7 +556,7 @@ export const StudentMC: React.FC = () => {
                     value={endDate}
                     onChange={value => setEndDate(() => value)}
                     align="right"
-                    minDate={startDate ? addDays(startDate, 1) : undefined}
+                    minDate={startDate || undefined}
                     disabled={!startDate}
                     placeholder={startDate ? 'Select end date' : 'Select start date first'}
                   />
@@ -554,8 +567,10 @@ export const StudentMC: React.FC = () => {
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Reason</label>
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition-all focus-within:border-brand-blue focus-within:ring-2 focus-within:ring-brand-blue/10 dark:border-slate-700 dark:bg-slate-800">
-                  <textarea
+                  <TextArea
                     value={reason}
+                    minLength={5}
+                    maxLength={1000}
                     onChange={e => setReason(e.target.value)}
                     rows={3}
                     placeholder="Add a short reason..."
@@ -652,14 +667,11 @@ export const StudentMC: React.FC = () => {
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/25 dark:bg-emerald-500/10 animate-in fade-in slide-in-from-bottom-1 duration-300">
                         <div className="flex items-center justify-between gap-3">
                           <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle2 className="h-4 w-4" /> MC format match
+                            <CheckCircle2 className="h-4 w-4" /> Submitted for review
                           </span>
                           <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300" aria-live="polite">
-                            {Math.round(aiResult.confidence * 100)}%
+                            {aiResult.confidence === null ? 'Manual review' : `${Math.round(aiResult.confidence * 100)}% format match`}
                           </span>
-                        </div>
-                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-emerald-100 dark:bg-emerald-950/50">
-                          <div className="h-full rounded-full bg-emerald-500 transition-[width] duration-700 ease-out" style={{ width: `${Math.round(aiResult.confidence * 100)}%` }} />
                         </div>
                         <p className="mt-2 text-[10px] leading-4 text-emerald-800 dark:text-emerald-200">{aiResult.summary}</p>
                         <p className="mt-1 text-[9px] text-slate-500 dark:text-slate-400">Format check only. Staff will confirm the document.</p>
@@ -667,8 +679,8 @@ export const StudentMC: React.FC = () => {
                     ) : isUploading ? (
                       <div className="space-y-1.5" aria-live="polite">
                         <div className="flex justify-between text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                          <span>{uploadProgress >= 80 ? 'AI checking MC format...' : 'Uploading medical proof...'}</span>
-                          <span key={`upload-progress-${uploadProgress}`}>{uploadProgress}%</span>
+                          <span>{uploadProgress >= 100 ? 'Processing and saving your request…' : 'Uploading medical proof…'}</span>
+                          <span key={`upload-progress-${uploadProgress}`}>{uploadProgress >= 100 ? 'Please wait' : `${uploadProgress}%`}</span>
                         </div>
                         <div className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                           <div className="h-full bg-blue-600 transition-[width] duration-300 ease-out" style={{ width: `${uploadProgress}%` }} />
@@ -683,10 +695,12 @@ export const StudentMC: React.FC = () => {
                 )}
               </div>
 
+              </fieldset>
               {/* Submit Buttons */}
               <div className="pt-2 flex items-center justify-end gap-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
+                  disabled={isUploading}
                   onClick={() => setIsModalOpen(false)}
                   className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition-all cursor-pointer"
                 >
@@ -698,7 +712,7 @@ export const StudentMC: React.FC = () => {
                   disabled={isUploading}
                   className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all shadow-md cursor-pointer disabled:opacity-50"
                 >
-                  {isUploading ? (uploadProgress >= 80 ? 'Checking MC...' : 'Uploading...') : aiResult ? 'Done' : 'Submit Leave'}
+                  {isUploading ? (uploadProgress >= 100 ? 'Saving…' : 'Uploading…') : aiResult ? 'Done' : 'Submit Leave'}
                 </button>
               </div>
             </form>
@@ -731,6 +745,10 @@ export const StudentMC: React.FC = () => {
             </div>
 
             <div className="space-y-3 text-xs">
+              <div>
+                <span className="block mb-2 text-slate-500 dark:text-slate-400">Submitted:</span>
+                <SubmissionTime value={previewMC.submittedAt} />
+              </div>
               <div>
                 <span className="text-slate-500 dark:text-slate-400">Leave Period:</span>
                 <p className="font-medium text-slate-800 dark:text-slate-200 mt-0.5">{previewMC.startDate} to {previewMC.endDate}</p>
@@ -782,7 +800,7 @@ export const StudentMC: React.FC = () => {
                         const blob = await apiService.studentDownloadMedicalProof(previewMC.id);
                         const url = URL.createObjectURL(blob);
                         const anchor = document.createElement('a'); anchor.href = url; anchor.download = previewMC.fileName;
-                        anchor.click(); URL.revokeObjectURL(url);
+                        anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
                       } catch { swalError('Download Failed', 'Could not download the medical proof.'); }
                     }}
                     className="p-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs flex items-center gap-1 cursor-pointer"
@@ -814,12 +832,6 @@ function getLocalDateValue(date = new Date()) {
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0'),
   ].join('-');
-}
-
-function addDays(value: string, days: number) {
-  const date = new Date(`${value}T12:00:00`);
-  date.setDate(date.getDate() + days);
-  return getLocalDateValue(date);
 }
 
 function CourseSelect({
@@ -866,7 +878,7 @@ function CourseSelect({
       </button>
 
       {open && (
-        <div
+        <FloatingPanel
           role="listbox"
           className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900 animate-in fade-in zoom-in-95 duration-150"
         >
@@ -897,7 +909,7 @@ function CourseSelect({
               </button>
             );
           })}
-        </div>
+        </FloatingPanel>
       )}
     </div>
   );
@@ -989,7 +1001,7 @@ function MedicalLeaveDatePicker({
       </button>
 
       {open && !disabled && (
-        <div className={`absolute top-full z-40 mt-2 w-72 max-w-[calc(100vw-3rem)] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900 animate-in fade-in zoom-in-95 duration-150 ${align === 'right' ? 'right-0' : 'left-0'}`}>
+        <FloatingPanel animateEntrance={false} className={`absolute top-full z-40 mt-2 w-72 max-w-[calc(100vw-3rem)] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900 animate-in fade-in zoom-in-95 duration-150 ${align === 'right' ? 'right-0' : 'left-0'}`}>
           <div className="mb-3 flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
             <button
               type="button"
@@ -1058,7 +1070,7 @@ function MedicalLeaveDatePicker({
           >
             {minDate && minDate > getLocalDateValue() ? 'First available date' : 'Today'}
           </button>
-        </div>
+        </FloatingPanel>
       )}
     </div>
   );

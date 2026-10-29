@@ -42,7 +42,8 @@ def log_audit_event(
     category: str = "admin",  # 'admin' | 'staff'
     action: str,
     details: Optional[str] = None,
-    ip_address: Optional[str] = None
+    ip_address: Optional[str] = None,
+    commit: bool = True,
 ) -> AuditLog:
     """Helper function to insert a real-time audit log into Supabase audit_logs table."""
     try:
@@ -56,10 +57,16 @@ def log_audit_event(
             ip_address=ip_address or _request_client_ip.get() or "127.0.0.1"
         )
         db.add(log)
+        if not commit:
+            # Security changes and their audit evidence must succeed together.
+            db.flush()
+            return log
         db.commit()
         db.refresh(log)
         return log
     except Exception as exc:
+        if not commit:
+            raise
         db.rollback()
         print(f"⚠️ Audit logging warning: {exc}")
         return None

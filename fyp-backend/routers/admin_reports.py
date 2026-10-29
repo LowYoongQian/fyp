@@ -1,4 +1,5 @@
 import logging
+import json
 import uuid
 from datetime import datetime
 from typing import Any, List, Literal, Optional
@@ -14,8 +15,9 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import String, cast, case, literal, select
 
 from db.database import get_db
 from db.models import (
@@ -26,9 +28,12 @@ from db.models import (
     Student,
     StudentFeedback,
     User,
+    UserNotification,
 )
 from domain.audit import log_admin_action
+from domain.record_pages import RecordFilters, status_counts
 from domain.medical_leave import review_attendance_request
+from domain.notification_inbox import notify_administrators
 from integrations import feedback_files
 from integrations.medical_leave import download_private_document
 from utils.db_helpers import get_or_404
@@ -60,8 +65,8 @@ class StudentFeedbackResponse(BaseModel):
 
 class FeedbackUpdate(BaseModel):
     status: Literal["Pending", "In Progress", "Resolved"]
-    admin_notes: Optional[str] = None
-    student_response: Optional[str] = None
+    admin_notes: Optional[str] = Field(None, max_length=5000)
+    student_response: Optional[str] = Field(None, max_length=5000)
 
 class MCReportResponse(BaseModel):
     id: Any
@@ -85,8 +90,9 @@ class MCReportResponse(BaseModel):
         from_attributes = True
 
 class MCReportUpdate(BaseModel):
-    status: str
-    source: str = "attendance"
+    status: Literal["Approved", "Rejected"]
+    source: Literal["attendance", "request"] = "attendance"
+    reviewer_note: str = Field("", max_length=1000)
 
 # --- Endpoints ---
 
@@ -149,6 +155,8 @@ async def student_feedback_create(
             raise HTTPException(503, "Attachment upload failed. Your ticket was not submitted.") from exc
     db.add(item)
     try:
+        notify_administrators(db, "feedback_submission", "New student feedback",
+            f"{student.name} submitted a feedback report.", f"feedback:{item.id}:submitted", {"feedback_id": item.id})
         db.commit()
     except Exception:
         db.rollback()
@@ -160,6 +168,67 @@ async def student_feedback_create(
         raise
     db.refresh(item)
     return item
+
+
+def feedback_page(db, filters, student_id=None, category="All"):
+    query = db.query(StudentFeedback)
+    if student_id:
+        query = query.filter(StudentFeedback.student_id == student_id)
+    stats = status_counts(query, StudentFeedback.status) if student_id else {}
+    if filters.status != "All":
+        query = query.filter(StudentFeedback.status == filters.status)
+    if category != "All":
+        query = query.filter(StudentFeedback.category == category)
+    query = filters.apply(query, StudentFeedback.created_at, [StudentFeedback.id, StudentFeedback.student_name,
+        StudentFeedback.student_code, StudentFeedback.subject, StudentFeedback.message, StudentFeedback.category])
+    return filters.fetch(query, [StudentFeedback.created_at.desc(), StudentFeedback.id.desc()],
+        lambda row: StudentFeedbackResponse.model_validate(row).model_dump(exclude={"admin_notes"} if student_id else set()), stats)
+
+
+@student_router.get("/page")
+def student_feedback_page(filters: RecordFilters = Depends(), db: Session = Depends(get_db), user: User = Depends(require_student)):
+    return feedback_page(db, filters, _feedback_student(db, user).id)
+
+
+@router.get("/feedback/page")
+def admin_feedback_page(filters: RecordFilters = Depends(), category: str = Query("All", max_length=64),
+                        db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return feedback_page(db, filters, category=category)
+
+
+@router.get("/mc/page")
+def admin_mc_page(filters: RecordFilters = Depends(), db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    # One SQL UNION before filtering/sorting/pagination; never fetch both whole tables.
+    attendance = select(AttendanceRecord.id.label("id"), literal("attendance").label("source"),
+        AttendanceRecord.student_id, Student.name.label("student_name"), Student.student_code,
+        Course.course_name, Course.course_code, AttendanceRecord.mc_proof_url,
+        AttendanceRecord.marked_at.label("timestamp"),
+        case((AttendanceRecord.status == "mc_approved", "Approved"),
+             (AttendanceRecord.status == "mc_rejected", "Rejected"), else_="Pending").label("status"),
+        AttendanceRecord.flag_reason, cast(literal(None), String).label("start_date"),
+        cast(literal(None), String).label("end_date"), cast(literal(None), String).label("reason"),
+        cast(literal(None), String).label("file_name"), cast(literal(None), String).label("file_type"),
+    ).join(Student, AttendanceRecord.student_id == Student.id).join(ClassSession, AttendanceRecord.session_id == ClassSession.id
+    ).join(Course, ClassSession.course_id == Course.id).where(
+        AttendanceRecord.mc_proof_url.isnot(None) | AttendanceRecord.status.in_(["mc_pending", "mc_approved", "mc_rejected"]))
+    requests = select(AttendanceRequest.id, literal("request"), AttendanceRequest.student_id,
+        Student.name, Student.student_code, Course.course_name, Course.course_code,
+        cast(literal(None), String), AttendanceRequest.created_at,
+        case((AttendanceRequest.status == "approved", "Approved"),
+             (AttendanceRequest.status == "rejected", "Rejected"),
+             (AttendanceRequest.status == "cancelled", "Cancelled"), else_="Pending"),
+        AttendanceRequest.reviewer_note, cast(AttendanceRequest.start_date, String), cast(AttendanceRequest.end_date, String),
+        AttendanceRequest.reason, AttendanceRequest.proof_file_name, AttendanceRequest.proof_mime_type,
+    ).join(Student, AttendanceRequest.student_id == Student.id).join(Course, AttendanceRequest.course_id == Course.id
+    ).where(AttendanceRequest.request_type == "leave", AttendanceRequest.proof_path.isnot(None))
+    reports = attendance.union_all(requests).subquery()
+    query = db.query(reports)
+    if filters.status != "All":
+        query = query.filter(reports.c.status == filters.status)
+    query = filters.apply(query, reports.c.timestamp, [reports.c.student_name, reports.c.student_code,
+        reports.c.course_name, reports.c.course_code])
+    return filters.fetch(query, [reports.c.timestamp.desc(), reports.c.source, reports.c.id.desc()],
+                         lambda row: dict(row._mapping))
 
 
 @student_router.get("/{feedback_id}/attachment")
@@ -197,12 +266,21 @@ def update_feedback_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    item = get_or_404(db, StudentFeedback, str(feedback_id), detail="Feedback report not found")
+    item = db.query(StudentFeedback).filter_by(id=str(feedback_id)).populate_existing().with_for_update().first()
+    if not item:
+        raise HTTPException(404, "Feedback report not found")
+    previous_status, previous_response = item.status, item.student_response
     item.status = body.status
     if body.admin_notes is not None:
         item.admin_notes = body.admin_notes
     if body.student_response is not None:
         item.student_response = body.student_response
+    if item.status != previous_status or item.student_response != previous_response:
+        student = db.get(Student, item.student_id)
+        if student and student.user_id:
+            db.add(UserNotification(user_id=student.user_id, kind="feedback_response",
+                title="Your feedback has an update", body="An administrator updated your feedback report. Open Contact Admin to view it.",
+                dedupe_key=f"feedback:{item.id}:update:{uuid.uuid4()}", payload=json.dumps({"feedback_id": item.id})))
     db.commit()
     db.refresh(item)
     return item
@@ -311,13 +389,18 @@ def update_mc_status(
         ).with_for_update().first()
         if not row:
             raise HTTPException(404, "Medical leave request not found")
-        review_attendance_request(db, row, body.status.strip().lower(), current_user.id, "")
+        review_attendance_request(db, row, body.status.strip().lower(), current_user.id, body.reviewer_note)
         db.commit()
         log_admin_action(db, current_user, "REVIEW_MEDICAL_LEAVE", f"Request {row.id}: {row.status}")
         return {"message": f"MC status updated to {body.status}"}
     if body.source != "attendance":
         raise HTTPException(400, "Invalid MC source")
-    rec = get_or_404(db, AttendanceRecord, str(record_id), detail="Attendance record not found")
+    rec = db.query(AttendanceRecord).filter_by(id=str(record_id)).populate_existing().with_for_update().first()
+    if not rec:
+        raise HTTPException(404, 'Attendance record not found')
+    previous_status = rec.status
+    if body.reviewer_note.strip():
+        rec.flag_reason = body.reviewer_note.strip()
     new_status = body.status.lower()
     if new_status == "approved":
         rec.status = "mc_approved"
@@ -325,5 +408,13 @@ def update_mc_status(
         rec.status = "mc_rejected"
     else:
         rec.status = "mc_pending"
+    if previous_status != rec.status and new_status in ('approved', 'rejected'):
+        student = db.get(Student, rec.student_id)
+        if student and student.user_id:
+            db.add(UserNotification(user_id=student.user_id, kind='request_decision',
+                title=f'Medical certificate {new_status}',
+                body='Your medical certificate was reviewed. Open medical leave to view the outcome.',
+                dedupe_key=f'mc_review:{rec.id}:{uuid.uuid4()}',
+                payload=json.dumps({'attendance_record_id': str(rec.id)})))
     db.commit()
     return {"message": f"MC status updated to {body.status}"}

@@ -12,6 +12,9 @@ import 'face_scanner_screen.dart';
 import 'full_timetable_screen.dart';
 import 'overall_attendance_screen.dart';
 import '../system/profile_screen.dart';
+import '../system/notifications_screen.dart';
+import '../../services/live_updates.dart';
+import '../../services/academic_calendar.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 2: Student Main Dashboard Shell (Tab Layout)
@@ -32,6 +35,8 @@ class MainScreen extends StatefulWidget {
 
   final VoidCallback onLogout;
   final Future<void> Function() onSyncRequested;
+  final Future<void> Function()? onAttendanceRefresh;
+  final Future<void> Function()? onAnnouncementsRefresh;
   final Future<List<Map<String, dynamic>>> Function() onTimetableRefresh;
   final Function(
     dynamic,
@@ -45,7 +50,7 @@ class MainScreen extends StatefulWidget {
   })
   onCheckInComplete;
   final VoidCallback onRegisterFace;
-  final VoidCallback onTestFaceMatch;
+  final Future<void> Function()? onFaceStatusRefresh;
 
   const MainScreen({
     super.key,
@@ -63,10 +68,12 @@ class MainScreen extends StatefulWidget {
     required this.isSyncing,
     required this.onLogout,
     required this.onSyncRequested,
+    this.onAttendanceRefresh,
+    this.onAnnouncementsRefresh,
     required this.onTimetableRefresh,
     required this.onCheckInComplete,
     required this.onRegisterFace,
-    required this.onTestFaceMatch,
+    this.onFaceStatusRefresh,
   });
 
   @override
@@ -80,6 +87,7 @@ class _MainScreenState extends State<MainScreen> {
   // Real active sessions queried from backend
   List<Map<String, dynamic>> activeSessions = [];
   bool isLoadingSessions = false;
+  bool _hasLoadedSessions = false;
   String? sessionsError;
 
   // Report state variables
@@ -87,22 +95,30 @@ class _MainScreenState extends State<MainScreen> {
 
   Timer? _refreshTimer;
   bool _refreshInProgress = false;
+  LiveUpdates? _live;
+  DateTime _lastRefresh = DateTime.now();
+  final Set<String> _pendingTopics = {};
   final Set<String> _shownNotificationIds = {};
+  List<Map<String, dynamic>> _notifications = [];
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _activeTabIndex);
-    fetchActiveSessions();
+    fetchActiveSessions(showInitialLoading: true);
     unawaited(_fetchLiveNotifications());
+    _startLive();
     _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      unawaited(_refreshDashboardData());
+      if (_live?.foreground != false && (_live?.connected != true || DateTime.now().difference(_lastRefresh).inSeconds >= 60)) {
+        unawaited(_refreshDashboardData());
+      }
     });
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _live?.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -209,7 +225,7 @@ class _MainScreenState extends State<MainScreen> {
     final dayName = _dayOfWeekName(date.weekday);
     final unique = <String, Map<String, dynamic>>{};
     for (final item in widget.studentSchedule.where(
-      (meeting) => meeting['day'] == dayName,
+      (meeting) => meeting['day'] == dayName && (SemesterWindow.parse(meeting['semester'])?.contains(date) ?? true),
     )) {
       final key =
           item['meetingId']?.toString() ??
@@ -309,42 +325,69 @@ class _MainScreenState extends State<MainScreen> {
         .timeout(const Duration(seconds: 12));
   }
 
-  Future<void> _refreshDashboardData() async {
+  void _startLive() {
+    _live?.dispose();
+    _live = LiveUpdates(baseUrl: ApiConfig.getEffectiveUrl(), token: widget.authToken,
+        onTopics: (topics) => _refreshDashboardData(topics: topics));
+  }
+
+  @override
+  void didUpdateWidget(covariant MainScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.authToken != widget.authToken) _startLive();
+  }
+
+  Future<void> _refreshDashboardData({Set<String>? topics}) async {
+    _pendingTopics.addAll(topics ?? {'timetable', 'sessions', 'attendance', 'notifications', 'account'});
     if (!mounted || _refreshInProgress) return;
     _refreshInProgress = true;
     try {
-      await Future.wait([
-        widget.onTimetableRefresh(),
-        fetchActiveSessions(),
-        _fetchLiveNotifications(),
-      ]);
+      while (mounted && _pendingTopics.isNotEmpty) {
+        final changed = Set<String>.from(_pendingTopics);
+        _pendingTopics.clear();
+        if (changed.containsAll({'timetable', 'sessions', 'attendance'})) _lastRefresh = DateTime.now();
+        await Future.wait([
+          if (changed.contains('account') && widget.onFaceStatusRefresh != null) widget.onFaceStatusRefresh!(),
+          if (changed.contains('timetable')) widget.onTimetableRefresh(),
+          if (changed.contains('sessions') || changed.contains('attendance')) fetchActiveSessions(),
+          if (changed.contains('attendance') && widget.onAttendanceRefresh != null) widget.onAttendanceRefresh!(),
+          if (changed.contains('notifications') || changed.contains('notices')) _fetchLiveNotifications(),
+          if (changed.contains('notices') && widget.onAnnouncementsRefresh != null) widget.onAnnouncementsRefresh!(),
+        ]);
+      }
     } finally {
       _refreshInProgress = false;
     }
   }
 
   // Query active lectures matching this student's enrolments (backend API).
-  Future<void> fetchActiveSessions() async {
+  Future<void> fetchActiveSessions({bool showInitialLoading = false}) async {
     if (isLoadingSessions) return;
 
-    // 1. Try loading cached active sessions from SharedPreferences first
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final cachedSessionsStr = prefs.getString('cached_active_sessions');
-      if (cachedSessionsStr != null && cachedSessionsStr.isNotEmpty) {
-        final List<dynamic> decoded = jsonDecode(cachedSessionsStr);
-        final List<Map<String, dynamic>> mapped = decoded
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-        setState(() {
-          activeSessions = mapped;
-          sessionsError = null;
-        });
-      }
-    } catch (_) {}
+    // Read the cache once during initial entry, never during background polling.
+    if (!_hasLoadedSessions) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedSessionsStr = prefs.getString('cached_active_sessions');
+        if (cachedSessionsStr != null && cachedSessionsStr.isNotEmpty) {
+          final List<dynamic> decoded = jsonDecode(cachedSessionsStr);
+          final List<Map<String, dynamic>> mapped = decoded
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+          if (mounted) {
+            setState(() {
+              activeSessions = mapped;
+              _hasLoadedSessions = true;
+              sessionsError = null;
+            });
+          }
+        }
+      } catch (_) {}
+    }
 
-    // Only show loading if we don't have cached sessions yet
-    if (activeSessions.isEmpty) {
+    // Only the first screen load may show a skeleton. An empty list is a valid,
+    // fully-loaded result and background polling must remain visually silent.
+    if (showInitialLoading && !_hasLoadedSessions && activeSessions.isEmpty && mounted) {
       setState(() {
         isLoadingSessions = true;
         sessionsError = null;
@@ -369,10 +412,18 @@ class _MainScreenState extends State<MainScreen> {
         });
       }
 
-      setState(() {
-        activeSessions = loadedList;
-        sessionsError = null;
-      });
+      if (mounted) {
+        final hasChanged = jsonEncode(activeSessions) != jsonEncode(loadedList);
+        if (hasChanged || !_hasLoadedSessions || sessionsError != null) {
+          setState(() {
+            activeSessions = loadedList;
+            _hasLoadedSessions = true;
+            sessionsError = null;
+          });
+        } else {
+          _hasLoadedSessions = true;
+        }
+      }
 
       // Save to cache
       final prefs = await SharedPreferences.getInstance();
@@ -381,11 +432,13 @@ class _MainScreenState extends State<MainScreen> {
       debugPrint("Error loading active sessions: $e");
 
       // Only set error and show the Cloud Off block if we have absolutely no cached data
-      if (activeSessions.isEmpty) {
+      if (!_hasLoadedSessions && activeSessions.isEmpty && mounted) {
         setState(() => sessionsError = _friendlyError(e));
       }
     } finally {
-      if (mounted) setState(() => isLoadingSessions = false);
+      if (mounted && isLoadingSessions) {
+        setState(() => isLoadingSessions = false);
+      }
     }
   }
 
@@ -417,7 +470,7 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  "Face Verification Required",
+                  "Face Registration Required",
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 13.5,
                     fontWeight: FontWeight.bold,
@@ -428,7 +481,7 @@ class _MainScreenState extends State<MainScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              "You need to register your selfie profile to enable smart biometric attendance check-in.",
+              "Register your live face before checking in. Once saved, only the administration office can reset it.",
               style: GoogleFonts.inter(
                 fontSize: 11,
                 color: const Color(0xFF64748B),
@@ -438,9 +491,9 @@ class _MainScreenState extends State<MainScreen> {
             ElevatedButton.icon(
               onPressed: widget.onRegisterFace,
               icon: const Icon(Icons.face_retouching_natural, size: 14),
-              label: const Text("Verify"),
+              label: const Text("Register face"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF10B981),
+                backgroundColor: const Color(0xFF2563EB),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
@@ -454,32 +507,6 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  // Standalone face-match test. Only useful once a face is registered, so it stays
-  // hidden until then -- before that the notice above is the thing to act on.
-  Widget _buildFaceMatchTestButton() {
-    if (!widget.isFaceRegistered) return const SizedBox.shrink();
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      child: OutlinedButton.icon(
-        onPressed: widget.onTestFaceMatch,
-        icon: const Icon(Icons.center_focus_strong, size: 15),
-        label: const Text("Test Face Recognition"),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: const Color(0xFF2563EB),
-          side: const BorderSide(color: Color(0xFFBFDBFE)),
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          textStyle: GoogleFonts.inter(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-          ),
         ),
       ),
     );
@@ -751,23 +778,40 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    IconButton(
-                      onPressed: () async {
-                        await widget.onSyncRequested();
-                        await fetchActiveSessions();
-                      },
-                      icon: const Icon(
-                        Icons.sync,
-                        color: Color(0xFF2563EB),
-                        size: 18,
-                      ),
-                      style: IconButton.styleFrom(
-                        backgroundColor: const Color(0xFFEFF6FF),
-                        padding: const EdgeInsets.all(8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        IconButton(
+                          tooltip: 'Notifications',
+                          onPressed: _openNotificationsScreen,
+                          icon: const Icon(
+                            Icons.notifications_none_rounded,
+                            color: Color(0xFF2563EB),
+                            size: 18,
+                          ),
+                          style: IconButton.styleFrom(
+                            backgroundColor: const Color(0xFFEFF6FF),
+                            padding: const EdgeInsets.all(8),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
                         ),
-                      ),
+                        if (_notifications.any((item) => item['is_read'] != true))
+                          Positioned(
+                            right: 4,
+                            top: 4,
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEF4444),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 1.5),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(width: 8),
                     IconButton(
@@ -1000,8 +1044,7 @@ class _MainScreenState extends State<MainScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildFaceVerificationNotice(),
-            _buildFaceMatchTestButton(),
-            const SizedBox(height: 20),
+            const SizedBox(height: 4),
             // Active Lectures from backend
             Text(
               "Available Session Windows",
@@ -1379,11 +1422,15 @@ class _MainScreenState extends State<MainScreen> {
                                             MaterialPageRoute(
                                               builder: (context) => FaceScannerScreen(
                                                 title: "$courseCode Check-In",
+                                                sessionId: sessionId.toString(),
+                                                authToken: widget.authToken,
+                                                apiBaseUrl: ApiConfig.getEffectiveUrl(),
                                                 onScanComplete:
                                                     (
                                                       imageBase64,
                                                       livenessPassed, {
                                                       int? challengeMs,
+                                                      String? challengeToken,
                                                     }) {
                                                       if (imageBase64 == null ||
                                                           imageBase64.isEmpty ||
@@ -1413,6 +1460,7 @@ class _MainScreenState extends State<MainScreen> {
                                                         challengeMs:
                                                             challengeMs,
                                                         extraDetails: {
+                                                          'challenge_token': challengeToken,
                                                           'timeSlot':
                                                               "$startTimeStr - $endTimeStr",
                                                           'room': room,
@@ -1663,12 +1711,19 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Future<void> _fetchLiveNotifications() async {
+  Future<void> _fetchLiveNotifications({bool showToast = true}) async {
     try {
       final response = await _authedGet('/notifications');
       if (!mounted || response.statusCode != 200) return;
       final items = jsonDecode(response.body) as List<dynamic>;
-      final unread = items.cast<Map<String, dynamic>>().where(
+      final notifications = items
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+      if (jsonEncode(_notifications) != jsonEncode(notifications)) {
+        setState(() => _notifications = notifications);
+      }
+      if (!showToast) return;
+      final unread = notifications.where(
         (item) =>
             item['is_read'] != true &&
             !_shownNotificationIds.contains(item['id']),
@@ -1711,6 +1766,21 @@ class _MainScreenState extends State<MainScreen> {
     } catch (_) {
       // Live alerts are additive; a failed poll must not disturb the dashboard.
     }
+  }
+
+  Future<void> _openNotificationsScreen() async {
+    final updated = await Navigator.push<List<Map<String, dynamic>>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NotificationsScreen(
+          authToken: widget.authToken,
+          apiBaseUrl: ApiConfig.getEffectiveUrl(),
+          initialNotifications: _notifications,
+        ),
+      ),
+    );
+    if (!mounted || updated == null) return;
+    setState(() => _notifications = updated);
   }
 
   Widget _buildTodayTimeline(List<Map<String, dynamic>> classes) {
@@ -2240,11 +2310,15 @@ class _MainScreenState extends State<MainScreen> {
                               MaterialPageRoute(
                                 builder: (context) => FaceScannerScreen(
                                   title: "Daily Attendance Scan",
+                                  sessionId: (matchingOpenSession ?? activeSessions.first)['sessionId'].toString(),
+                                  authToken: widget.authToken,
+                                  apiBaseUrl: ApiConfig.getEffectiveUrl(),
                                   onScanComplete:
                                       (
                                         imageBase64,
                                         livenessPassed, {
                                         int? challengeMs,
+                                        String? challengeToken,
                                       }) {
                                         if (imageBase64 == null ||
                                             imageBase64.isEmpty ||
@@ -2289,6 +2363,7 @@ class _MainScreenState extends State<MainScreen> {
                                           imageBase64,
                                           livenessPassed,
                                           challengeMs: challengeMs,
+                                          extraDetails: {'challenge_token': challengeToken},
                                         );
                                       },
                                 ),

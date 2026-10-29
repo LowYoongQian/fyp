@@ -64,16 +64,8 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
-    payload = decode_token(token)
-    user_id = payload.get("user_id")
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-
-    user = db.query(User).filter(User.id == str(user_id)).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    return user
+    from domain.account_security import validate_session
+    return validate_session(db, decode_token(token))
 
 # Role validation dependency: Lecturer or Admin
 def require_lecturer(current_user: User = Depends(get_current_user)) -> User:

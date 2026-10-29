@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { FloatingPanel } from './FloatingPanel';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { animateUiEntrance } from '../utils/uiMotion';
 import { useAuth } from '../context/AuthContext';
-import { UserProfileModal } from './UserProfileModal';
-import { UserSettingsModal } from './UserSettingsModal';
 import sasLogo from '../assets/saslogo.webp';
 import {
   LayoutDashboard,
@@ -33,6 +33,10 @@ import {
 import { closeSwal } from '../utils/swal';
 import { clearApiCache } from '../services/api';
 import { t } from '../i18n/i18n';
+import { accountRoleLabel } from '../utils/accountRole';
+import { broadcastAccountLogout } from '../utils/accountLogout';
+import { useNotificationInbox } from '../hooks/useNotificationInbox';
+import { NotificationBell, UnreadIndicator } from './NotificationBell';
 
 interface MainLayoutProps {
   currentTab: string;
@@ -47,7 +51,20 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   isLoading = false,
   children
 }) => {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
+  const inbox = useNotificationInbox(String(user?.user_id || ''), token || '');
+  const previousTab = useRef(currentTab);
+  useEffect(() => {
+    // A cancelled unsaved-form navigation must never acknowledge its destination.
+    if (previousTab.current !== currentTab) { previousTab.current = currentTab; inbox.readTab(currentTab); }
+  }, [currentTab, inbox.readTab]);
+  const navigate = (tab: string) => {
+    if (tab === currentTab) inbox.readTab(tab);
+    setCurrentTab(tab);
+  };
+  const hasUnread = (tab: string) => tab === 'admin_reports'
+    ? (inbox.data?.by_tab.admin_reports_feedback || 0) + (inbox.data?.by_tab.admin_reports_mc || 0) > 0
+    : (inbox.data?.by_tab[tab] || 0) > 0;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [isReportsOpen, setIsReportsOpen] = useState(
@@ -60,26 +77,26 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     }
   }, [currentTab]);
   
-  // Profile slide-up popover menu & modal states
+  // Account navigation menu
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [profileInitialTab, setProfileInitialTab] = useState<'profile' | 'security'>('profile');
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const pageRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => animateUiEntrance(pageRef.current, 0.96), [currentTab]);
 
   useEffect(() => {
     const openProfile = (event: Event) => {
       const detail = (event as CustomEvent<{ tab?: 'profile' | 'security' }>).detail;
-      setProfileInitialTab(detail?.tab || 'profile');
       setIsProfileMenuOpen(false);
-      setIsProfileModalOpen(true);
+      setSidebarOpen(false);
+      setCurrentTab(detail?.tab === 'security' ? 'profile_security' : 'profile');
     };
     window.addEventListener('open-user-profile', openProfile);
     return () => window.removeEventListener('open-user-profile', openProfile);
-  }, []);
+  }, [setCurrentTab]);
 
   const handleLogout = () => {
+    broadcastAccountLogout();
     // Immediately destroy session tokens so refreshing the page (F5 / Ctrl+F5) CANNOT cancel logout
     sessionStorage.removeItem('auth_token');
     sessionStorage.removeItem('auth_user');
@@ -142,7 +159,8 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         ];
 
   const currentItem = navItems.find(item => item.id === currentTab);
-  const currentTabLabel = currentItem ? currentItem.label : t('common.dashboard', 'en');
+  const accountLabels: Record<string, string> = { profile: 'User Profile', profile_security: 'Security & Password', settings: 'Settings' };
+  const currentTabLabel = accountLabels[currentTab] || (currentItem ? currentItem.label : t('common.dashboard', 'en'));
   const portalName = user?.role === 'admin' ? 'Admin Portal' : user?.role === 'student' ? 'Student Portal' : 'Staff Portal';
 
   return (
@@ -219,6 +237,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         </div>
 
         {/* Nav Links */}
+        <span id="unread-nav-status" className="sr-only">Unread updates for this page</span>
         <nav className="flex-1 space-y-1.5 px-4 py-6 overflow-y-auto">
           {navItems.map(item => {
             const Icon = item.icon;
@@ -232,11 +251,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                     onClick={() => {
                       setIsReportsOpen(!isReportsOpen);
                       if (!currentTab.startsWith('admin_reports')) {
-                        setCurrentTab('admin_reports_feedback');
+                        navigate('admin_reports_feedback');
+                      } else {
+                        inbox.readTab(currentTab);
                       }
                     }}
                     title={collapsed ? item.label : undefined}
-                    className={`w-full flex items-center justify-between rounded-xl text-xs font-semibold tracking-wide transition-all duration-155 cursor-pointer border ${
+                    aria-describedby={hasUnread(item.id) ? 'unread-nav-status' : undefined}
+                    className={`relative w-full flex items-center justify-between rounded-xl text-xs font-semibold tracking-wide transition-all duration-155 cursor-pointer border ${
                       collapsed ? 'justify-center p-3' : 'px-4 py-3'
                     } ${
                       isReportsActive
@@ -250,6 +272,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                         <span className="animate-in fade-in duration-200 truncate">{item.label}</span>
                       )}
                     </div>
+                    <UnreadIndicator show={hasUnread(item.id)} collapsed={collapsed} />
                     {!collapsed && (
                       <ChevronDown
                         className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${
@@ -265,7 +288,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setCurrentTab('admin_reports_feedback');
+                          navigate('admin_reports_feedback');
                           setSidebarOpen(false);
                         }}
                         className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer text-left ${
@@ -276,12 +299,13 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                       >
                         <MessageSquare className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                         <span className="truncate">Feedback Reports</span>
+                        <UnreadIndicator show={hasUnread('admin_reports_feedback')} />
                       </button>
 
                       <button
                         type="button"
                         onClick={() => {
-                          setCurrentTab('admin_reports_mc');
+                          navigate('admin_reports_mc');
                           setSidebarOpen(false);
                         }}
                         className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer text-left ${
@@ -292,6 +316,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                       >
                         <FileCheck className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                         <span className="truncate">Medical Leave</span>
+                        <UnreadIndicator show={hasUnread('admin_reports_mc')} />
                       </button>
                     </div>
                   )}
@@ -304,11 +329,12 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               <button
                 key={item.id}
                 onClick={() => {
-                  setCurrentTab(item.id);
+                  navigate(item.id);
                   setSidebarOpen(false);
                 }}
                 title={collapsed ? item.label : undefined}
-                className={`w-full flex items-center rounded-xl text-xs font-semibold tracking-wide transition-all duration-155 cursor-pointer border ${
+                aria-describedby={hasUnread(item.id) ? 'unread-nav-status' : undefined}
+                className={`relative w-full flex items-center rounded-xl text-xs font-semibold tracking-wide transition-all duration-155 cursor-pointer border ${
                   collapsed ? 'justify-center p-3' : 'gap-3 px-4 py-3'
                 } ${
                   active
@@ -320,6 +346,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 {!collapsed && (
                   <span className="animate-in fade-in duration-200 truncate">{item.label}</span>
                 )}
+                <UnreadIndicator show={hasUnread(item.id)} collapsed={collapsed} />
               </button>
             );
           })}
@@ -333,7 +360,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         >
           {/* Slide-up Popover Menu */}
           {isProfileMenuOpen && (
-            <div
+            <FloatingPanel
               style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
               className={`absolute bottom-full mb-3 backdrop-blur-md border rounded-2xl shadow-2xl z-50 p-2 text-xs font-sans animate-in slide-in-from-bottom-3 fade-in duration-200 ${
               collapsed ? 'left-3 w-60' : 'left-4 right-4'
@@ -342,7 +369,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               <div className="space-y-0.5">
                 <button
                   type="button"
-                  onClick={() => { setIsProfileMenuOpen(false); setProfileInitialTab('profile'); setIsProfileModalOpen(true); }}
+                  onClick={() => { setIsProfileMenuOpen(false); setSidebarOpen(false); setCurrentTab('profile'); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors font-medium cursor-pointer"
                 >
                   <User className="h-4 w-4 text-slate-400" />
@@ -351,7 +378,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => { setIsProfileMenuOpen(false); setIsSettingsModalOpen(true); }}
+                  onClick={() => { setIsProfileMenuOpen(false); setSidebarOpen(false); setCurrentTab('settings'); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors font-medium cursor-pointer"
                 >
                   <Settings className="h-4 w-4 text-slate-400" />
@@ -371,14 +398,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="font-bold text-slate-800 text-xs truncate">
-                      {user?.role === 'admin' ? 'Administrator' : user?.role === 'student' ? 'Student' : 'Lecturer'}
+                      {accountRoleLabel(user)}
                     </p>
                     <p className="text-[10px] text-slate-400 truncate">{user?.email}</p>
                   </div>
                   <Check className="h-4 w-4 text-brand-blue shrink-0" />
                 </div>
               </div>
-            </div>
+            </FloatingPanel>
           )}
 
           {/* Profile Card Button */}
@@ -426,7 +453,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold text-slate-800 truncate">
-                    {user?.role === 'admin' ? 'Administrator' : user?.role === 'student' ? 'Student' : 'Lecturer'}
+                    {accountRoleLabel(user)}
                   </p>
                   <p className="text-[10px] text-slate-450 truncate mt-0.5">{user?.email}</p>
                 </div>
@@ -460,7 +487,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               <div className="mui-linear-bar2 h-full bg-sky-400 shadow-sm" />
             </div>
           )}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0">
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
@@ -469,49 +496,36 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               <Menu className="h-4.5 w-4.5" />
             </button>
             
-            <div className="flex items-center gap-2 text-xs font-sans text-slate-500">
+            <div className="flex items-center gap-2 min-w-0 text-xs font-sans text-slate-500">
               <button
                 type="button"
-                onClick={() => setCurrentTab(user?.role === 'admin' ? 'admin_dashboard' : user?.role === 'student' ? 'student_dashboard' : 'dashboard')}
+                onClick={() => navigate(user?.role === 'admin' ? 'admin_dashboard' : user?.role === 'student' ? 'student_dashboard' : 'dashboard')}
                 title="Go to Dashboard"
                 className="flex items-center gap-1 hover:text-brand-blue text-slate-500 transition-colors cursor-pointer p-1 rounded-lg hover:bg-slate-100/70"
               >
                 <Home className="h-4 w-4 text-slate-400 hover:text-brand-blue shrink-0" />
               </button>
               <ChevronRight className="h-3 w-3 text-slate-300 shrink-0" />
-              <span className="font-bold text-brand-blue bg-brand-blue-light px-2.5 py-1 rounded-lg border border-brand-blue/10">
+              <span className="font-bold text-brand-blue bg-brand-blue-light px-2.5 py-1 rounded-lg border border-brand-blue/10 truncate">
                 {currentTabLabel}
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Network Active badge removed */}
+            <NotificationBell key={`${user?.user_id}:${token}`} inbox={inbox} navigate={navigate}
+              labels={{ ...Object.fromEntries(navItems.map(item => [item.id, item.label])), admin_reports_feedback: 'Feedback Reports', admin_reports_mc: 'Medical Leave' }} />
           </div>
         </header>
 
         {/* View Injector */}
-        <main className={currentTab === 'chatbot'
+        <main ref={pageRef} data-ui-page className={currentTab === 'chatbot'
           ? 'flex min-h-0 w-full flex-1'
           : 'flex-grow p-6 lg:p-8 max-w-7xl w-full mx-auto'
         }>
           {children}
         </main>
       </div>
-
-      {/* Account Settings & Profile Modals */}
-      <UserProfileModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        initialEmail={user?.email}
-        initialRole={user?.role}
-        initialTab={profileInitialTab}
-      />
-
-      <UserSettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-      />
 
       {/* Full-Screen Logout Transition Overlay */}
       {isLoggingOut && (

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dashboardAttendance } from './dashboardAttendance';
 import { apiService } from '../../services/api';
+import { useLiveRefresh } from '../../hooks/useLiveRefresh';
 import type { Announcement, StudentProfile, StudentEnrolmentDetail, StudentActiveSession } from '../../services/api';
 import {
   Smartphone,
@@ -51,6 +52,19 @@ export const StudentDashboard: React.FC = () => {
   const [loadedUserId, setLoadedUserId] = useState<string | number | null>(null);
   const [recoveryEmailVerified, setRecoveryEmailVerified] = useState<boolean | null>(null);
   const [recoveryTipSkipped, setRecoveryTipSkipped] = useState(false);
+
+  useLiveRefresh(async () => {
+    const [sessions, enrolmentsList] = await Promise.all([apiService.studentGetAttendanceSessions(), apiService.studentGetEnrolments()]);
+    setStatistics(dashboardAttendance(sessions));
+    setCompletedCourses([...new Set(sessions.map(session => String(session.course_id)))]);
+    setEnrolments(enrolmentsList);
+  }, ['attendance'], String(user?.user_id));
+  useLiveRefresh(async () => setActiveSessions(await apiService.studentGetActiveSessions()), ['sessions'], String(user?.user_id));
+  useLiveRefresh(async () => setAnnouncements(await apiService.studentGetAnnouncements()), ['notices'], String(user?.user_id));
+  useLiveRefresh(async () => {
+    const [profile, list] = await Promise.all([apiService.studentGetProfile(), apiService.studentGetEnrolments()]);
+    setStudent(profile); setEnrolments(list);
+  }, ['timetable', 'account'], String(user?.user_id));
 
   useEffect(() => {
     let cancelled = false;

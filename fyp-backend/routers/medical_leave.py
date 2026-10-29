@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import uuid
 from datetime import date
@@ -6,10 +7,13 @@ from datetime import date
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from db.database import get_db
 from db.models import AttendanceRequest, Course, CourseStaffAssignment, Enrolment, Lecturer, Student, User
-from integrations.medical_leave import ALLOWED_TYPES, download_private_document, has_valid_signature, upload_private_document, verify_medical_document
+from integrations.medical_leave import ALLOWED_TYPES, delete_private_document, download_private_document, has_valid_signature, upload_private_document, verify_medical_document
+from domain.record_pages import RecordFilters, status_counts
+from domain.notification_inbox import notify_administrators
 from routers.attendance_features import add_notification
 from utils.db_helpers import require_own_profile
 from utils.security import require_student
@@ -53,8 +57,8 @@ def submit_medical_leave(
     course = db.get(Course, course_id)
     if not enrolment or not course:
         raise HTTPException(404, "Enrolled course not found")
-    if start_date < date.today() or end_date <= start_date:
-        raise HTTPException(400, "Choose a future end date")
+    if end_date < start_date:
+        raise HTTPException(400, "End date cannot be before start date")
     clean_reason = reason.strip()
     if len(clean_reason) < 5 or len(clean_reason) > 1000:
         raise HTTPException(400, "Add a short medical reason")
@@ -69,7 +73,10 @@ def submit_medical_leave(
     try:
         ai = verify_medical_document(data, mime_type)
     except Exception as exc:
-        raise HTTPException(503, "Document check unavailable. Try again") from exc
+        logging.getLogger(__name__).warning("Medical screening unavailable: %s", type(exc).__name__)
+        ai = {"verdict": "needs_review", "confidence": None,
+              "summary": "Automatic screening was unavailable. An administrator must review your document.",
+              "signals": [], "missing": []}
     if ai["verdict"] == "invalid":
         raise HTTPException(422, ai["summary"] or "This does not look like a medical certificate")
     extension = {"application/pdf": ".pdf", "image/png": ".png", "image/jpeg": ".jpg"}[mime_type]
@@ -81,21 +88,48 @@ def submit_medical_leave(
     row = AttendanceRequest(
         student_id=student.id, course_id=course.id, request_type="leave", reason=clean_reason,
         start_date=start_date, end_date=end_date, proof_path=path,
-        proof_file_name=os.path.basename(proof.filename or f"medical-proof{extension}").replace('"', ""),
+        proof_file_name=os.path.basename((proof.filename or f"medical-proof{extension}").replace("\\", "/")).replace('"', "")[:255],
         proof_mime_type=mime_type, proof_size=len(data), ai_verdict=ai["verdict"],
         ai_confidence=ai["confidence"], ai_summary=ai["summary"], ai_details=json.dumps(ai),
     )
-    db.add(row)
-    db.flush()
-    staff_ids = {course.lecturer_id} if course.lecturer_id else set()
-    staff_ids.update(a.lecturer_id for a in db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == course.id).all())
-    for lecturer in db.query(Lecturer).filter(Lecturer.id.in_(staff_ids)).all() if staff_ids else []:
-        add_notification(db, lecturer.user_id, "attendance_request", "New medical leave",
-                         f"{student.name} submitted medical leave for {course.course_code}.",
-                         f"request:{row.id}:submitted", {"request_id": row.id})
-    db.commit()
+    try:
+        db.add(row)
+        db.flush()
+        staff_ids = {course.lecturer_id} if course.lecturer_id else set()
+        staff_ids.update(a.lecturer_id for a in db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == course.id).all())
+        for lecturer in db.query(Lecturer).filter(Lecturer.id.in_(staff_ids)).all() if staff_ids else []:
+            add_notification(db, lecturer.user_id, "attendance_request", "New medical leave",
+                             f"{student.name} submitted medical leave for {course.course_code}.",
+                             f"request:{row.id}:submitted", {"request_id": row.id})
+        notify_administrators(db, "medical_submission", "New medical leave request",
+            f"{student.name} submitted a medical leave request.", f"medical:{row.id}:submitted", {"request_id": row.id})
+        db.commit()
+    except Exception:
+        db.rollback()
+        try:
+            delete_private_document(path)
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to remove uncommitted medical proof")
+        raise
     db.refresh(row)
     return serialize(row, course, enrolment.class_group)
+
+
+@router.get("/page")
+def medical_leave_page(filters: RecordFilters = Depends(), db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    student = require_own_profile(db, Student, current_user.id, "Student")
+    base = db.query(AttendanceRequest).filter(AttendanceRequest.student_id == student.id,
+        AttendanceRequest.request_type == "leave", AttendanceRequest.proof_path.isnot(None))
+    stats = status_counts(base, AttendanceRequest.status)
+    group = select(Enrolment.class_group).where(Enrolment.student_id == student.id,
+        Enrolment.course_id == AttendanceRequest.course_id).order_by(Enrolment.id).limit(1).scalar_subquery()
+    query = base.with_entities(AttendanceRequest, Course, group).join(Course, Course.id == AttendanceRequest.course_id)
+    if filters.status != "All":
+        query = query.filter(AttendanceRequest.status == filters.status.lower())
+    query = filters.apply(query, AttendanceRequest.created_at, [Course.course_name, Course.course_code,
+        AttendanceRequest.reason, AttendanceRequest.id])
+    return filters.fetch(query, [AttendanceRequest.created_at.desc(), AttendanceRequest.id.desc()],
+                         lambda row: serialize(row[0], row[1], row[2] or ""), stats)
 
 
 @router.get("/{request_id}/proof")
@@ -110,5 +144,6 @@ def get_medical_proof(request_id: str, db: Session = Depends(get_db), current_us
     except Exception as exc:
         raise HTTPException(503, "Download failed") from exc
     return Response(data, media_type=row.proof_mime_type or "application/octet-stream", headers={
-        "Content-Disposition": f'attachment; filename="{row.proof_file_name or "medical-proof"}"'
+        "Content-Disposition": "attachment; filename=medical-proof",
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
     })

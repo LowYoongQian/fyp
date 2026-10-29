@@ -1,3 +1,6 @@
+import { TextInput } from '../../components/LimitedTextField';
+import { SemestersPanel } from '../../components/SemestersPanel';
+import { FloatingPanel } from '../../components/FloatingPanel';
 import React, { useState, useEffect } from 'react';
 import { apiService } from '../../services/api';
 import type { Student, AdminStaff, Programme, Course, CourseStaffAssignment, Enrolment } from '../../services/api';
@@ -18,18 +21,19 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  CalendarDays
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
 
-type SubTab = 'programmes' | 'courses' | 'staff' | 'students';
+type SubTab = 'programmes' | 'courses' | 'staff' | 'students' | 'semesters';
 const LEDGER_PAGE_SIZE = 6;
 
 export const AcademicManager: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('programmes');
   const [loading, setLoading] = useState(true);
-  const [ledgerSearch, setLedgerSearch] = useState<Record<SubTab, string>>({ programmes: '', courses: '', staff: '', students: '' });
-  const [ledgerPage, setLedgerPage] = useState<Record<SubTab, number>>({ programmes: 1, courses: 1, staff: 1, students: 1 });
+  const [ledgerSearch, setLedgerSearch] = useState<Record<SubTab, string>>({ programmes: '', courses: '', staff: '', students: '', semesters: '' });
+  const [ledgerPage, setLedgerPage] = useState<Record<SubTab, number>>({ programmes: 1, courses: 1, staff: 1, students: 1, semesters: 1 });
 
   // States
   const [students, setStudents] = useState<Student[]>([]);
@@ -447,12 +451,13 @@ export const AcademicManager: React.FC = () => {
       </div>
 
       {/* Primary Sub-Tabs */}
-      <div className="flex bg-slate-150/50 p-1 rounded-xl border border-slate-200/50 max-w-lg text-xs font-sans">
+      <div className="flex flex-wrap gap-1 bg-slate-150/50 p-1 rounded-xl border border-slate-200/50 max-w-2xl text-xs font-sans">
         {[
           { id: 'programmes', label: 'Programmes', icon: Layers },
           { id: 'courses', label: 'Courses', icon: BookOpen },
           { id: 'staff', label: 'Staff Roles', icon: Briefcase },
-          { id: 'students', label: 'Student Allocation', icon: UserCheck }
+          { id: 'students', label: 'Student Allocation', icon: UserCheck },
+          { id: 'semesters', label: 'Semesters', icon: CalendarDays }
         ].map(tab => {
           const Icon = tab.icon;
           return (
@@ -471,7 +476,7 @@ export const AcademicManager: React.FC = () => {
       </div>
 
       {/* Main Form and Grid Area */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {activeSubTab === 'semesters' ? <SemestersPanel programmes={programmes} courses={courses} onSaved={loadAllData} /> : <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         {/* LEFT COLUMN: Input Form */}
         <div className="uipro-card bg-white/80 p-5 space-y-4">
@@ -489,7 +494,7 @@ export const AcademicManager: React.FC = () => {
             <form noValidate onSubmit={handleAddProgramme} className="space-y-4 font-sans text-xs">
               <div className="space-y-1">
                 <label className="text-slate-500 font-semibold uppercase tracking-wider text-[9px]">Programme Code</label>
-                <input
+                <TextInput
                   type="text"
                   placeholder="e.g. BCSF"
                   value={progCode}
@@ -509,7 +514,7 @@ export const AcademicManager: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <label className="text-slate-500 font-semibold uppercase tracking-wider text-[9px]">Programme Description Name</label>
-                <input
+                <TextInput
                   type="text"
                   placeholder="e.g. Bachelor of Computer Science (Honours)"
                   value={progName}
@@ -537,7 +542,7 @@ export const AcademicManager: React.FC = () => {
             <form onSubmit={handleAddCourse} className="space-y-4 font-sans text-xs">
               <div className="space-y-1">
                 <label className="text-slate-500 font-semibold uppercase tracking-wider text-[9px]">Course Code</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   placeholder="e.g. CS-202"
@@ -548,7 +553,7 @@ export const AcademicManager: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <label className="text-slate-500 font-semibold uppercase tracking-wider text-[9px]">Course Title</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   placeholder="e.g. Database Management Systems"
@@ -589,7 +594,7 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                   </button>
                   {isCourseProgDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
                       <button
                         type="button"
                         onClick={() => {
@@ -616,7 +621,7 @@ export const AcademicManager: React.FC = () => {
                           <span className="text-[10px] text-slate-400 truncate hover:text-white">{p.name}</span>
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -647,7 +652,7 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
                   </button>
                   {isAssignStaffDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
                       {staff.map(s => (
                         <button
                           key={s.id}
@@ -663,7 +668,7 @@ export const AcademicManager: React.FC = () => {
                           <span className="text-[10px] text-slate-400 hover:text-white">{s.staff_id}</span>
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -687,7 +692,7 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
                   </button>
                   {isAssignCourseDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
                       {courses.map(c => (
                         <button
                           key={c.id}
@@ -703,7 +708,7 @@ export const AcademicManager: React.FC = () => {
                           <span className="text-[10px] text-slate-500 truncate hover:text-white">{c.course_name}</span>
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -725,7 +730,7 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
                   </button>
                   {isAssignRoleDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50">
                       {['Lecturer', 'Tutor', 'Practical'].map(r => (
                         <button
                           key={r}
@@ -739,7 +744,7 @@ export const AcademicManager: React.FC = () => {
                           {r}
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -768,7 +773,7 @@ export const AcademicManager: React.FC = () => {
                       type="button"
                       onClick={() => setIsStudProgDropdownOpen(!isStudProgDropdownOpen)}
                       aria-expanded={isStudProgDropdownOpen}
-                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-white border border-slate-300 rounded-xl px-4 text-xs text-slate-900 shadow-sm hover:border-brand-blue hover:bg-blue-50/40 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
+                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs text-slate-700 shadow-sm hover:border-brand-blue hover:bg-slate-100/50 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
                     >
                       <span
                         key={`programme-student-label-${selectedStudentIdForProg}`}
@@ -779,7 +784,7 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isStudProgDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isStudProgDropdownOpen && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
                         {students.filter(s => s.programme_id === null || s.programme_id === undefined).length === 0 ? (
                           <div className="px-4 py-3 text-xs text-slate-400 text-center">No unallocated students available</div>
                         ) : (
@@ -811,7 +816,7 @@ export const AcademicManager: React.FC = () => {
                             );
                           })
                         )}
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
@@ -827,7 +832,7 @@ export const AcademicManager: React.FC = () => {
                       key={`study-programme-trigger-${studProgId}`}
                       type="button"
                       onClick={() => setIsProgSelectDropdownOpen(!isProgSelectDropdownOpen)}
-                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-white border border-slate-300 rounded-xl px-4 text-xs font-semibold text-slate-900 shadow-sm hover:border-brand-blue hover:bg-blue-50/40 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
+                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 shadow-sm hover:border-brand-blue hover:bg-slate-100/50 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
                     >
                       <span key={`study-programme-label-${studProgId}`} className="truncate">
                         {studyProgrammeDisplay}
@@ -835,7 +840,7 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isProgSelectDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isProgSelectDropdownOpen && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
                         <button
                           type="button"
                           onClick={() => {
@@ -862,7 +867,7 @@ export const AcademicManager: React.FC = () => {
                             <span className="text-[10px] text-slate-600 group-hover:text-blue-700 truncate">{p.name}</span>
                           </button>
                         ))}
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
@@ -885,7 +890,7 @@ export const AcademicManager: React.FC = () => {
                       type="button"
                       onClick={() => setIsEnrolStudentDropdownOpen(!isEnrolStudentDropdownOpen)}
                       aria-expanded={isEnrolStudentDropdownOpen}
-                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-white border border-slate-300 rounded-xl px-4 text-xs text-slate-900 shadow-sm hover:border-brand-blue hover:bg-blue-50/40 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
+                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs text-slate-700 shadow-sm hover:border-brand-blue hover:bg-slate-100/50 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
                     >
                       <span
                         key={`enrol-student-label-${enrolStudentId}`}
@@ -896,7 +901,7 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isEnrolStudentDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isEnrolStudentDropdownOpen && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
                         {students.filter(s => {
                           if (!enrolCourseId) return true;
                           return !enrolments.some(e => e.student_id === s.id && e.course_id.toString() === enrolCourseId);
@@ -936,7 +941,7 @@ export const AcademicManager: React.FC = () => {
                             );
                           })
                         )}
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
@@ -952,7 +957,7 @@ export const AcademicManager: React.FC = () => {
                       key={`enrol-course-trigger-${enrolCourseId}`}
                       type="button"
                       onClick={() => setIsEnrolCourseDropdownOpen(!isEnrolCourseDropdownOpen)}
-                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-white border border-slate-300 rounded-xl px-4 text-xs font-semibold text-slate-900 shadow-sm hover:border-brand-blue hover:bg-blue-50/40 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
+                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 shadow-sm hover:border-brand-blue hover:bg-slate-100/50 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 transition-colors"
                     >
                       <span key={`enrol-course-label-${enrolCourseId}`} className="truncate">
                         {enrolCourseDisplay}
@@ -960,7 +965,7 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isEnrolCourseDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isEnrolCourseDropdownOpen && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
                         {courses.map(c => (
                           <button
                             key={c.id}
@@ -987,7 +992,7 @@ export const AcademicManager: React.FC = () => {
                             <span className="text-[10px] text-slate-600 truncate group-hover:text-blue-700">{c.course_name}</span>
                           </button>
                         ))}
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
@@ -1004,13 +1009,13 @@ export const AcademicManager: React.FC = () => {
                       type="button"
                       disabled={!enrolCourseId}
                       onClick={() => setIsEnrolGroupDropdownOpen(!isEnrolGroupDropdownOpen)}
-                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-white border border-slate-300 rounded-xl px-4 text-xs font-semibold text-slate-900 shadow-sm hover:border-brand-blue hover:bg-blue-50/40 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 disabled:bg-slate-100 disabled:text-slate-500 disabled:shadow-none transition-colors"
+                      className="w-full min-h-11 py-2.5 text-left flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 text-xs font-semibold text-slate-700 shadow-sm hover:border-brand-blue hover:bg-slate-100/50 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 disabled:bg-slate-100 disabled:text-slate-500 disabled:shadow-none transition-colors"
                     >
                       <span key={`enrol-group-label-${enrolGroup}`}>{enrolGroupDisplay}</span>
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isEnrolGroupDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isEnrolGroupDropdownOpen && enrolCourseId && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
                         {getAvailableGroupsForCourse(enrolCourseId).map(g => {
                           const count = enrolments.filter(e => e.course_id.toString() === enrolCourseId && e.class_group === g.value).length;
                           const isFull = count >= 25;
@@ -1044,20 +1049,29 @@ export const AcademicManager: React.FC = () => {
                           <Plus className="h-3.5 w-3.5" />
                           Create New Group
                         </button>
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-slate-700 font-bold uppercase tracking-wider text-[9px]">Semester Term</label>
-                  <input
+                  <TextInput
                     type="text"
                     required
-                    value={enrolSemester}
+                    value={courses.find(c => String(c.id) === enrolCourseId)?.semester?.name || enrolSemester}
+                    readOnly={!!courses.find(c => String(c.id) === enrolCourseId)?.semester}
                     onChange={e => setEnrolSemester(e.target.value)}
                     className="w-full uipro-input bg-white border-slate-300 text-slate-900 font-semibold shadow-sm"
                   />
+                  {(() => {
+                    const selected = courses.find(c => String(c.id) === enrolCourseId);
+                    const term = selected?.semester;
+                    if (!term) return null;
+                    const ids = new Set(enrolments.filter(e => String(e.student_id) === enrolStudentId).map(e => String(e.course_id)));
+                    const used = courses.filter(c => ids.has(String(c.id)) && c.semester_id === term.id).reduce((sum, c) => sum + (c.credit_hours || 0), 0);
+                    return <p className="rounded-xl bg-blue-50 p-3 text-[11px] leading-relaxed text-blue-700 dark:bg-blue-950 dark:text-blue-200">{used} / {term.max_student_credits} academic credits allocated · {term.start_date} – {term.end_date} · {term.status}</p>;
+                  })()}
                 </div>
 
                 <button type="submit" disabled={savingStudentAllocation} className="w-full uipro-button uipro-button-primary mt-1 disabled:cursor-not-allowed disabled:opacity-60">
@@ -1086,7 +1100,7 @@ export const AcademicManager: React.FC = () => {
               </div>
               <div className="relative w-full sm:w-72">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
+                <TextInput showCounter={false}
                   type="search"
                   value={ledgerSearch[activeSubTab]}
                   onChange={event => updateLedgerSearch(event.target.value)}
@@ -1279,7 +1293,7 @@ export const AcademicManager: React.FC = () => {
           </div>
         </div>
 
-      </div>
+      </div>}
     </div>
   );
 };

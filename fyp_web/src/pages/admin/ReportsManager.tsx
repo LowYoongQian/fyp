@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput, TextArea } from '../../components/LimitedTextField';
+import { ModalLayer } from '../../components/ModalLayer';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService } from '../../services/api';
 import type { StudentFeedbackReport, MCReportItem } from '../../services/api';
 import {
@@ -14,6 +17,13 @@ import {
   Check
 } from 'lucide-react';
 import { swalSuccess, swalError, swalConfirm } from '../../utils/swal';
+import { useAuth } from '../../context/AuthContext';
+import { useLiveResource } from '../../hooks/useLiveResource';
+import { RecordsStatus } from '../../components/RecordsStatus';
+import { apiErrorMessage } from '../../utils/apiError';
+import { SubmissionTime, SubmissionTimeFilter } from '../../components/SubmissionTime';
+import { submissionFilterParams, type SubmissionRange } from '../../utils/submissionTime';
+import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 
 interface DropdownOption<T> {
   value: T;
@@ -79,7 +89,7 @@ function CustomDropdown<T extends string | number>({
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-1.5 w-48 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans">
+        <FloatingPanel className="absolute right-0 mt-1.5 w-48 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans">
           <div className="max-h-60 overflow-y-auto space-y-0.5 custom-scrollbar">
             {normalizedOptions.map(opt => {
               const isSelected = opt.value === value;
@@ -103,7 +113,7 @@ function CustomDropdown<T extends string | number>({
               );
             })}
           </div>
-        </div>
+        </FloatingPanel>
       )}
     </div>
   );
@@ -121,100 +131,99 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
       setSubTab(activeSubTab);
     }
   }, [activeSubTab]);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const [feedbackRange, setFeedbackRange] = useState<SubmissionRange>({ from: '', to: '' });
+  const [mcRange, setMcRange] = useState<SubmissionRange>({ from: '', to: '' });
 
   // Feedback State
-  const [feedbackList, setFeedbackList] = useState<StudentFeedbackReport[]>([]);
   const [feedbackStatusFilter, setFeedbackStatusFilter] = useState('All');
   const [feedbackCategoryFilter, setFeedbackCategoryFilter] = useState('All');
   const [feedbackSearch, setFeedbackSearch] = useState('');
-  const [selectedFeedback, setSelectedFeedback] = useState<StudentFeedbackReport | null>(null);
+  const [feedbackSnapshot, setFeedbackSnapshot] = useState<{ scope: string; report: StudentFeedbackReport } | null>(null);
   const [adminNoteInput, setAdminNoteInput] = useState('');
   const [updatingFeedbackId, setUpdatingFeedbackId] = useState<string | null>(null);
 
   // MC Report State
-  const [mcList, setMcList] = useState<MCReportItem[]>([]);
   const [mcStatusFilter, setMcStatusFilter] = useState('All');
   const [mcSearch, setMcSearch] = useState('');
-  const [selectedMc, setSelectedMc] = useState<MCReportItem | null>(null);
+  const [mcSnapshot, setMcSnapshot] = useState<{ scope: string; report: MCReportItem } | null>(null);
   const [updatingMcId, setUpdatingMcId] = useState<string | null>(null);
   const [proofUrl, setProofUrl] = useState<string | null>(null);
   const [proofType, setProofType] = useState('');
   const [proofError, setProofError] = useState('');
+  const [reviewNote, setReviewNote] = useState('');
+  const search = useDebouncedSearch(subTab === 'feedback' ? feedbackSearch : mcSearch);
+  const filterKey = JSON.stringify([user?.user_id, subTab, feedbackStatusFilter, feedbackCategoryFilter, mcStatusFilter, search, feedbackRange, mcRange]);
+  const [pageSelection, setPageSelection] = useState({ key: '', page: 1 });
+  const currentPage = pageSelection.key === filterKey ? pageSelection.page : 1;
+  const setCurrentPage = (page: number) => setPageSelection({ key: filterKey, page });
+  const rowsPerPage = 10;
+  const loadReports = useCallback(async (signal: AbortSignal) => subTab === 'feedback'
+    ? apiService.adminFeedbackPage({ page: currentPage, per_page: rowsPerPage, search, status: feedbackStatusFilter,
+        category: feedbackCategoryFilter, ...submissionFilterParams(feedbackRange) }, signal).then(result => ({ ...result, feedback: result.items, mc: [] as MCReportItem[] }))
+    : apiService.adminMedicalPage({ page: currentPage, per_page: rowsPerPage, search, status: mcStatusFilter,
+        ...submissionFilterParams(mcRange) }, signal).then(result => ({ ...result, feedback: [] as StudentFeedbackReport[], mc: result.items })),
+  [subTab, currentPage, search, feedbackStatusFilter, feedbackCategoryFilter, mcStatusFilter, feedbackRange, mcRange]);
+  const scope = JSON.stringify([filterKey, currentPage]);
+  const { data, setData, loading, error, refresh: loadData } = useLiveResource(loadReports, scope, [subTab === 'feedback' ? 'feedback' : 'medical']);
+  const feedbackList = data?.feedback || [];
+  const mcList = data?.mc || [];
+  const setSelectedFeedback = (report: StudentFeedbackReport | null) => setFeedbackSnapshot(report ? { scope, report } : null);
+  const setSelectedMc = (report: MCReportItem | null) => setMcSnapshot(report ? { scope, report } : null);
+  const selectedFeedback = feedbackSnapshot?.scope === scope ? feedbackList.find(row => row.id === feedbackSnapshot.report.id) || feedbackSnapshot.report : null;
+  const selectedMc = mcSnapshot?.scope === scope ? mcList.find(row => row.id === mcSnapshot.report.id && row.source === mcSnapshot.report.source) || mcSnapshot.report : null;
+  const proofId = selectedMc?.id;
+  const proofSource = selectedMc?.source;
+  const proofMime = selectedMc?.file_type;
+  const legacyProof = selectedMc?.mc_proof_url;
 
   useEffect(() => {
     let active = true;
     let objectUrl: string | undefined;
     setProofUrl(null);
     setProofError('');
-    setProofType(selectedMc?.file_type || '');
-    if (selectedMc?.source === 'request') {
-      apiService.getAdminMCProof(selectedMc.id).then(blob => {
+    setProofType(proofMime || '');
+    if (proofSource === 'request' && proofId) {
+      apiService.getAdminMCProof(proofId).then(blob => {
         if (!active) return;
         objectUrl = URL.createObjectURL(blob);
-        setProofType(blob.type || selectedMc.file_type || '');
+        setProofType(blob.type || proofMime || '');
         setProofUrl(objectUrl);
       }).catch(() => {
         if (active) setProofError('Unable to load the submitted document. Close and reopen this report to retry.');
       });
-    } else if (selectedMc) {
-      setProofUrl(selectedMc.mc_proof_url || null);
-      if (!selectedMc.mc_proof_url) setProofError('No document is attached to this record.');
+    } else if (proofId) {
+      setProofUrl(legacyProof || null);
+      if (!legacyProof) setProofError('No document is attached to this record.');
     }
     return () => {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [selectedMc]);
-
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage] = useState(10);
-
-  useEffect(() => {
-    loadData();
-  }, [subTab, feedbackStatusFilter, feedbackCategoryFilter, mcStatusFilter]);
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      if (subTab === 'feedback') {
-        const data = await apiService.getAdminFeedback(feedbackStatusFilter, feedbackCategoryFilter);
-        setFeedbackList(data);
-      } else {
-        const data = await apiService.getAdminMCReports(mcStatusFilter);
-        setMcList(data);
-      }
-    } catch (err: any) {
-      console.error("Failed to load report data:", err);
-      if (subTab === 'mc') {
-        setMcList([]);
-        await swalError('Unable to load MC reports', 'Please try again. The list could not be refreshed.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [proofId, proofSource, proofMime, legacyProof]);
 
   const handleUpdateFeedbackStatus = async (feedbackId: string, status: string) => {
+    if (updatingFeedbackId) return;
     try {
       setUpdatingFeedbackId(feedbackId);
-      await apiService.updateAdminFeedback(feedbackId, {
+      const updated = await apiService.updateAdminFeedback(feedbackId, {
         status,
         student_response: adminNoteInput
       });
+      setData(previous => ({ ...previous!, feedback: (previous?.feedback || []).map(row => row.id === feedbackId ? updated : row), mc: previous?.mc || [] }));
+      void loadData();
       await swalSuccess('Status Updated', `Feedback report status marked as '${status}'.`);
       setSelectedFeedback(null);
       setAdminNoteInput('');
-      loadData();
-    } catch (err: any) {
-      await swalError('Update Failed', err.message);
+    } catch (err) {
+      await swalError('Update Failed', apiErrorMessage(err, 'The response could not be saved. Please try again.'));
     } finally {
       setUpdatingFeedbackId(null);
     }
   };
 
   const handleUpdateMcStatus = async (report: MCReportItem, status: string) => {
+    if (updatingMcId) return;
     const isApprove = status === 'Approved';
     const confirm = await swalConfirm(
       `${status} MC Report?`,
@@ -225,36 +234,23 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
 
     try {
       setUpdatingMcId(report.id);
-      await apiService.updateAdminMCReport(report.id, status, report.source);
+      await apiService.updateAdminMCReport(report.id, status, report.source, reviewNote);
+      setData(previous => ({ ...previous!, feedback: previous?.feedback || [], mc: (previous?.mc || []).map(row => row.id === report.id && row.source === report.source ? { ...row, status, flag_reason: reviewNote } : row) }));
+      void loadData();
       await swalSuccess('MC Updated', `Medical Certificate has been ${status.toLowerCase()}.`);
       setSelectedMc(null);
-      loadData();
-    } catch (err: any) {
-      await swalError('Update Failed', err.response?.data?.detail || err.message);
+    } catch (err) {
+      await swalError('Update Failed', apiErrorMessage(err, 'The decision could not be saved. Please try again.'));
     } finally {
       setUpdatingMcId(null);
     }
   };
 
-  // Filtered lists
-  const filteredFeedback = feedbackList.filter(f =>
-    f.student_name.toLowerCase().includes(feedbackSearch.toLowerCase()) ||
-    f.student_code.toLowerCase().includes(feedbackSearch.toLowerCase()) ||
-    f.subject.toLowerCase().includes(feedbackSearch.toLowerCase()) ||
-    f.message.toLowerCase().includes(feedbackSearch.toLowerCase())
-  );
-
-  const filteredMc = mcList.filter(m =>
-    m.student_name.toLowerCase().includes(mcSearch.toLowerCase()) ||
-    m.student_code.toLowerCase().includes(mcSearch.toLowerCase()) ||
-    m.course_name.toLowerCase().includes(mcSearch.toLowerCase()) ||
-    m.course_code.toLowerCase().includes(mcSearch.toLowerCase())
-  );
-
-  const activeListLength = subTab === 'feedback' ? filteredFeedback.length : filteredMc.length;
+  const activeListLength = data?.total || 0;
   const totalPages = Math.ceil(activeListLength / rowsPerPage) || 1;
-  const paginatedFeedback = filteredFeedback.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
-  const paginatedMc = filteredMc.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+  const page = data?.page || currentPage;
+  const paginatedFeedback = feedbackList;
+  const paginatedMc = mcList;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -289,7 +285,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
           {/* Search */}
           <div className="relative w-full sm:w-80">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <input
+            <TextInput showCounter={false}
               type="text"
               placeholder={subTab === 'feedback' ? "Search student, subject..." : "Search student, course..."}
               value={subTab === 'feedback' ? feedbackSearch : mcSearch}
@@ -326,14 +322,9 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
           </div>
         </div>
 
-        {/* Shimmer Loader */}
-        {loading ? (
-          <div className="space-y-4">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-16 w-full rounded-xl shimmer-placeholder" />
-            ))}
-          </div>
-        ) : subTab === 'feedback' ? (
+        <div className="mb-4"><SubmissionTimeFilter value={subTab === 'feedback' ? feedbackRange : mcRange} onChange={subTab === 'feedback' ? setFeedbackRange : setMcRange} /></div>
+        <RecordsStatus loading={loading} error={error} retry={() => void loadData()} layout="table" />
+        {data === undefined ? null : subTab === 'feedback' ? (
           /* FEEDBACK TAB TABLE */
           paginatedFeedback.length === 0 ? (
             <div className="py-16 text-center space-y-3">
@@ -370,7 +361,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                         </span>
                       </td>
                       <td className="py-4 px-4 text-slate-500 dark:text-slate-400">
-                        {new Date(f.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        <SubmissionTime value={f.created_at} />
                       </td>
                       <td className="py-4 px-4">
                         <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide inline-flex items-center gap-1.5 ${
@@ -430,7 +421,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                         {m.start_date && <div className="mt-1">{m.start_date} to {m.end_date}</div>}
                       </td>
                       <td className="py-4 px-4 text-slate-500 dark:text-slate-400">
-                        {new Date(m.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        <SubmissionTime value={m.timestamp} />
                       </td>
                       <td className="py-4 px-4 text-slate-600 dark:text-slate-300 max-w-xs truncate">
                         {m.reason || m.flag_reason || "Medical Leave Certificate"}
@@ -448,7 +439,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                       </td>
                       <td className="py-4 px-4 text-right">
                         <button
-                          onClick={() => setSelectedMc(m)}
+                          onClick={() => { setSelectedMc(m); setReviewNote(''); }}
                           className="px-3 py-1.5 bg-brand-blue/10 hover:bg-brand-blue/20 text-brand-blue dark:bg-brand-blue/20 dark:hover:bg-brand-blue/30 rounded-lg text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer"
                         >
                           <Eye className="h-3.5 w-3.5" /> Inspect MC Proof
@@ -465,22 +456,22 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
         {/* Pagination Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
           <div>
-            Showing <span className="font-semibold text-slate-900 dark:text-white">{activeListLength === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</span> to{' '}
-            <span className="font-semibold text-slate-900 dark:text-white">{Math.min(currentPage * rowsPerPage, activeListLength)}</span> of{' '}
+            Showing <span className="font-semibold text-slate-900 dark:text-white">{activeListLength === 0 ? 0 : (page - 1) * rowsPerPage + 1}</span> to{' '}
+            <span className="font-semibold text-slate-900 dark:text-white">{Math.min(page * rowsPerPage, activeListLength)}</span> of{' '}
             <span className="font-semibold text-slate-900 dark:text-white">{activeListLength}</span> entries
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(Math.max(1, page - 1))}
+              disabled={page === 1 || data === undefined}
               className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer disabled:cursor-not-allowed"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="font-medium px-2">Page {currentPage} of {totalPages}</span>
+            <span className="font-medium px-2">Page {page} of {totalPages}</span>
             <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage(Math.min(totalPages, page + 1))}
+              disabled={page >= totalPages || data === undefined}
               className="p-2 border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer disabled:cursor-not-allowed"
             >
               <ChevronRight className="h-4 w-4" />
@@ -491,7 +482,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
 
       {/* FEEDBACK DETAILS & ACTION MODAL */}
       {selectedFeedback && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+        <ModalLayer className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
               <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -515,6 +506,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               </div>
 
               <div>
+                <div className="mb-3"><span className="block mb-2 text-slate-400">Submitted</span><SubmissionTime value={selectedFeedback.created_at} /></div>
                 <label className="text-slate-400 font-medium">Subject</label>
                 <div className="font-semibold text-slate-800 dark:text-slate-200 text-sm mt-0.5">{selectedFeedback.subject}</div>
                 <p>Priority: {selectedFeedback.priority || 'Medium'}</p>
@@ -539,9 +531,10 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               <div>
                 <label className="text-slate-400 font-medium">Response to Student (visible to the student)</label>
                 {selectedFeedback.admin_notes && <p className="my-2 whitespace-pre-wrap">Previous internal notes (admin only): {selectedFeedback.admin_notes}</p>}
-                <textarea
+                <TextArea
                   rows={3}
                   value={adminNoteInput}
+                  maxLength={5000}
                   onChange={(e) => setAdminNoteInput(e.target.value)}
                   placeholder="Enter resolution notes or response..."
                   className="w-full mt-1 p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-blue/30"
@@ -567,12 +560,12 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               </button>
             </div>
           </div>
-        </div>
+        </ModalLayer>
       )}
 
       {/* MC PROOF INSPECTOR MODAL */}
       {selectedMc && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <ModalLayer className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-5 shadow-2xl animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
               <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -600,9 +593,15 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
 
               <div className="text-slate-700 dark:text-slate-300 space-y-2">
                 <p>Status: <strong>{selectedMc.status}</strong></p>
+                <div className="my-3"><span className="block mb-2 text-slate-400">Submitted</span><SubmissionTime value={selectedMc.timestamp} /></div>
                 {selectedMc.start_date && <p>Leave dates: {selectedMc.start_date} to {selectedMc.end_date}</p>}
                 <p className="whitespace-pre-wrap">Reason: {selectedMc.reason || selectedMc.flag_reason || 'Not provided'}</p>
               </div>
+
+              {selectedMc.status === 'Pending' && <label className="block space-y-2 text-slate-500 dark:text-slate-400">
+                <span>Review note (visible to the student)</span>
+                <TextArea value={reviewNote} onChange={event => setReviewNote(event.target.value)} maxLength={1000} rows={3} className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-blue/30 dark:border-slate-700 dark:bg-slate-800 dark:text-white" placeholder="Explain the decision or any missing information…" />
+              </label>}
 
               {/* Submitted document preview */}
               <div>
@@ -649,7 +648,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               </div>
             </div>
           </div>
-        </div>
+        </ModalLayer>
       )}
     </div>
   );

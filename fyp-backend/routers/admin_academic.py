@@ -8,7 +8,8 @@ from domain.audit import log_admin_action
 from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, groups_for_course,
                               lecture_meetings, meeting_key_for, pick_slot_for_new)
 from domain.session_sync import sync_class_sessions
-from db.models import User, Student, Lecturer, Course, Enrolment, Programme, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
+from db.models import User, Student, Lecturer, Course, Enrolment, Programme, AcademicSemester, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
+from domain.semesters import lock_programme, require_enrolment_credit_limit, semester_dict, validate_credit_loads
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
 from schemas import (
@@ -68,6 +69,8 @@ def update_programme(programme_id: str, body: ProgrammeCreate, db: Session = Dep
 @router.delete("/programmes/{programme_id}", response_model=MessageResponse)
 def delete_programme(programme_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     programme = get_or_404(db, Programme, programme_id, "Programme")
+    if db.query(AcademicSemester.id).filter(AcademicSemester.programme_id == programme.id).first():
+        raise HTTPException(409, "This programme has semester history and cannot be deleted")
 
     # Read before the delete makes them unavailable.
     deleted_desc = f"{programme.name} ({programme.code})"
@@ -106,6 +109,8 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
             "course_name": c.course_name,
             "course_code": c.course_code,
             "credit_hours": c.credit_hours,
+            "semester_id": c.semester_id,
+            "semester": semester_dict(c.semester) if c.semester_id else None,
             "lecturer_id": c.lecturer_id,
             "lecturer_name": c.lecturer.name if c.lecturer else None,
             "programme_id": c.programme_id,
@@ -165,6 +170,14 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
 @router.put("/courses/{course_id}", response_model=CourseResponse)
 def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     course = get_or_404(db, Course, course_id, "Course")
+    lock_programme(db, course.programme_id)
+    db.refresh(course)
+    if course.semester_id:
+        if body.programme_id != course.programme_id:
+            raise HTTPException(409, "A semester course cannot be moved to another programme")
+        peers = db.query(Course).filter(Course.semester_id == course.semester_id).all()
+        validate_credit_loads(db, peers, course.semester.max_student_credits,
+                              credit_override={str(course.id): body.credit_hours})
         
     ensure_unique(db, Course, Course.course_code, body.course_code, exclude_id=course_id, detail="Course code already exists")
 
@@ -349,6 +362,8 @@ def get_global_timetable(db: Session = Depends(get_db), current_user: User = Dep
             "course_code": c.course_code if c else "Unknown",
             "course_name": c.course_name if c else "Unknown",
             "schedule_day": m.day,
+            "programme_id": c.programme_id if c else None,
+            "programme_name": c.programme.name if c and c.programme else None,
             "schedule_start": m.start,
             "schedule_end": m.end,
             "schedule_room": m.room,
@@ -380,6 +395,8 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
             v = int(h) * 60 + int(m)
         except (ValueError, AttributeError):
             raise HTTPException(status_code=400, detail=f"Invalid time '{hhmm}', expected HH:MM")
+        if f"{int(h):02d}:{int(m):02d}" != hhmm:
+            raise HTTPException(status_code=400, detail=f"Invalid time '{hhmm}', expected 24-hour HH:MM")
         if not (0 <= v < 24 * 60):
             raise HTTPException(status_code=400, detail=f"Time '{hhmm}' out of range")
         return v
@@ -426,7 +443,11 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     was = f"{meeting.day} {meeting.start}-{meeting.end} in {meeting.room}"
     course_code = meeting.course.course_code if meeting.course else meeting.course_id
 
-    meeting.day, meeting.start, meeting.end, meeting.room = body.day, body.start, body.end, body.room
+    # Persist one unambiguous 24-hour representation. The browser time input sends
+    # HH:MM, and every scheduler/session comparison consumes that same contract.
+    normalized_start = f"{new_start // 60:02d}:{new_start % 60:02d}"
+    normalized_end = f"{new_end // 60:02d}:{new_end % 60:02d}"
+    meeting.day, meeting.start, meeting.end, meeting.room = body.day, normalized_start, normalized_end, body.room
     from routers.attendance_features import notify_timetable_change
     notify_timetable_change(db, meeting, was)
     db.commit()
@@ -439,9 +460,33 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     log_admin_action(db, current_user, "UPDATE_TIMETABLE",
                      f"Moved {meeting.role} for {course_code}"
                      f"{f' {meeting.class_group}' if meeting.class_group else ''}: "
-                     f"{was} -> {body.day} {body.start}-{body.end} in {body.room}")
+                     f"{was} -> {body.day} {normalized_start}-{normalized_end} in {body.room}")
 
     return {"message": "Timetable slot updated successfully"}
+
+
+@router.delete("/timetable/{meeting_id}", response_model=MessageResponse)
+def delete_timetable_slot(meeting_id: str, db: Session = Depends(get_db),
+                          current_user: User = Depends(require_admin)):
+    meeting = get_or_404(db, ClassMeeting, meeting_id, detail="Timetable slot not found")
+    course_code = meeting.course.course_code if meeting.course else str(meeting.course_id)
+    slot_description = (
+        f"{meeting.role}{f' {meeting.class_group}' if meeting.class_group else ''} "
+        f"on {meeting.day} {meeting.start}-{meeting.end}"
+    )
+
+    # ClassSession.meeting_id uses ON DELETE SET NULL, so completed attendance
+    # history remains available while this recurring timetable slot is removed.
+    db.delete(meeting)
+    db.commit()
+
+    log_admin_action(
+        db,
+        current_user,
+        "DELETE_TIMETABLE",
+        f"Removed {slot_description} for {course_code}",
+    )
+    return {"message": "Timetable slot deleted successfully"}
 
 
 # =====================================================================
@@ -478,6 +523,17 @@ def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: Us
     
     if not student_id or not course_id:
          raise HTTPException(status_code=400, detail="student_id and course_id are required")
+    course = get_or_404(db, Course, course_id, "Course")
+    lock_programme(db, course.programme_id)
+    db.refresh(course)
+    student = db.query(Student).filter(Student.id == student_id).with_for_update().first()
+    if not student:
+        raise HTTPException(400, "Selected student does not exist")
+    term = require_enrolment_credit_limit(db, student.id, course)
+    if term:
+        if student.programme_id != term.programme_id:
+            raise HTTPException(400, "Allocate the student to this study programme before enrolling in its semester")
+        semester = term.name
          
     existing = db.query(Enrolment).filter(
         Enrolment.student_id == student_id,

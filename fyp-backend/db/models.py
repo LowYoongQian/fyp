@@ -2,12 +2,23 @@ import uuid
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float,
     ForeignKey, Date, DateTime, LargeBinary, Text, func, UniqueConstraint,
-    CheckConstraint, Index,
+    CheckConstraint, Index, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
+
+
+class CheckinChallenge(Base):
+    __tablename__ = "checkin_challenges"
+    token_hash = Column(String(64), primary_key=True)
+    student_id = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=False), ForeignKey("class_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    issued_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    consumed_at = Column(DateTime, nullable=True)
+
 
 # User accounts table
 class User(Base):
@@ -22,6 +33,11 @@ class User(Base):
     status                = Column(String, default="Active", nullable=False)
     last_login_at         = Column(DateTime, nullable=True)
     two_factor_enabled    = Column(Boolean, default=False, nullable=False)
+    auth_version          = Column(Integer, default=0, server_default="0", nullable=False)
+    push_quiet_enabled    = Column(Boolean, default=False, server_default="false", nullable=False)
+    push_quiet_start      = Column(Integer, default=1320, server_default="1320", nullable=False)
+    push_quiet_end        = Column(Integer, default=420, server_default="420", nullable=False)
+    push_timezone         = Column(String(64), default="Asia/Kuala_Lumpur", server_default="Asia/Kuala_Lumpur", nullable=False)
     theme_preference      = Column(String, default="light", nullable=False)
     font_size_preference  = Column(String, default="medium", nullable=False)
     language_preference   = Column(String, default="en", nullable=False)
@@ -31,6 +47,7 @@ class User(Base):
     in_app_notifications  = Column(Boolean, default=True, nullable=False)
     recovery_email        = Column(String, nullable=True, unique=True)
     recovery_email_verified = Column(Boolean, default=False, nullable=False)
+    recovery_prompt_dismissed = Column(Boolean, default=False, server_default="false", nullable=False)
     recovery_code_hash    = Column(String, nullable=True)
     recovery_code_expires_at = Column(DateTime, nullable=True)
     password_reset_hash   = Column(String, nullable=True, index=True)
@@ -39,6 +56,74 @@ class User(Base):
     
     student               = relationship("Student", back_populates="user", uselist=False)
     lecturer              = relationship("Lecturer", back_populates="user", uselist=False)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    auth_version = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime)
+    device_label = Column(String(120), nullable=False, default="Unknown device")
+
+
+class AuthFactor(Base):
+    __tablename__ = "auth_factors"
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    secret = Column(Text)
+    pending_secret = Column(Text)
+    pending_expires_at = Column(DateTime)
+    last_counter = Column(Integer, default=-1, nullable=False)
+    recovery_hashes = Column(Text, default="[]", nullable=False)
+    failures = Column(Integer, default=0, nullable=False)
+    blocked_until = Column(DateTime)
+
+
+class AuthLoginChallenge(Base):
+    __tablename__ = "auth_login_challenges"
+    token_hash = Column(String(64), primary_key=True)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    auth_version = Column(Integer, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    consumed_at = Column(DateTime)
+    device_label = Column(String(120), nullable=False)
+
+
+class AuthAttempt(Base):
+    __tablename__ = "auth_attempts"
+    key = Column(String(64), primary_key=True)
+    failures = Column(Integer, default=0, nullable=False)
+    blocked_until = Column(DateTime)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class PushDevice(Base):
+    __tablename__ = "push_devices"
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(UUID(as_uuid=False), ForeignKey("auth_sessions.id", ondelete="CASCADE"), nullable=False)
+    token = Column(Text, nullable=False, unique=True)
+    platform = Column(String(16), nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class PushDelivery(Base):
+    __tablename__ = "push_deliveries"
+    __table_args__ = (UniqueConstraint("notification_id", "device_id", name="uq_push_delivery_notification_device"),
+                     Index("ix_push_deliveries_due", "status", "next_attempt_at"))
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    notification_id = Column(UUID(as_uuid=False), ForeignKey("user_notifications.id", ondelete="CASCADE"), nullable=False)
+    device_id = Column(UUID(as_uuid=False), ForeignKey("push_devices.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(16), default="pending", nullable=False)
+    attempts = Column(Integer, default=0, nullable=False)
+    next_attempt_at = Column(DateTime, nullable=False)
+    lease_until = Column(DateTime)
+    expires_at = Column(DateTime, nullable=False)
+    error_code = Column(String(60))
+    sent_at = Column(DateTime)
 
 
 class AIChatSession(Base):
@@ -69,6 +154,21 @@ class Programme(Base):
     courses       = relationship("Course", back_populates="programme")
 
 # Student profiles table
+class AcademicSemester(Base):
+    __tablename__ = "academic_semesters"
+    __table_args__ = (
+        UniqueConstraint("programme_id", "name", name="uq_semester_programme_name"),
+        CheckConstraint("end_date >= start_date", name="ck_semester_dates"),
+        CheckConstraint("max_student_credits > 0 AND max_student_credits <= 60", name="ck_semester_credit_limit"),
+    )
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    programme_id = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="RESTRICT"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    max_student_credits = Column(Float, nullable=False)
+
+
 class Student(Base):
     __tablename__ = "students"
     id                  = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
@@ -105,6 +205,7 @@ class Course(Base):
     course_code  = Column(String, unique=True, nullable=False)
     credit_hours = Column(Float, default=3.0)
     planned_total_hours = Column(Float, nullable=True)
+    semester_id  = Column(UUID(as_uuid=False), ForeignKey("academic_semesters.id", ondelete="RESTRICT"), nullable=True, index=True)
     lecturer_id  = Column(UUID(as_uuid=False), ForeignKey("lecturers.id"), index=True)
     programme_id = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
     # A course has no schedule of its own: class_meetings holds the timetable, one row
@@ -114,6 +215,7 @@ class Course(Base):
 
     lecturer    = relationship("Lecturer", back_populates="courses")
     programme   = relationship("Programme", back_populates="courses")
+    semester    = relationship("AcademicSemester")
     enrolments  = relationship("Enrolment", back_populates="course")
     sessions    = relationship("ClassSession", back_populates="course")
 
@@ -204,6 +306,7 @@ class AttendanceRecord(Base):
     # the handler already knows how to swallow.
     __table_args__ = (
         UniqueConstraint("student_id", "session_id", name="uq_attendance_student_session"),
+        Index("ix_attendance_mc_page", "marked_at", "id"),
     )
     id                     = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     session_id             = Column(UUID(as_uuid=False), ForeignKey("class_sessions.id"), index=True)
@@ -222,8 +325,8 @@ class AttendanceRecord(Base):
     mc_proof_url           = Column(String, nullable=True)
     liveness_challenge_ms  = Column(Integer, nullable=True)
     # Two independent signals, deliberately not each other's negation:
-    # liveness_passed is the client's liveness result, liveness_suspicious flags a
-    # gesture completed suspiciously fast. A property that derived one from the other
+    # liveness_passed is the server anti-spoof result, liveness_suspicious flags a
+    # server challenge completed suspiciously fast. A property that derived one from the other
     # collapsed them into a single column and silently discarded the reported result.
     liveness_passed        = Column(Boolean, nullable=True)
     liveness_suspicious    = Column(Boolean, default=False)
@@ -251,6 +354,8 @@ class AttendanceRequest(Base):
         CheckConstraint("status IN ('pending', 'approved', 'rejected', 'cancelled')", name="ck_attendance_request_status"),
         Index("ix_attendance_requests_student_created", "student_id", "created_at"),
         Index("ix_attendance_requests_course_status", "course_id", "status"),
+        Index("ix_medical_page", "created_at", "id"),
+        Index("ix_medical_owner_page", "student_id", "created_at", "id"),
     )
 
     id               = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -310,6 +415,34 @@ class FaceEmbedding(Base):
     updated_at    = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     student       = relationship("Student", back_populates="face_embedding")
+
+class FaceEnrolmentRequest(Base):
+    __tablename__ = "face_enrolment_requests"
+    __table_args__ = (
+        CheckConstraint("status IN ('authorised', 'pending', 'approved', 'rejected', 'expired')", name="ck_face_enrolment_status"),
+        Index("ix_face_enrolment_owner_created", "student_id", "created_at"),
+        Index("ix_face_enrolment_expiry", "status", "expires_at"),
+        Index("uq_face_enrolment_open", "student_id", unique=True,
+              postgresql_where=text("status IN ('authorised', 'pending')"),
+              sqlite_where=text("status IN ('authorised', 'pending')")),
+    )
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    student_id = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    supervisor_user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(16), nullable=False, default="authorised")
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    token_hash = Column(String(64), nullable=True, unique=True)
+    challenge_issued_at = Column(DateTime, nullable=True)
+    challenge_consumed_at = Column(DateTime, nullable=True)
+    candidate_embedding = Column(LargeBinary, nullable=True)
+    previous_face_hash = Column(String(64), nullable=True)
+    captured_at = Column(DateTime, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewer_user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reviewer_note = Column(String(255), nullable=True)
+    reauth_failures = Column(Integer, nullable=False, default=0, server_default="0")
+
 
 # ML At-Risk Model Scores
 class RiskScore(Base):
@@ -423,6 +556,10 @@ class AuditLog(Base):
 # Student feedback & issue reports
 class StudentFeedback(Base):
     __tablename__ = "student_feedback"
+    __table_args__ = (
+        Index("ix_feedback_page", "created_at", "id"),
+        Index("ix_feedback_owner_page", "student_id", "created_at", "id"),
+    )
     id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     student_id    = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=True, index=True)
     student_name  = Column(String, nullable=False)

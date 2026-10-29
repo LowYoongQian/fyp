@@ -1,3 +1,4 @@
+import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
@@ -177,7 +178,7 @@ export const AuditManager: React.FC = () => {
         <form onSubmit={handleSearchSubmit} className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="relative w-full sm:w-96">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <input
+            <TextInput showCounter={false}
               type="text"
               placeholder={`Search ${activeCategory === 'admin' ? 'Admin' : 'Staff'} action, user name, IP...`}
               value={search}

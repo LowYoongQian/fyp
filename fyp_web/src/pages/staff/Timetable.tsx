@@ -1,10 +1,14 @@
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
+import { useLiveRefresh } from '../../hooks/useLiveRefresh';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen, X, Pencil, CalendarDays, Check, FileText, Download, CheckCircle2, Move } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown, Search, Filter, CalendarX2, GraduationCap, BookOpen, X, Pencil, Trash2, CalendarDays, Check, FileText, Download, CheckCircle2, Move } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
-import { swalError, swalSuccess } from '../../utils/swal';
-import type { Course, Programme } from '../../services/api';
+import { swalConfirmDelete, swalError, swalSuccess } from '../../utils/swal';
+import type { AcademicCalendar, Course, Programme } from '../../services/api';
+import { formatDate, getMalaysiaDate, setCampusClock, semesterWeek, semesterWeeks, weekMonday } from '../../utils/campusCalendar';
 import { StudentCourseAttendance } from '../student/StudentCourseAttendance';
 import { MorphingInfinity } from '../../components/loading-ui/morphing-infinity';
 
@@ -70,55 +74,9 @@ const byDayThenStart = (a: TimetableEvent, b: TimetableEvent) =>
   DAY_NAMES.indexOf(a.day) - DAY_NAMES.indexOf(b.day) ||
   a.startTime.localeCompare(b.startTime);
 
-const SEMESTER_START = new Date('2026-06-15T00:00:00');
-const SEMESTER_END = new Date('2026-09-20T23:59:59');
-
 const toMinutes = (t?: string | null): number => {
   const [h, m] = (t || '').split(':').map(Number);
   return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
-};
-
-const formatDate = (date: Date): string => {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
-
-const getMalaysiaDate = (): Date => {
-  try {
-    const now = new Date();
-    const msiaStr = now.toLocaleString("en-US", { timeZone: "Asia/Kuala_Lumpur" });
-    const parsed = new Date(msiaStr);
-    if (parsed < SEMESTER_START || parsed > SEMESTER_END) {
-      return new Date('2026-08-05T00:00:00');
-    }
-    return parsed;
-  } catch (e) {
-    return new Date('2026-08-05T00:00:00');
-  }
-};
-
-const getCurrentWeekNumber = (): number => {
-  const today = getMalaysiaDate();
-  today.setHours(0, 0, 0, 0);
-  if (today < SEMESTER_START) return 1;
-  if (today > SEMESTER_END) return 14;
-  
-  const dayOffset = Math.floor((today.getTime() - SEMESTER_START.getTime()) / (1000 * 60 * 60 * 24));
-  const weekNum = Math.floor(dayOffset / 7) + 1;
-  return Math.min(14, Math.max(1, weekNum));
-};
-
-const getWeekNumForDate = (dateObj: Date): number => {
-  const d = new Date(dateObj);
-  d.setHours(0, 0, 0, 0);
-  const start = new Date(SEMESTER_START);
-  start.setHours(0, 0, 0, 0);
-  if (d < start) return 1;
-  const dayOffset = Math.floor((d.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  const weekNum = Math.floor(dayOffset / 7) + 1;
-  return Math.min(14, Math.max(1, weekNum));
 };
 
 const getClassPalette = (group: string) => {
@@ -201,15 +159,8 @@ export const Timetable: React.FC = () => {
   const { user } = useAuth();
   const [selectedDateStr, setSelectedDateStr] = useState<string>(() => formatDate(getMalaysiaDate()));
 
-  const selectedWeekNum = React.useMemo(() => {
-    try {
-      const d = new Date(selectedDateStr + 'T00:00:00');
-      return getWeekNumForDate(d);
-    } catch (e) {
-      return getCurrentWeekNumber();
-    }
-  }, [selectedDateStr]);
-
+  const [calendar, setCalendar] = useState<AcademicCalendar>();
+  const [calendarError, setCalendarError] = useState(false);
   const [isWeekDropdownOpen, setIsWeekDropdownOpen] = useState(false);
   const [events, setEvents] = useState<TimetableEvent[]>([]);
   const [studentCourses, setStudentCourses] = useState<Course[]>([]);
@@ -219,6 +170,7 @@ export const Timetable: React.FC = () => {
   const [editForm, setEditForm] = useState({ day: 'Monday', start: '08:00', end: '10:00', room: '' });
   const [isDayDropdownOpen, setIsDayDropdownOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingMeetingId, setDeletingMeetingId] = useState<number | string | null>(null);
   const [hoveredEventId, setHoveredEventId] = useState<number | string | null>(null);
   const [isLineHovered, setIsLineHovered] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -299,13 +251,28 @@ export const Timetable: React.FC = () => {
   const [selectedCourseCode, setSelectedCourseCode] = useState<string>('');
   const [isProgDropdownOpen, setIsProgDropdownOpen] = useState(false);
   const [isCourseDropdownOpen, setIsCourseDropdownOpen] = useState(false);
+  const scopedCalendar = calendar?.courses.filter(c =>
+    (!selectedCourseCode || selectedCourseCode === 'ALL' || c.course_code === selectedCourseCode) &&
+    (!selectedProgramme || selectedProgramme === 'ALL' || c.semester?.programme_id === selectedProgramme)) || [];
+  const termIds = new Set(scopedCalendar.map(c => c.semester?.id));
+  const semester = termIds.size === 1 ? scopedCalendar[0]?.semester : null;
+  const semesterMonday = semester ? weekMonday(new Date(`${semester.start_date}T00:00:00`)) : weekMonday(new Date(`${selectedDateStr}T00:00:00`));
+  const selectedWeekNum = semester ? semesterWeek(selectedDateStr, semester.start_date, semester.end_date) : null;
+  const weekCount = semester ? semesterWeeks(semester.start_date, semester.end_date) : 0;
+  const weekLabel = selectedWeekNum ? `Week ${selectedWeekNum}` : semester ? (selectedDateStr < semester.start_date ? 'Semester upcoming' : 'Semester ended') : 'Weekly view';
+  const lastToday = useRef(formatDate(getMalaysiaDate()));
 
   const [currentTimeState, setCurrentTimeState] = useState<Date>(getMalaysiaDate());
 
   useEffect(() => {
     // Update live Malaysia time every 5 seconds for smooth real-time tracking
     const timer = setInterval(() => {
-      setCurrentTimeState(getMalaysiaDate());
+      const now = getMalaysiaDate();
+      const today = formatDate(now);
+      setCurrentTimeState(now);
+      const previousToday = lastToday.current;
+      setSelectedDateStr(selected => selected === previousToday ? today : selected);
+      lastToday.current = today;
     }, 5000);
     return () => clearInterval(timer);
   }, []);
@@ -334,12 +301,14 @@ export const Timetable: React.FC = () => {
       // Convert to Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
       const dayOfWeekOffset = (current.getDay() + 6) % 7;
       
-      const targetDate = new Date(SEMESTER_START);
-      targetDate.setDate(SEMESTER_START.getDate() + (w - 1) * 7 + dayOfWeekOffset);
+      const targetDate = new Date(semesterMonday);
+      targetDate.setDate(semesterMonday.getDate() + (w - 1) * 7 + dayOfWeekOffset);
+      if (semester && formatDate(targetDate) < semester.start_date) targetDate.setTime(new Date(`${semester.start_date}T00:00:00`).getTime());
+      if (semester && formatDate(targetDate) > semester.end_date) targetDate.setTime(new Date(`${semester.end_date}T00:00:00`).getTime());
       setSelectedDateStr(formatDate(targetDate));
     } catch (e) {
-      const monday = new Date(SEMESTER_START);
-      monday.setDate(SEMESTER_START.getDate() + (w - 1) * 7);
+      const monday = new Date(semesterMonday);
+      monday.setDate(semesterMonday.getDate() + (w - 1) * 7);
       setSelectedDateStr(formatDate(monday));
     }
     setIsWeekDropdownOpen(false);
@@ -378,10 +347,21 @@ export const Timetable: React.FC = () => {
     loadTimetable();
   }, [user]);
 
+  useLiveRefresh(() => loadTimetable(false), ['timetable'], String(user?.user_id));
+
   const loadTimetable = async (showLoader = true) => {
     if (showLoader) setLoading(true);
     try {
       let mappedEvents: TimetableEvent[] = [];
+      void apiService.getAcademicCalendar().then(info => {
+        if (!Array.isArray(info.courses)) throw new Error('Invalid academic calendar');
+        setCalendar(info); setCalendarError(false);
+        setCampusClock(info.server_time);
+        const today = formatDate(getMalaysiaDate());
+        const previousToday = lastToday.current;
+        setSelectedDateStr(selected => selected === previousToday ? today : selected);
+        lastToday.current = today;
+      }).catch(() => { setCalendarError(true); });
 
       if (user?.role === 'admin') {
         try {
@@ -472,13 +452,14 @@ export const Timetable: React.FC = () => {
     }
   };
 
-  const getDaysForWeek = (weekNum: number) => {
+  const getDaysForWeek = () => {
     const now = getMalaysiaDate();
     const todayStr = formatDate(now);
 
     return DAY_NAMES.map((name, index) => {
-      const dateOfCurrentDay = new Date(SEMESTER_START);
-      dateOfCurrentDay.setDate(SEMESTER_START.getDate() + (weekNum - 1) * 7 + index);
+      const monday = weekMonday(new Date(`${selectedDateStr}T00:00:00`));
+      const dateOfCurrentDay = new Date(monday);
+      dateOfCurrentDay.setDate(monday.getDate() + index);
       const dateStr = formatDate(dateOfCurrentDay);
       const dayNum = dateOfCurrentDay.getDate();
       const monthShort = dateOfCurrentDay.toLocaleString('en-US', { month: 'short' });
@@ -512,7 +493,7 @@ export const Timetable: React.FC = () => {
     });
   };
 
-  const days = getDaysForWeek(selectedWeekNum);
+  const days = getDaysForWeek();
 
   // Derived unique available courses from real Supabase DB data
   const availableCourses = React.useMemo(() => {
@@ -591,6 +572,16 @@ export const Timetable: React.FC = () => {
     return filtered;
   }, [events, user?.role, selectedProgramme, selectedCourseCode, dbProgrammes]);
 
+  // Keep the badge and table tied to exactly the same persistent class rows.
+  const manageableEvents = React.useMemo(
+    () => displayedEvents.filter(event => event.meetingId != null),
+    [displayedEvents]
+  );
+  const eventWithinTerm = (event: TimetableEvent, day: string) => {
+    const term = calendar?.courses.find(c => c.course_code === event.courseCode)?.semester;
+    return !term || (day >= term.start_date && day <= term.end_date);
+  };
+
   // Derived selected labels for exact display
   const selectedProgrammeLabel = React.useMemo(() => {
     if (selectedProgramme === 'ALL') return 'All Programmes';
@@ -631,6 +622,27 @@ export const Timetable: React.FC = () => {
       return `( ${role || 'Class'}: ${dur.toFixed(1)} ${hrStr} )`;
     } catch (e) {
       return '';
+    }
+  };
+
+  const deleteTimetableSlot = async (ev: TimetableEvent) => {
+    if (!ev.meetingId || deletingMeetingId !== null) return;
+
+    const confirmed = await swalConfirmDelete(
+      `${ev.courseCode} ${ev.group}${ev.classGroup ? ` ${ev.classGroup}` : ''} class`,
+      `This removes the ${ev.day} ${ev.startTime}-${ev.endTime} timetable slot. Existing attendance history will be kept.`
+    );
+    if (!confirmed) return;
+
+    setDeletingMeetingId(ev.meetingId);
+    try {
+      await apiService.adminDeleteTimetableSlot(ev.meetingId);
+      setEvents(current => current.filter(item => item.meetingId !== ev.meetingId));
+      await swalSuccess('Class time removed', 'The timetable slot has been deleted.');
+    } catch (error) {
+      swalError('Failed to remove class time', getRequestError(error, 'Please try again.'));
+    } finally {
+      setDeletingMeetingId(null);
     }
   };
 
@@ -888,11 +900,11 @@ export const Timetable: React.FC = () => {
       const weekEnd = days[6]?.fullDateObj;
       const dateRange = weekStart && weekEnd
         ? `${weekStart.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} - ${weekEnd.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`
-        : `Week ${selectedWeekNum}`;
+        : weekLabel;
       const filterLabel = user?.role === 'admin'
         ? `${selectedProgrammeLabel} | ${selectedCourseLabel}`
         : `${user?.email || 'My timetable'}`;
-      const printableEvents = [...displayedEvents].sort(byDayThenStart);
+      const printableEvents = displayedEvents.filter(event => eventWithinTerm(event, days.find(d => d.name === event.day)?.date || selectedDateStr)).sort(byDayThenStart);
       const rowHeight = 14;
       const startY = 52;
       const bottomY = 190;
@@ -907,7 +919,7 @@ export const Timetable: React.FC = () => {
         doc.text(continued ? 'Class Timetable - Continued' : 'Class Timetable', 14, 15);
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
-        doc.text(`Semester 1, 2026  |  Week ${selectedWeekNum}  |  ${dateRange}`, 14, 23);
+        doc.text(cleanPdfText(`${semester?.name || 'Weekly timetable'} | ${weekLabel} | ${dateRange}`), 14, 23);
         doc.setTextColor(51, 65, 85);
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9);
@@ -997,7 +1009,7 @@ export const Timetable: React.FC = () => {
       }
 
       doc.setProperties({
-        title: `Class Timetable - Week ${selectedWeekNum}`,
+        title: `Class Timetable - ${weekLabel}`,
         subject: dateRange,
         author: 'Smart Attendance System',
         creator: 'Smart Attendance System'
@@ -1010,7 +1022,7 @@ export const Timetable: React.FC = () => {
       const downloadUrl = URL.createObjectURL(pdfBlob);
       const anchor = document.createElement('a');
       anchor.href = downloadUrl;
-      anchor.download = `class-timetable-week-${selectedWeekNum}.pdf`;
+      anchor.download = `class-timetable-${selectedDateStr}.pdf`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1097,10 +1109,9 @@ export const Timetable: React.FC = () => {
   const activeDayNum = activeDateObj.getDate();
   const activeMonthYearStr = activeDateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
-  // Full Semester Date Range from beginning of semester until end of semester (Jun 15, 2026 – Sep 20, 2026)
-  const semesterStartStr = SEMESTER_START.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const semesterEndStr = SEMESTER_END.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const fullSemesterRangeStr = `${semesterStartStr} – ${semesterEndStr}`;
+  const fullSemesterRangeStr = calendarError ? 'Semester information unavailable; showing current Malaysia date.' : semester
+    ? `${semester.name} · ${semester.start_date} – ${semester.end_date}`
+    : 'Malaysia time · Select a course for its semester dates; unassigned courses use the weekly timetable.';
 
   const matchesSearch = (ev: TimetableEvent) => {
     if (!searchQuery.trim()) return true;
@@ -1193,7 +1204,7 @@ export const Timetable: React.FC = () => {
               {isProgDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setIsProgDropdownOpen(false)} />
-                  <div className="absolute left-0 right-0 sm:w-80 mt-1.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
+                  <FloatingPanel className="absolute left-0 right-0 sm:w-80 mt-1.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
                     <div className="max-h-60 overflow-y-auto space-y-1">
                       {/* Default Select Option */}
                       <button
@@ -1235,7 +1246,7 @@ export const Timetable: React.FC = () => {
                         );
                       })}
                     </div>
-                  </div>
+                  </FloatingPanel>
                 </>
               )}
             </div>
@@ -1269,7 +1280,7 @@ export const Timetable: React.FC = () => {
               {isCourseDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setIsCourseDropdownOpen(false)} />
-                  <div className="absolute left-0 right-0 sm:w-80 mt-1.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
+                  <FloatingPanel className="absolute left-0 right-0 sm:w-80 mt-1.5 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
                     <div className="max-h-60 overflow-y-auto space-y-1">
                       {/* Default Select Course Option */}
                       <button
@@ -1333,7 +1344,7 @@ export const Timetable: React.FC = () => {
                         );
                       })}
                     </div>
-                  </div>
+                  </FloatingPanel>
                 </>
               )}
             </div>
@@ -1384,7 +1395,7 @@ export const Timetable: React.FC = () => {
                 </h2>
                 {/* System Theme Blue Badge for Week */}
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-sky-600 dark:bg-sky-500 text-white shadow-2xs">
-                  Week {selectedWeekNum}
+                  {weekLabel}
                 </span>
               </div>
               
@@ -1401,12 +1412,12 @@ export const Timetable: React.FC = () => {
             <div className="relative w-full sm:w-auto">
               <div className="relative flex items-center">
                 <Search className="absolute left-3 h-4 w-4 text-slate-400 dark:text-slate-500" />
-                <input
+                <TextInput showCounter={false}
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onFocus={() => setIsSearchFocused(true)}
-                  onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                  onBlur={event => { if (!(event.relatedTarget as Element | null)?.closest('[data-floating-panel]')) setIsSearchFocused(false); }}
                   placeholder="Search course, teacher, room..."
                   className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-9 text-xs font-semibold text-slate-800 shadow-sm transition-all placeholder:text-slate-400 focus:border-brand-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 sm:w-64"
                 />
@@ -1424,7 +1435,7 @@ export const Timetable: React.FC = () => {
 
               {/* Auto Suggestions Dropdown Menu */}
               {isSearchFocused && (
-                <div className="absolute right-0 mt-1.5 w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 p-2.5 space-y-2 animate-in fade-in duration-150">
+                <FloatingPanel onDismiss={() => setIsSearchFocused(false)} className="absolute right-0 mt-1.5 w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 p-2.5 space-y-2 animate-in fade-in duration-150">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 px-2 pb-1 border-b border-slate-100 dark:border-slate-700">
                     Suggested Searches:
                   </div>
@@ -1466,7 +1477,7 @@ export const Timetable: React.FC = () => {
                       <span className="text-[9px] text-slate-400">Group</span>
                     </button>
                   </div>
-                </div>
+                </FloatingPanel>
               )}
             </div>
 
@@ -1519,10 +1530,11 @@ export const Timetable: React.FC = () => {
               <button
                 key={`week-dropdown-btn-${selectedWeekNum}`}
                 type="button"
+                disabled={!semester}
                 onClick={() => setIsWeekDropdownOpen(!isWeekDropdownOpen)}
                 className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-bold text-slate-800 shadow-sm transition-all hover:border-blue-300 hover:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700/80"
               >
-                <span key={`week-label-${selectedWeekNum}`}>Week {selectedWeekNum} View</span>
+                <span key={`week-label-${selectedWeekNum}`}>{weekLabel}</span>
                 <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isWeekDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -1530,13 +1542,13 @@ export const Timetable: React.FC = () => {
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setIsWeekDropdownOpen(false)} />
                   {/* Outer Frame with Rounded Corners */}
-                  <div className="absolute right-0 mt-1.5 w-64 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
+                  <FloatingPanel className="absolute right-0 mt-1.5 w-64 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 p-1.5 overflow-hidden">
                     {/* Inner Scroll Container keeps scrollbar cleanly inside the frame */}
                     <div className="max-h-60 overflow-y-auto pr-1 space-y-1">
-                      {Array.from({ length: 14 }, (_, i) => {
+                      {Array.from({ length: weekCount }, (_, i) => {
                         const w = i + 1;
-                        const monday = new Date(SEMESTER_START);
-                        monday.setDate(SEMESTER_START.getDate() + (w - 1) * 7);
+                        const monday = new Date(semesterMonday);
+                        monday.setDate(semesterMonday.getDate() + (w - 1) * 7);
                         const sunday = new Date(monday);
                         sunday.setDate(monday.getDate() + 6);
                         const isSelected = selectedWeekNum === w;
@@ -1560,7 +1572,7 @@ export const Timetable: React.FC = () => {
                         );
                       })}
                     </div>
-                  </div>
+                  </FloatingPanel>
                 </>
               )}
             </div>
@@ -1621,7 +1633,7 @@ export const Timetable: React.FC = () => {
             </div>
           </div>
         ) : (
-          <div key={`week-grid-${selectedWeekNum}`} className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+          <div key={`week-grid-${days[0]?.date}`} className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
               <div className="min-w-[920px]">
 
                 {/* Top Day Headers (7 Columns: Mon - Sun) */}
@@ -1713,7 +1725,7 @@ export const Timetable: React.FC = () => {
                   {/* 7 Day Columns (Mon - Sun) */}
                   {days.map((day) => {
                     const isSelectedDay = day.date === selectedDateStr;
-                    const dayEvents = displayedEvents.filter(e => e.day === day.name);
+                    const dayEvents = displayedEvents.filter(e => e.day === day.name && eventWithinTerm(e, day.date));
 
                     return (
                       <div 
@@ -2055,7 +2067,13 @@ export const Timetable: React.FC = () => {
               <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">Manage class times</h3>
               <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">Select a class to update its day, time, or room.</p>
             </div>
-            <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-extrabold text-brand-blue dark:bg-blue-950/60 dark:text-blue-300">{displayedEvents.length} classes</span>
+            <span
+              key={`managed-class-count-${manageableEvents.length}`}
+              aria-live="polite"
+              className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-extrabold text-brand-blue dark:bg-blue-950/60 dark:text-blue-300"
+            >
+              {manageableEvents.length} {manageableEvents.length === 1 ? 'class' : 'classes'}
+            </span>
           </div>
           <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left border-collapse">
@@ -2070,14 +2088,14 @@ export const Timetable: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white text-xs text-slate-700 dark:divide-slate-800 dark:bg-slate-900 dark:text-slate-200">
-                {displayedEvents.length === 0 ? (
+                {manageableEvents.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-12 text-center text-slate-400 dark:text-slate-500 font-medium">
                       No class slots to manage. Please select a programme and course category above.
                     </td>
                   </tr>
                 ) : (
-                  displayedEvents.map(ev => (
+                  manageableEvents.map(ev => (
                     <tr key={ev.id} className="transition-colors hover:bg-blue-50/40 dark:hover:bg-slate-800/50">
                       <td className="py-3 px-4">
                         <span className="font-extrabold font-mono tracking-wider">{ev.courseCode}</span>
@@ -2092,11 +2110,24 @@ export const Timetable: React.FC = () => {
                       <td className="py-3 px-4 font-semibold">{ev.day.substring(0, 3)} {ev.startTime}-{ev.endTime}</td>
                       <td className="py-3 px-4 font-semibold">{ev.room}</td>
                       <td className="py-3 px-4 text-right">
-                        <button onClick={() => openEdit(ev)}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-blue px-3 text-[11px] font-bold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow-md">
-                          <Pencil className="h-3.5 w-3.5" />
-                          Edit
-                        </button>
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <button onClick={() => openEdit(ev)}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand-blue px-3 text-[11px] font-bold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow-md">
+                            <Pencil className="h-3.5 w-3.5" />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteTimetableSlot(ev)}
+                            disabled={deletingMeetingId !== null}
+                            aria-label={`Delete ${ev.courseCode} ${ev.group}${ev.classGroup ? ` ${ev.classGroup}` : ''} class time`}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-600 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-900/70 dark:bg-slate-900 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                          >
+                            {deletingMeetingId === ev.meetingId
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <Trash2 className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -2128,7 +2159,7 @@ export const Timetable: React.FC = () => {
                 </div>
                 <p className="mt-6 text-[11px] font-extrabold uppercase tracking-[0.2em] text-emerald-600 dark:text-emerald-400">Download complete</p>
                 <h3 id="print-timetable-title" className="mt-2 text-2xl font-black leading-tight text-slate-900 dark:text-white">
-                  Download Week {selectedWeekNum} timetable successful
+                  Timetable downloaded successfully
                 </h3>
                 <p className="mt-3 max-w-xs text-sm font-medium leading-relaxed text-slate-500 dark:text-slate-400">
                   Your PDF is saved in Downloads.
@@ -2189,7 +2220,7 @@ export const Timetable: React.FC = () => {
                           <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-blue-100">PDF Preview</p>
                         </div>
                         <h4 className="mt-1 text-base font-black sm:text-lg">Class Timetable</h4>
-                        <p className="mt-0.5 text-[10px] font-semibold text-blue-100 sm:text-xs">Semester 1, 2026 · Week {selectedWeekNum}</p>
+                        <p className="mt-0.5 text-[10px] font-semibold text-blue-100 sm:text-xs">{semester?.name || 'Malaysia time'} · {weekLabel}</p>
                       </div>
                       <span className="rounded-full bg-white/15 px-3 py-1 text-[10px] font-extrabold backdrop-blur-sm">{displayedEvents.length} classes</span>
                     </div>
@@ -2303,7 +2334,7 @@ export const Timetable: React.FC = () => {
                   <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isDayDropdownOpen ? 'rotate-180 text-brand-blue' : ''}`} />
                 </button>
                 {isDayDropdownOpen && (
-                  <div role="listbox" className="absolute left-0 right-0 z-30 mt-2 space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                  <FloatingPanel role="listbox" className="absolute left-0 right-0 z-30 mt-2 space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-800">
                     {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
                       const isSelected = editForm.day === day;
                       return (
@@ -2327,7 +2358,7 @@ export const Timetable: React.FC = () => {
                         </button>
                       );
                     })}
-                  </div>
+                  </FloatingPanel>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -2346,7 +2377,7 @@ export const Timetable: React.FC = () => {
               </div>
               <label className="block">
                 <span className="text-xs font-bold text-slate-500 uppercase">Room</span>
-                <input type="text" value={editForm.room} onChange={e => setEditForm({ ...editForm, room: e.target.value })}
+                <TextInput type="text" value={editForm.room} onChange={e => setEditForm({ ...editForm, room: e.target.value })}
                   className="mt-1.5 h-11 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 focus:border-brand-blue focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
               </label>
             </div>

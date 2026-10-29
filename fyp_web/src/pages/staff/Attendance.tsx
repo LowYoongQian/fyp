@@ -1,3 +1,5 @@
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../../services/api';
 import type { Course, ActiveSession } from '../../services/api';
@@ -566,7 +568,7 @@ export const Attendance: React.FC = () => {
                 </button>
                 
                 {isCourseDropdownOpen && (
-                  <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                  <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                     <button
                       type="button"
                       onClick={() => {
@@ -611,7 +613,7 @@ export const Attendance: React.FC = () => {
                         </button>
                       );
                     })}
-                  </div>
+                  </FloatingPanel>
                 )}
               </div>
             </div>
@@ -640,7 +642,7 @@ export const Attendance: React.FC = () => {
                 {isGroupDropdownOpen && (
                   <>
                     <div className="fixed inset-0 z-30" onClick={() => setIsGroupDropdownOpen(false)} />
-                    <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                     {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map((g) => (
                       <button
                         key={g}
@@ -666,7 +668,7 @@ export const Attendance: React.FC = () => {
                         )}
                       </button>
                     ))}
-                    </div>
+                    </FloatingPanel>
                   </>
                 )}
               </div>
@@ -720,7 +722,7 @@ export const Attendance: React.FC = () => {
                   </button>
 
                   {isCalendarOpen && (
-                    <div className="absolute left-0 right-0 mt-1.5 p-3.5 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-xl z-50 animate-in fade-in duration-100 font-sans w-full min-w-[250px]">
+                    <FloatingPanel animateEntrance={false} className="absolute left-0 right-0 mt-1.5 p-3.5 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-xl z-50 animate-in fade-in duration-100 font-sans w-full min-w-[250px]">
                       {/* Calendar Header */}
                       <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
                         <button
@@ -792,7 +794,7 @@ export const Attendance: React.FC = () => {
                           );
                         })}
                       </div>
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -829,7 +831,7 @@ export const Attendance: React.FC = () => {
                   </button>
                   
                   {isSessionDropdownOpen && groupSessions.length > 0 && (
-                    <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                       {groupSessions.map((s) => (
                         <button
                           key={s.id}
@@ -850,7 +852,7 @@ export const Attendance: React.FC = () => {
                           </span>
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -866,7 +868,7 @@ export const Attendance: React.FC = () => {
             {/* Search */}
             <div className="relative w-full sm:max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <input
+              <TextInput showCounter={false}
                 type="text"
                 placeholder="Search student code or name..."
                 value={searchQuery}

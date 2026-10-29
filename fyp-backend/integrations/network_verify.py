@@ -10,6 +10,7 @@ Security layers:
 The source-IP check is the one that actually enforces "you must be on campus".
 """
 import ipaddress
+import os
 import socket
 import subprocess
 from typing import List, Optional, Tuple
@@ -27,7 +28,8 @@ def normalize_client_ip(value: Optional[str]) -> str:
         candidate = candidate[4:].strip().strip('"')
 
     try:
-        return str(ipaddress.ip_address(candidate))
+        address = ipaddress.ip_address(candidate)
+        return str(address.ipv4_mapped or address) if address.version == 6 else str(address)
     except ValueError:
         pass
 
@@ -56,13 +58,49 @@ def get_client_ip(request, trust_proxy_header: bool = False) -> str:
     Only honour X-Forwarded-For when explicitly told we sit behind a trusted
     proxy -- otherwise the header is attacker-controlled and must be ignored.
     """
-    if trust_proxy_header:
-        fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            # left-most entry is the original client
-            return normalize_client_ip(fwd.split(",")[0])
     client = request.client
-    return normalize_client_ip(client.host if client else "")
+    # Uvicorn's proxy middleware discards the transport peer and sets port=0.
+    # Refuse that rewritten address rather than trusting evidence we cannot
+    # authenticate; supported launchers use --no-proxy-headers.
+    if client and getattr(client, "port", None) == 0 and request.headers.get("x-forwarded-for"):
+        return ""
+    peer = normalize_client_ip(client.host if client else "")
+    trusted = trusted_proxy_ranges()
+    # Walk from our transport peer towards the client; never trust an arbitrary
+    # left-most value supplied by a client before the proxy appended its own.
+    if any(_ip_in_cidr(peer, cidr) for cidr in trusted):
+        fwd = request.headers.get("x-forwarded-for")
+        if trust_proxy_header and fwd:
+            chain = [normalize_client_ip(value) for value in fwd.split(",")]
+            if len(chain) > 16:
+                return ""
+            for address in reversed(chain):
+                try:
+                    ipaddress.ip_address(address)
+                except ValueError:
+                    return ""
+                peer = address
+                if not any(_ip_in_cidr(address, cidr) for cidr in trusted):
+                    return address
+        # A proxy's own address is not the client's campus presence. Missing
+        # forwarding, disabled trust or an all-proxy chain cannot grant access.
+        return ""
+    return peer
+
+
+def trusted_proxy_ranges():
+    ranges = []
+    for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(","):
+        if not value.strip():
+            continue
+        try:
+            network = ipaddress.ip_network(value.strip(), strict=False)
+        except ValueError as exc:
+            raise RuntimeError("TRUSTED_PROXY_CIDRS must contain explicit proxy IPs/CIDRs, not wildcards.") from exc
+        if network.prefixlen == 0:
+            raise RuntimeError("TRUSTED_PROXY_CIDRS cannot trust the entire Internet.")
+        ranges.append(str(network))
+    return ranges
 
 
 def _ip_in_cidr(ip_str: str, cidr: str) -> bool:
@@ -132,78 +170,29 @@ def verify_network(
     reported_bssid: Optional[str],
     networks: List,  # list of CampusNetwork rows (active only)
 ) -> Tuple[bool, str]:
-    """Verify if the student is connected to a whitelisted campus network."""
-    
-    server_ssid, server_bssid = get_server_wifi_details()
-    server_local_ip = get_server_local_ip()
-    
-    notes = []
-    
-    # Exclude loopback/localhost during local development
-    is_loopback = source_ip in ('127.0.0.1', '::1', 'localhost')
-    
-    # 1. If database whitelist rules are configured, validate against them
-    if networks:
-        cidr_rules = [n for n in networks if n.cidr]
-        ssid_rules = [n for n in networks if n.ssid]
-        bssid_rules = [n for n in networks if n.bssid_prefix or n.bssid]
-        
-        matches = []
-        failures = []
+    """Only configured campus CIDRs and server-observed IP can authorise attendance.
 
-        # Check CIDR IP subnet match
-        if cidr_rules:
-            ip_match = any(_ip_in_cidr(source_ip, n.cidr) for n in cidr_rules if n.cidr)
-            if ip_match:
-                matches.append(f"IP {source_ip} matches whitelisted CIDR range")
-            else:
-                failures.append(f"IP {source_ip} outside whitelisted CIDR range")
-
-        # Check SSID match
-        if ssid_rules:
-            normalized_reported_ssid = reported_ssid.strip().lower() if reported_ssid else ""
-            ssid_match = any(
-                normalized_reported_ssid == n.ssid.strip().lower() for n in ssid_rules if n.ssid
-            )
-            if ssid_match:
-                matches.append(f"SSID '{reported_ssid}' matches whitelisted network")
-            else:
-                failures.append(f"SSID '{reported_ssid or 'None'}' mismatch")
-
-        # Check BSSID / MAC match
-        if bssid_rules:
-            normalized_reported_bssid = _norm_mac(reported_bssid) if reported_bssid else ""
-            bssid_match = any(
-                normalized_reported_bssid.startswith(_norm_mac(n.bssid_prefix or n.bssid or ""))
-                for n in bssid_rules
-            )
-            if bssid_match:
-                matches.append(f"BSSID '{reported_bssid}' matches whitelisted AP")
-            else:
-                failures.append(f"BSSID '{reported_bssid or 'None'}' mismatch")
-
-        # If loopback localhost, pass for local dev
-        if is_loopback:
-            return True, f"Loopback connection passed for local dev ({source_ip})"
-
-        # Student passes if they match any whitelisted CIDR, SSID, or BSSID
-        if matches:
-            return True, " ; ".join(matches)
-        else:
-            return False, " ; ".join(failures) if failures else "Connection not in whitelisted campus networks"
-
-    # 2. Fallback: If no DB rules configured, check server local subnet
-    server_subnet = None
-    if server_local_ip and server_local_ip != '127.0.0.1':
-        parts = server_local_ip.split('.')
-        if len(parts) == 4:
-            server_subnet = '.'.join(parts[:3]) + '.'
-
-    if server_subnet and not is_loopback:
-        if source_ip.startswith(server_subnet):
-            return True, f"Subnet verified: source_ip={source_ip} in server LAN ({server_subnet}*)"
-        else:
-            return False, f"Subnet mismatch: source_ip={source_ip} not in server LAN ({server_subnet}*)"
-
-    # Default pass if no rules or subnet constraints exist
-    return True, "No active network restriction rules enforced"
+    Wi-Fi names, MACs and reported addresses remain audit metadata, not proof.
+    No shell probes, inferred LAN ranges, localhost exceptions or default passes.
+    """
+    try:
+        address = ipaddress.ip_address(normalize_client_ip(source_ip))
+    except ValueError:
+        return False, "Unable to establish your network address. Contact the administrator."
+    if address.is_loopback or address.is_unspecified:
+        return False, "Localhost is not campus network evidence. Connect through the campus network."
+    cidrs = []
+    for rule in networks:
+        if not getattr(rule, "is_active", True) or not rule.cidr:
+            continue
+        try:
+            network = ipaddress.ip_network(rule.cidr, strict=False)
+            if network.prefixlen > 0 and not network.network_address.is_loopback:
+                cidrs.append(network)
+        except ValueError:
+            continue
+    if not cidrs:
+        return False, "Campus network is not configured. Ask an administrator to add an active campus IP range."
+    if any(address in network for network in cidrs):
+        return True, "Server-observed IP matches a configured campus range; Wi-Fi details are supporting information only."
+    return False, "Your server-observed IP is outside the campus network. Connect to campus Wi-Fi and try again."

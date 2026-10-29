@@ -5,6 +5,11 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Configuration is optional in local builds; never substitute a demo Firebase project.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.example.fyp_flutter"
     compileSdk = flutter.compileSdkVersion

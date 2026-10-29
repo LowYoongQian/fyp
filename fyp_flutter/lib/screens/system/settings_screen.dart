@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../main.dart';
 import '../../services/user_service.dart';
+import '../../services/mobile_push.dart';
+import 'account_security_card.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../../i18n/app_localizations.dart';
@@ -36,7 +38,8 @@ const List<Map<String, String>> kSupportedLanguages = [
 ];
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final String authToken, apiBaseUrl;
+  const SettingsScreen({super.key, this.authToken = '', this.apiBaseUrl = ''});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -88,7 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       // 2. Background sync with backend profile if available
-      final profile = await UserService.fetchUserProfile();
+      final profile = widget.authToken.isEmpty ? null : await UserService.fetchUserProfile(authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl);
       if (profile != null && mounted) {
         setState(() {
           if (profile['theme_preference'] != null) _themeModeStr = profile['theme_preference'];
@@ -127,14 +130,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await MainApp.of(context).updateThemeMode(theme);
     
     // Async background sync so theme animation remains 60fps buttery smooth
-    UserService.updateUserSettings({'theme_preference': mode});
+    _saveRemote({'theme_preference': mode});
   }
 
   Future<void> _saveFontSize(String size) async {
     setState(() => _fontSizeStr = size);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('font_size', size);
-    UserService.updateUserSettings({'font_size_preference': size});
+    _saveRemote({'font_size_preference': size});
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -151,7 +154,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language', langCode);
     await MainApp.of(context).updateLanguage(langCode);
-    UserService.updateUserSettings({'language_preference': langCode});
+    _saveRemote({'language_preference': langCode});
 
     final langItem = kSupportedLanguages.firstWhere(
       (l) => l['code'] == langCode,
@@ -188,12 +191,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setBool('push_notifications', _pushNotifications);
     await prefs.setBool('in_app_notifications', _inAppNotifications);
 
-    UserService.updateUserSettings({
+    _saveRemote({
       'notifications_enabled': _notificationsEnabled,
       'email_notifications': _emailNotifications,
       'push_notifications': _pushNotifications,
       'in_app_notifications': _inAppNotifications,
     });
+  }
+
+  Future<void> _saveRemote(Map<String, dynamic> settings) async {
+    if (widget.authToken.isEmpty) return; // Signed-out appearance preferences remain local.
+    final saved = await UserService.updateUserSettings(settings, authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl);
+    if (saved && (settings.containsKey('push_notifications') || settings.containsKey('notifications_enabled'))) {
+      await MobilePush.bind(widget.authToken, widget.apiBaseUrl);
+    }
+    if (!saved && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Changed locally; server save failed. Please retry.')));
   }
 
   void _showLanguageDropdownModal() {
@@ -407,6 +419,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // -------------------------------------------------------------
+                  if (widget.authToken.isNotEmpty) ...[
+                    AccountSecurityCard(authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl),
+                    const SizedBox(height: 24),
+                  ],
                   // 1. APPEARANCE SECTION
                   // -------------------------------------------------------------
                   _buildSectionHeader(

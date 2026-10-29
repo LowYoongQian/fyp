@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:http/http.dart' as http;
 import '../../widgets/aurora_background.dart';
 import '../../widgets/glass_card.dart';
 
@@ -17,13 +18,19 @@ import '../../widgets/glass_card.dart';
 // -----------------------------------------------------------------
 class FaceScannerScreen extends StatefulWidget {
   final String title;
-  final Function(String? imageBase64, bool livenessPassed, {int? challengeMs})
+  final Function(String? imageBase64, bool livenessPassed, {int? challengeMs, String? challengeToken})
   onScanComplete;
+  final String? sessionId;
+  final String? authToken;
+  final String? apiBaseUrl;
 
   const FaceScannerScreen({
     super.key,
     required this.title,
     required this.onScanComplete,
+    this.sessionId,
+    this.authToken,
+    this.apiBaseUrl,
   });
 
   @override
@@ -76,6 +83,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   List<String> _selectedChallenges = [];
   // Behavioral biometrics: when the user clicked "Detect Face"
   DateTime? _scanStartedAt;
+  String? _challengeToken;
+  bool _preparingChallenge = false;
   // ML Kit stays below the camera preview rate so frames never queue. The native
   // preview remains fluid while detection updates the target roughly 12-15 times/s.
   static const Duration _detectionInterval = Duration(milliseconds: 70);
@@ -458,7 +467,30 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     }
   }
 
-  void startScanning() {
+  Future<void> startScanning() async {
+    if (_preparingChallenge || isScanning) return;
+    if (widget.sessionId != null) {
+      setState(() { _preparingChallenge = true; scanningStatusText = 'Preparing secure scan...'; });
+      try {
+        final response = await http.post(
+          Uri.parse('${widget.apiBaseUrl}/sessions/${Uri.encodeComponent(widget.sessionId!)}/checkin-challenge'),
+          headers: {'Authorization': 'Bearer ${widget.authToken}'},
+        ).timeout(const Duration(seconds: 12));
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        if (response.statusCode != 200 || body['challenge_token'] is! String) {
+          throw StateError(body['detail']?.toString() ?? 'Unable to prepare check-in. Please try again.');
+        }
+        _challengeToken = body['challenge_token'] as String;
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => scanningStatusText = 'Secure check-in unavailable. Please try again.');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error is StateError ? error.message.toString() : 'Check your connection and try again.')));
+        return;
+      } finally {
+        if (mounted) setState(() => _preparingChallenge = false);
+      }
+      if (!mounted) return;
+    }
     final random = math.Random();
 
     // Pick two DISTINCT challenges, and never repeat the previous pair
@@ -707,6 +739,7 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
         capturedImageBase64,
         passed,
         challengeMs: challengeMs,
+        challengeToken: _challengeToken,
       );
       if (mounted) {
         Navigator.pop(context);

@@ -1,6 +1,9 @@
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
+import { attendanceDateTime, attendanceSource } from '../../utils/attendanceTime';
 import type { AdminSession, AdminAttendanceRecord } from '../../services/api';
 import { swalSuccess, swalError } from '../../utils/swal';
 import {
@@ -70,7 +73,7 @@ const FilterDropdown: React.FC<{
       </button>
 
       {open && (
-        <div role="listbox" className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-150 dark:border-slate-700 dark:bg-slate-900 custom-scrollbar">
+        <FloatingPanel role="listbox" className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-150 dark:border-slate-700 dark:bg-slate-900 custom-scrollbar">
           {options.map(option => {
             const isSelected = option.value === value;
             return (
@@ -93,7 +96,7 @@ const FilterDropdown: React.FC<{
               </button>
             );
           })}
-        </div>
+        </FloatingPanel>
       )}
     </div>
   );
@@ -123,7 +126,7 @@ export const AttendanceManager: React.FC = () => {
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
-  const [modalStatusFilter, setModalStatusFilter] = useState<'all' | 'present' | 'absent' | 'leave'>('all');
+  const [modalStatusFilter, setModalStatusFilter] = useState<'all' | 'present' | 'absent' | 'leave' | 'unmarked'>('all');
   const [submittingStudentId, setSubmittingStudentId] = useState<number | string | null>(null);
   const attendanceDialogRef = useRef<HTMLDivElement>(null);
 
@@ -336,19 +339,14 @@ export const AttendanceManager: React.FC = () => {
     const newStatus = record.status === 'present' ? 'absent' : 'present';
     
     try {
-      await apiService.adminUpdateAttendance(selectedSession.id, record.student_id, {
+      const saved = await apiService.adminUpdateAttendance(selectedSession.id, record.student_id, {
         status: newStatus,
         wifi_verified: record.wifi_verified,
         liveness_passed: record.liveness_passed
       });
       
-      setAttendanceList(prev =>
-        prev.map(item =>
-          item.student_id === record.student_id
-            ? { ...item, status: newStatus, marked_at: newStatus === 'present' ? new Date().toISOString() : item.marked_at }
-            : item
-        )
-      );
+      setAttendanceList(prev => prev.map(item => item.student_id === record.student_id
+        ? { ...item, status: newStatus, marked_at: saved.marked_at, method: saved.method } : item));
       await swalSuccess(
         'Attendance Updated',
         `${record.student_name} marked as ${newStatus}.`
@@ -367,19 +365,14 @@ export const AttendanceManager: React.FC = () => {
     const updatedLiveness = type === 'liveness' ? !record.liveness_passed : record.liveness_passed;
 
     try {
-      await apiService.adminUpdateAttendance(selectedSession.id, record.student_id, {
-        status: record.status,
+      const saved = await apiService.adminUpdateAttendance(selectedSession.id, record.student_id, {
+        status: 'present',
         wifi_verified: updatedWifi,
         liveness_passed: updatedLiveness
       });
 
-      setAttendanceList(prev =>
-        prev.map(item =>
-          item.student_id === record.student_id
-            ? { ...item, wifi_verified: updatedWifi, liveness_passed: updatedLiveness, marked_at: new Date().toISOString() }
-            : item
-        )
-      );
+      setAttendanceList(prev => prev.map(item => item.student_id === record.student_id
+        ? { ...item, wifi_verified: updatedWifi, liveness_passed: updatedLiveness, marked_at: saved.marked_at, method: saved.method } : item));
       await swalSuccess(
         'Override Applied',
         `${type === 'wifi' ? 'WiFi' : 'Liveness'} flag updated for ${record.student_name}.`
@@ -396,7 +389,8 @@ export const AttendanceManager: React.FC = () => {
     return attendanceList.filter(r => {
       if (modalStatusFilter === 'present' && r.status !== 'present') return false;
       if (modalStatusFilter === 'absent' && r.status !== 'absent') return false;
-      if (modalStatusFilter === 'leave' && r.status !== 'leave') return false;
+      if (modalStatusFilter === 'unmarked' && r.status !== 'unmarked') return false;
+      if (modalStatusFilter === 'leave' && r.status !== 'leave' && !r.status.startsWith('mc_')) return false;
       if (studentSearchQuery.trim()) {
         const q = studentSearchQuery.toLowerCase().trim();
         return r.student_name.toLowerCase().includes(q) || r.student_code.toLowerCase().includes(q);
@@ -405,17 +399,7 @@ export const AttendanceManager: React.FC = () => {
     });
   }, [attendanceList, modalStatusFilter, studentSearchQuery]);
 
-  const formatDateTime = (dtStr: string | null) => {
-    if (!dtStr) return 'N/A';
-    const date = new Date(dtStr);
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-  };
+  const formatDateTime = attendanceDateTime;
 
   const activeSessionCount = sessions.filter(s => s.is_open || s.status === 'Active').length;
   const closedSessionCount = sessions.length - activeSessionCount;
@@ -484,7 +468,7 @@ export const AttendanceManager: React.FC = () => {
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              Closed ({closedSessionCount})
+              Not Open ({closedSessionCount})
             </button>
           </div>
 
@@ -512,11 +496,11 @@ export const AttendanceManager: React.FC = () => {
           <div className="p-4 bg-slate-50/80 border border-slate-200/70 rounded-xl space-y-3 animate-in fade-in duration-150">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
               {/* 1. Search Query */}
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Search Keyword</label>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                  <input
+                  <TextInput showCounter={false}
                     type="text"
                     placeholder="Course, Staff, Student..."
                     value={searchQuery}
@@ -580,7 +564,7 @@ export const AttendanceManager: React.FC = () => {
         {/* Sessions Table Output */}
         {loading || pageChanging ? (
           <ShimmerTableSkeleton
-            headers={['Course', 'Staff Name', 'Role', 'Group', 'Opened At', 'Closed At', 'Status', 'Actions']}
+            headers={['Course', 'Staff Name', 'Role', 'Group', 'Class Start', 'Class End', 'Opened At', 'Closed At', 'Status', 'Actions']}
             rows={limit}
             showPagination={true}
           />
@@ -612,6 +596,8 @@ export const AttendanceManager: React.FC = () => {
                     <th className="py-3 px-4">Staff Name</th>
                     <th className="py-3 px-4">Role</th>
                     <th className="py-3 px-4">Group</th>
+                    <th className="py-3 px-4">Class Start (MYT)</th>
+                    <th className="py-3 px-4">Class End (MYT)</th>
                     <th className="py-3 px-4">Opened At</th>
                     <th className="py-3 px-4">Closed At</th>
                     <th className="py-3 px-4">Status</th>
@@ -644,9 +630,11 @@ export const AttendanceManager: React.FC = () => {
                       <td className="py-3.5 px-4 font-mono text-slate-600 font-bold">
                         {session.class_group.startsWith('G') ? `Group ${session.class_group.replace('G', '')}` : session.class_group}
                       </td>
+                      <td className="py-3.5 px-4 text-slate-600 font-mono whitespace-nowrap">{formatDateTime(session.scheduled_start)}</td>
+                      <td className="py-3.5 px-4 text-slate-600 font-mono whitespace-nowrap">{formatDateTime(session.scheduled_end)}</td>
                       <td className="py-3.5 px-4 text-slate-500 font-mono">{formatDateTime(session.opened_at)}</td>
                       <td className="py-3.5 px-4 text-slate-500 font-mono">
-                        {session.status === 'Closed' ? (
+                        {!session.is_open ? (
                           formatDateTime(session.closed_at)
                         ) : (
                           <span className="text-brand-blue font-semibold italic flex items-center gap-1">
@@ -667,7 +655,7 @@ export const AttendanceManager: React.FC = () => {
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                            <span>Closed</span>
+                            <span>{session.status || 'Closed'}</span>
                           </span>
                         )}
                       </td>
@@ -749,7 +737,7 @@ export const AttendanceManager: React.FC = () => {
             tabIndex={-1}
             className="max-w-4xl w-full uipro-card bg-white relative z-10 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh] outline-none"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
               <div className="space-y-1">
                 <h3 id="attendance-audit-title" className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
                   <UserCheck className="h-4.5 w-4.5 text-brand-blue" />
@@ -758,12 +746,14 @@ export const AttendanceManager: React.FC = () => {
                 <p className="text-[10px] text-slate-400">
                   Course: <strong className="text-slate-700">{selectedSession.course_code} - {selectedSession.course_name}</strong> | Group: <strong className="text-slate-700">{selectedSession.class_group.startsWith('G') ? `Group ${selectedSession.class_group.replace('G', '')}` : selectedSession.class_group}</strong>
                 </p>
+                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">Class (Malaysia time): {formatDateTime(selectedSession.scheduled_start)} – {formatDateTime(selectedSession.scheduled_end)}</p>
+                <p className="text-[10px] text-slate-400">Opened: {formatDateTime(selectedSession.opened_at)} · Closed: {formatDateTime(selectedSession.closed_at)} · {selectedSession.status}</p>
               </div>
               <button
                 type="button"
                 onClick={closeAttendanceModal}
                 aria-label="Close audit panel"
-                className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                className="mt-0.5 shrink-0 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
                 <X className="h-4.5 w-4.5" />
               </button>
@@ -775,7 +765,7 @@ export const AttendanceManager: React.FC = () => {
               <div>
                 <p className="font-bold text-slate-700">Administrative Audit Mode</p>
                 <p>
-                  As an administrator, you can toggle a student's check-in status (Present/Absent) or manually verify check-in requirements (WiFi network match and facial liveness challenge). Attendance records **cannot be permanently deleted** from the system database; toggling to absent will write an <strong className="text-slate-600">"absent"</strong> audit status.
+                  Class start/end are scheduled times; Recorded At is the stored check-in, absence-finalization or manual-marking time, not a student's departure time. Unrecorded students are not confirmed absent. Edits retain earlier values and timestamps in Audit Logs; older missing times cannot be reconstructed.
                 </p>
               </div>
             </div>
@@ -818,14 +808,18 @@ export const AttendanceManager: React.FC = () => {
                     modalStatusFilter === 'leave' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'
                   }`}
                 >
-                  On Leave ({attendanceList.filter(r => r.status === 'leave').length})
+                  Medical / Leave ({attendanceList.filter(r => r.status === 'leave' || r.status.startsWith('mc_')).length})
+                </button>
+                <button type="button" onClick={() => setModalStatusFilter('unmarked')}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${modalStatusFilter === 'unmarked' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500'}`}>
+                  Unrecorded ({attendanceList.filter(r => r.status === 'unmarked').length})
                 </button>
               </div>
 
               {/* Modal student search toolbar */}
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                <input
+                <TextInput showCounter={false}
                   type="text"
                   placeholder="Search student name or code..."
                   value={studentSearchQuery}
@@ -836,7 +830,7 @@ export const AttendanceManager: React.FC = () => {
             </div>
 
             {/* Attendance list output */}
-            <div className="overflow-y-auto flex-1 min-h-0 border border-slate-100 rounded-xl">
+            <div className="overflow-auto flex-1 min-h-0 border border-slate-100 rounded-xl">
               {modalLoading ? (
                 <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs" aria-live="polite">
                   <InfinityLoop className="h-14 w-20 text-brand-blue" />
@@ -856,7 +850,7 @@ export const AttendanceManager: React.FC = () => {
                     <tr>
                       <th className="py-2.5 px-4">Student Details</th>
                       <th className="py-2.5 px-4">Student Code</th>
-                      <th className="py-2.5 px-4">Checked-In</th>
+                      <th className="py-2.5 px-4">Recorded At (MYT)</th>
                       <th className="py-2.5 px-4 text-center">WiFi Verified</th>
                       <th className="py-2.5 px-4 text-center">Liveness Passed</th>
                       <th className="py-2.5 px-4 text-center">Attendance Status</th>
@@ -872,6 +866,7 @@ export const AttendanceManager: React.FC = () => {
                           <td className="py-3 px-4 font-mono text-slate-500 font-bold">{record.student_code}</td>
                           <td className="py-3 px-4 text-slate-400 font-mono text-[11px]">
                             {record.marked_at ? formatDateTime(record.marked_at) : 'Not marked'}
+                            <span className="mt-1 block text-[10px] font-sans text-slate-500">{attendanceSource(record.status, record.method)}</span>
                           </td>
                           <td className="py-3 px-4 text-center">
                             {record.status !== 'present' ? (
@@ -920,10 +915,12 @@ export const AttendanceManager: React.FC = () => {
                               <span className="uipro-badge uipro-badge-success inline-flex items-center">
                                 <CheckCircle className="h-3 w-3 mr-1" /> Present
                               </span>
-                            ) : record.status === 'leave' ? (
+                            ) : record.status === 'leave' || record.status.startsWith('mc_') ? (
                               <span className="uipro-badge bg-slate-100 text-slate-600 inline-flex items-center">
-                                On Leave
+                                {record.status === 'leave' ? 'On Leave' : record.status.replace('mc_', 'MC ').replace('_', ' ')}
                               </span>
+                            ) : record.status === 'unmarked' ? (
+                              <span className="uipro-badge bg-amber-50 text-amber-700 inline-flex items-center">Unrecorded</span>
                             ) : (
                               <span className="uipro-badge uipro-badge-danger inline-flex items-center">
                                 <XCircle className="h-3 w-3 mr-1" /> Absent

@@ -54,6 +54,7 @@ class AlertCreate(BaseModel):
 
 @router.get("/me/courses")
 def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    from domain.semesters import semester_dict
     # Find the lecturer profile
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
@@ -80,6 +81,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
             "course_code": c.course_code,
             "course_name": c.course_name,
             "credit_hours": c.credit_hours,
+            "semester": semester_dict(c.semester) if c.semester_id else None,
             "schedule_day": m.day if m else None,
             "schedule_start": m.start if m else None,
             "schedule_end": m.end if m else None,
@@ -231,6 +233,10 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
                 })
 
 
+    from domain.semesters import semester_dict
+    terms = {str(c.id): semester_dict(c.semester) if c.semester_id else None for c in courses}
+    for entry in result:
+        entry["semester"] = terms.get(str(entry.get("course_id")))
     return result
 
 
@@ -268,6 +274,18 @@ def _owned_announcement(db: Session, announcement_id: str, user_id: str) -> Anno
     return row
 
 
+def require_course_notice_publisher(
+    db: Session = Depends(get_db), current_user: User = Depends(require_lecturer),
+) -> Lecturer:
+    # The portal role includes tutors; publishing requires the current DB designation.
+    if current_user.role != "lecturer":
+        raise HTTPException(403, "Only lecturers can manage course notices")
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Staff")
+    if (lecturer.role or "").strip().lower() != "lecturer":
+        raise HTTPException(403, "Only lecturers can manage course notices")
+    return lecturer
+
+
 def _assigned_course(db: Session, lecturer: Lecturer, course_id: str) -> Course:
     if course_id not in {str(value) for value in my_course_ids(db, lecturer.id)}:
         raise HTTPException(403, "You are not assigned to this course")
@@ -298,8 +316,7 @@ def list_course_announcements(db: Session = Depends(get_db), current_user: User 
 
 
 @router.get("/me/course-announcement-options")
-def course_announcement_options(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+def course_announcement_options(db: Session = Depends(get_db), lecturer: Lecturer = Depends(require_course_notice_publisher)):
     courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
     result = []
     for course in courses:
@@ -426,7 +443,7 @@ def get_lecturer_dashboard_summary(
             "name": lecturer.name,
             "staff_id": lecturer.staff_id,
             "email": current_user.email,
-            "role": "Lecturer",
+            "role": lecturer.role or "Staff",
             "avatar_url": current_user.avatar_url,
             "joined_at": iso_utc(current_user.created_at),
         },
@@ -445,9 +462,9 @@ def create_course_announcement(
     publish_end: Optional[datetime] = Form(None), external_link: Optional[str] = Form(None),
     attachment: Optional[UploadFile] = File(None), db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer),
+    lecturer: Lecturer = Depends(require_course_notice_publisher),
 ):
     publish_start, publish_end = _naive_utc(publish_start), _naive_utc(publish_end)
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
     course = _assigned_course(db, lecturer, course_id)
     clean_title, clean_content = title.strip(), content.strip()
     if not clean_title or not clean_content:
@@ -487,7 +504,7 @@ def create_course_announcement(
 
 
 @router.delete("/me/course-announcements/{announcement_id}")
-def delete_course_announcement(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+def delete_course_announcement(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer), publisher: Lecturer = Depends(require_course_notice_publisher)):
     row = _owned_announcement(db, announcement_id, current_user.id)
     db.delete(row)
     db.commit()
@@ -501,9 +518,9 @@ def update_course_announcement(
     publish_start: Optional[datetime] = Form(None), publish_end: Optional[datetime] = Form(None),
     external_link: Optional[str] = Form(None), attachment: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db), current_user: User = Depends(require_lecturer),
+    lecturer: Lecturer = Depends(require_course_notice_publisher),
 ):
     publish_start, publish_end = _naive_utc(publish_start), _naive_utc(publish_end)
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
     course = _assigned_course(db, lecturer, course_id)
     row = _owned_announcement(db, announcement_id, current_user.id)
     groups = {value for (value,) in db.query(Enrolment.class_group).filter(Enrolment.course_id == course.id).distinct().all() if value}

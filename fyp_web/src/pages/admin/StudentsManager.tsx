@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { TextInput } from '../../components/LimitedTextField';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
 import type { AdminStudent } from '../../services/api';
@@ -20,9 +21,11 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
+import { FaceResetDialog } from '../../components/FaceResetDialog';
 
 export const StudentsManager: React.FC = () => {
   const [students, setStudents] = useState<AdminStudent[]>([]);
+  const [faceStudent, setFaceStudent] = useState<AdminStudent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -44,33 +47,41 @@ export const StudentsManager: React.FC = () => {
   const [studentCode, setStudentCode] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
+  const mutationPending = useRef(false);
+  const requestVersion = useRef(0);
 
   useEffect(() => {
     fetchStudents();
   }, [page, searchQuery]);
 
   const handleSearchChange = (val: string) => {
+    if (mutationPending.current) return;
     setSearchQuery(val);
     setPage(1);
   };
 
-  const fetchStudents = async () => {
-    setLoading(true);
+  const fetchStudents = async (silent = false) => {
+    if (mutationPending.current) return;
+    const version = ++requestVersion.current;
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const skip = (page - 1) * limit;
       const res = await apiService.adminGetStudents(skip, limit, searchQuery.trim());
+      if (version !== requestVersion.current) return;
       setStudents(res.items || []);
       setTotalCount(res.total || 0);
     } catch (err: any) {
+      if (version !== requestVersion.current) return;
       setError('Failed to fetch student registry. Please ensure backend is running.');
       console.error(err);
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   };
 
   const handleOpenCreate = () => {
+    if (mutationPending.current) return;
     setName('');
     setEmail('');
     setPassword('');
@@ -80,6 +91,7 @@ export const StudentsManager: React.FC = () => {
   };
 
   const handleOpenEdit = (student: AdminStudent) => {
+    if (mutationPending.current) return;
     setSelectedStudent(student);
     setName(student.name);
     setEmail(student.email);
@@ -112,27 +124,38 @@ export const StudentsManager: React.FC = () => {
 
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedStudent) return;
+    if (!selectedStudent || mutationPending.current) return;
+    const previous = selectedStudent;
+    const optimistic = !password.trim();
+    mutationPending.current = true;
+    requestVersion.current++;
     setFormError(null);
     setFormSubmitting(true);
-    try {
-      await apiService.adminUpdateStudent(selectedStudent.id, {
-        email,
-        password: password.trim() ? password : undefined,
-        name,
-        student_code: studentCode
-      });
+    if (optimistic) {
+      setLoading(false);
+      setStudents(rows => rows.map(row => row.id === previous.id ? { ...row, ...{ email, name, student_code: studentCode } } : row));
       setIsEditOpen(false);
-      fetchStudents();
+    }
+    try {
+      await apiService.adminUpdateStudent(previous.id, { ...{ email, name, student_code: studentCode }, password: password.trim() ? password : undefined });
+      setIsEditOpen(false);
+      mutationPending.current = false;
+      setFormSubmitting(false);
+      void fetchStudents(true);
       await swalSuccess('Profile Updated', `${name}'s profile has been saved.`);
     } catch (err: any) {
-      setFormError(err.response?.data?.detail || 'Failed to update student account.');
+      if (optimistic) {
+        setStudents(rows => rows.map(row => row.id === previous.id ? previous : row));
+        await swalError('Save Failed', err.response?.data?.detail || 'The previous profile has been restored.');
+      } else setFormError(err.response?.data?.detail || 'Failed to update account.');
     } finally {
+      mutationPending.current = false;
       setFormSubmitting(false);
     }
   };
 
   const handleDelete = async (studentId: number | string, studentName: string) => {
+    if (mutationPending.current) return;
     const isConfirmed = await swalConfirmDelete(
       studentName,
       'This will cascadingly delete their enrolments, face embeddings, attendance records, and risk logs.'
@@ -156,6 +179,12 @@ export const StudentsManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {faceStudent && <FaceResetDialog student={faceStudent} onClose={() => setFaceStudent(null)} onSaved={() => {
+        requestVersion.current++;
+        setStudents(previous => previous.map(student => student.id === faceStudent.id ? { ...student, is_face_registered: false } : student));
+        void fetchStudents(true);
+      }} />}
+      {formSubmitting && !isCreateOpen && !isEditOpen && <p role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-700">Saving changes… Pending server confirmation.</p>}
       {/* Top Header Card */}
       <div className="uipro-card bg-white/75 backdrop-blur-md relative overflow-hidden">
         
@@ -184,7 +213,7 @@ export const StudentsManager: React.FC = () => {
         {/* Search Toolbar */}
         <div className="relative max-w-md w-full">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <input
+          <TextInput showCounter={false}
             type="text"
             placeholder="Search by name, student code, or email..."
             value={searchQuery}
@@ -239,6 +268,7 @@ export const StudentsManager: React.FC = () => {
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="inline-flex gap-2">
+                        {student.is_face_registered && <button type="button" onClick={() => setFaceStudent(student)} aria-label={`Reset face for ${student.name}`} className="px-3 py-2 bg-blue-50 text-brand-blue border border-blue-100 rounded-lg text-xs font-semibold hover:bg-blue-100">Reset face</button>}
                         <button
                           onClick={() => handleOpenEdit(student)}
                           title="Edit profile"
@@ -278,7 +308,7 @@ export const StudentsManager: React.FC = () => {
                 <button
                   type="button"
                   disabled={page === 1}
-                  onClick={() => setPage(p => Math.max(p - 1, 1))}
+onClick={() => { if (!mutationPending.current) setPage(p => Math.max(p - 1, 1)); }}
                   className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Previous
@@ -289,7 +319,7 @@ export const StudentsManager: React.FC = () => {
                 <button
                   type="button"
                   disabled={page >= Math.ceil(totalCount / limit)}
-                  onClick={() => setPage(p => p + 1)}
+onClick={() => { if (!mutationPending.current) setPage(p => p + 1); }}
                   className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Next
@@ -338,8 +368,8 @@ export const StudentsManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Full Name</label>
                 <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <User className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     value={name}
@@ -353,8 +383,8 @@ export const StudentsManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Student Code (ST-ID)</label>
                 <div className="relative">
-                  <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Hash className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     pattern="ST[0-9]{7}"
@@ -370,8 +400,8 @@ export const StudentsManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Mail className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="email"
                     required
                     value={email}
@@ -449,8 +479,8 @@ export const StudentsManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Full Name</label>
                 <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <User className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     value={name}
@@ -464,8 +494,8 @@ export const StudentsManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Student Code (ST-ID)</label>
                 <div className="relative">
-                  <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Hash className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     pattern="ST[0-9]{7}"
@@ -481,8 +511,8 @@ export const StudentsManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Mail className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="email"
                     required
                     value={email}

@@ -76,10 +76,10 @@ class UserService {
     }
   }
 
-  static Future<bool> updateUserSettings(Map<String, dynamic> settings) async {
+  static Future<bool> updateUserSettings(Map<String, dynamic> settings, {String? authToken, String? apiBaseUrl}) async {
     try {
-      final headers = await _getHeaders();
-      final url = Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/me/settings');
+      final headers = await _getHeaders(authToken);
+      final url = Uri.parse('${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/settings');
       final response = await http.put(
         url,
         headers: headers,

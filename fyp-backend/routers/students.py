@@ -19,6 +19,7 @@ from integrations.face import (
 )
 from domain.scheduler import calculate_schedule, get_course_group_slots, meeting_key_for, session_end_utc
 from domain.session_sync import sync_class_sessions
+from routers.face_enrolment import FaceCaptureSubmit, submit_capture
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
@@ -28,41 +29,8 @@ class FaceRegisterSubmit(BaseModel):
 
 
 @router.post("/me/face", status_code=200)
-def register_face(body: FaceRegisterSubmit, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    # Get student profile
-    student = require_own_profile(db, Student, current_user.id, "Student")
-
-    # Validate image payload is not empty
-    if not body.image_base64.strip():
-        raise HTTPException(status_code=400, detail="Invalid face image payload")
-
-    # Extract the ArcFace identity embedding. enforce_detection=True: a face must
-    # be present, so we never store a garbage vector as this student's identity.
-    embedding_bytes = _extract_face_embedding(body.image_base64, enforce_detection=True)
-
-    # Check if embedding already exists
-    existing_embedding = db.query(FaceEmbedding).filter(FaceEmbedding.student_id == student.id).first()
-
-    if existing_embedding:
-        existing_embedding.embedding = embedding_bytes
-        existing_embedding.is_active = True
-    else:
-        new_embedding = FaceEmbedding(
-            student_id=student.id,
-            embedding=embedding_bytes,
-            is_active=True
-        )
-        db.add(new_embedding)
-
-    # Update student profile registered flag
-    student.is_face_registered = True
-    
-    db.commit()
-    
-    return {
-        "status": "success",
-        "message": "Face registration completed. Biometric signature stored."
-    }
+def register_face(body: FaceCaptureSubmit, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    return submit_capture(body, db, current_user)
 
 
 @router.post("/me/face/verify", status_code=200)
@@ -230,6 +198,10 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
                     "role": "Practical",
                     "attendance_rate": attendance_rate,
                 })
+    from domain.semesters import semester_dict
+    terms = {str(c.id): semester_dict(c.semester) if c.semester_id else None for c, _ in rows}
+    for entry in result:
+        entry["semester"] = terms.get(str(entry.get("course_id")))
     return result
 
 
@@ -254,9 +226,11 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
     # Persisting the close is owned by sync_class_sessions (called above) and the
     # check-in guard, so this GET stays idempotent (see J in the review doc).
     now_utc = utcnow()
+    from domain.semesters import campus_date, within_semester
     rows = [
         (s, c, cg) for s, c, cg in rows
         if now_utc <= session_end_utc(s, get_course_group_slots(db, s.course_id, s.class_group))
+        and within_semester(c.semester if c.semester_id else None, campus_date(now_utc))
     ]
 
     # Which of these sessions the student has already checked into.

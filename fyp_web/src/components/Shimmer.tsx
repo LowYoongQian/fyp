@@ -432,7 +432,8 @@ export const ShimmerAttendance: React.FC = () => {
 // Analytics Specific Skeleton
 export const ShimmerAnalytics: React.FC = () => {
   return (
-    <div className="space-y-8">
+    <div className="space-y-6" aria-busy="true" aria-label="Loading attendance analytics">
+      <span className="sr-only" role="status">Loading attendance analytics</span>
       {/* Header Panel */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="space-y-2">
@@ -443,9 +444,9 @@ export const ShimmerAnalytics: React.FC = () => {
       </div>
 
       {/* KPI Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="uipro-card flex items-center gap-4 bg-white/70 animate-pulse-slow">
+          <div key={i} className="uipro-card flex items-center gap-4 bg-white/80">
             <ShimmerCircle size="w-12 h-12 rounded-xl" />
             <div className="space-y-2 flex-grow">
               <ShimmerText width="w-2/3" height="h-2.5" />
@@ -456,9 +457,9 @@ export const ShimmerAnalytics: React.FC = () => {
       </div>
 
       {/* Charts Block */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         {/* Trend Area Chart placeholder */}
-        <div className="lg:col-span-2 uipro-card bg-white/70 p-6 space-y-4 h-96 flex flex-col justify-between">
+        <div className="uipro-card flex h-96 flex-col justify-between space-y-4 bg-white/80 p-6 xl:col-span-2">
           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
             <ShimmerText width="w-1/3" height="h-4" />
             <ShimmerText width="w-20" height="h-3" />
@@ -474,7 +475,7 @@ export const ShimmerAnalytics: React.FC = () => {
         </div>
 
         {/* Security Audit Pie Chart placeholder */}
-        <div className="uipro-card bg-white/70 p-6 flex flex-col justify-between h-96">
+        <div className="uipro-card flex h-96 flex-col justify-between bg-white/80 p-6">
           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
             <ShimmerText width="w-1/2" height="h-4" />
             <ShimmerText width="w-12" height="h-3" />
@@ -501,9 +502,9 @@ export const ShimmerAnalytics: React.FC = () => {
         </div>
       </div>
 
-      {/* Weekday heatmap rates & data export */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 uipro-card bg-white/70 p-6 space-y-4 h-72 flex flex-col justify-between">
+      {/* Weekday rates and class groups */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="uipro-card flex h-72 flex-col justify-between space-y-4 bg-white/80 p-6 xl:col-span-2">
           <ShimmerText width="w-1/4" height="h-4" />
           <div className="flex-grow w-full flex items-end gap-6 pt-6 pb-2">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -515,19 +516,24 @@ export const ShimmerAnalytics: React.FC = () => {
           </div>
         </div>
 
-        <div className="uipro-card bg-white/70 p-6 flex flex-col justify-between h-72">
-          <div className="space-y-2">
+        <div className="uipro-card h-72 bg-white/80 p-6">
+          <div className="border-b border-slate-100 pb-4">
             <ShimmerText width="w-1/2" height="h-4" />
-            <ShimmerText width="w-full" height="h-10" className="mt-2" />
           </div>
-          <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-xl flex items-center gap-3">
-            <ShimmerCircle size="w-8 h-8 rounded-lg" />
-            <div className="space-y-1.5 flex-grow min-w-0">
-              <ShimmerText width="w-2/3" height="h-3" />
-              <ShimmerText width="w-1/2" height="h-2" />
+          <div className="mt-4 space-y-3">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="rounded-xl border border-slate-200 p-3">
+                <div className="flex items-center justify-between">
+                  <ShimmerText width="w-14" height="h-3" />
+                  <ShimmerText width="w-12" height="h-6" className="rounded-full" />
+                </div>
+                <div className="mt-3 flex gap-4">
+                  <ShimmerText width="w-20" height="h-2.5" />
+                  <ShimmerText width="w-28" height="h-2.5" />
+                </div>
+              </div>
+            ))}
             </div>
-          </div>
-          <ShimmerText height="h-10" className="rounded-xl" />
         </div>
       </div>
     </div>

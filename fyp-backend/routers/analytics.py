@@ -31,7 +31,7 @@ GET  /analytics/risk-scores returns the latest snapshot, optionally filtered.
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from utils.timeutil import iso_utc, utcnow
+from utils.timeutil import iso_utc, local_offset, utcnow
 
 from db.database import get_db
 import math
@@ -52,6 +52,8 @@ COLD_START_FRACTION = 0.30   # need >=30% of the semester elapsed to predict
 # (e.g. model never trained), we fall back to the legacy formula so the
 # endpoint still works — no crash, no frontend change.
 import os
+from collections import defaultdict
+from datetime import timedelta
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "ml", "risk_model.pkl")
 try:
     import joblib
@@ -302,3 +304,141 @@ def get_risk_scores(
         }
         for rs, s, c in rows
     ]
+
+
+@router.get("/overview")
+def get_analytics_overview(
+    course_id: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_lecturer),
+):
+    """Role-scoped, real-data analytics for one course at a time."""
+    if current_user.role == "lecturer":
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+        allowed_ids = my_course_ids(db, lecturer.id)
+    else:
+        allowed_ids = [row[0] for row in db.query(Course.id).all()]
+
+    courses = db.query(Course).filter(Course.id.in_(allowed_ids)).order_by(Course.course_code).all() if allowed_ids else []
+    course_options = [{"id": c.id, "code": c.course_code, "name": c.course_name} for c in courses]
+    if not courses:
+        return {"courses": [], "selected_course_id": None, "summary": {}, "weekly": [], "weekdays": [], "groups": [], "verification": []}
+
+    selected_id = course_id or courses[0].id
+    if selected_id not in {c.id for c in courses}:
+        raise HTTPException(status_code=403, detail="Not authorized to view analytics for this course")
+
+    enrolments = db.query(Enrolment).filter(Enrolment.course_id == selected_id).all()
+    sessions = db.query(ClassSession).filter(ClassSession.course_id == selected_id).order_by(
+        ClassSession.scheduled_start.asc().nullslast(), ClassSession.opened_at.asc().nullslast()
+    ).all()
+    completed = [s for s in sessions if s.status == "completed"]
+    tracked = [s for s in sessions if s.status != "cancelled"]
+    session_ids = [s.id for s in completed]
+    records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id.in_(session_ids)).all() if session_ids else []
+    records_by_session = defaultdict(list)
+    for record in records:
+        records_by_session[record.session_id].append(record)
+
+    def eligible_students(session):
+        group = (session.class_group or "All").lower()
+        return {e.student_id for e in enrolments if group == "all" or (e.class_group or "").lower() == group}
+
+    def session_stats(session):
+        eligible = eligible_students(session)
+        attended = {
+            r.student_id for r in records_by_session.get(session.id, [])
+            if r.student_id in eligible and r.status in ("present", "leave")
+        }
+        return len(attended), len(eligible)
+
+    attended_total = eligible_total = 0
+    weekly = defaultdict(lambda: [0, 0, 0, 0])
+    weekdays = defaultdict(lambda: [0, 0, 0])
+    current_day = (utcnow() + local_offset()).date()
+    current_monday = current_day - timedelta(days=current_day.weekday())
+    dated_sessions = []
+    for session in tracked:
+        when = session.scheduled_start or session.opened_at
+        if when and when.date() <= current_day:
+            monday = when.date() - timedelta(days=when.weekday())
+            dated_sessions.append(monday)
+            weekly[monday][3] += 1
+
+    # Keep calendar weeks visible through today even when a lecturer has not
+    # resolved a class yet. A missing rate is materially different from 0%.
+    if dated_sessions:
+        cursor = min(dated_sessions)
+        while cursor <= current_monday:
+            weekly[cursor]
+            cursor += timedelta(days=7)
+
+    for session in completed:
+        attended, eligible = session_stats(session)
+        attended_total += attended
+        eligible_total += eligible
+        when = session.scheduled_start or session.opened_at
+        if when:
+            monday = when.date() - timedelta(days=when.weekday())
+            weekly[monday][0] += attended
+            weekly[monday][1] += eligible
+            weekly[monday][2] += 1
+            weekdays[when.strftime("%a")][0] += attended
+            weekdays[when.strftime("%a")][1] += eligible
+            weekdays[when.strftime("%a")][2] += 1
+
+    risk_students = {
+        row.student_id for row in db.query(RiskScore).filter(
+            RiskScore.course_id == selected_id,
+            RiskScore.risk_label.in_(["medium", "high"]),
+        ).all()
+    }
+    group_rows = []
+    group_names = sorted({e.class_group or "Unassigned" for e in enrolments})
+    for group in group_names:
+        members = {e.student_id for e in enrolments if (e.class_group or "Unassigned") == group}
+        group_sessions = [s for s in completed if (s.class_group or "All") in ("All", group)]
+        present = possible = 0
+        for session in group_sessions:
+            attended, eligible = session_stats(session)
+            if (session.class_group or "All") == "All":
+                present += len({r.student_id for r in records_by_session.get(session.id, []) if r.student_id in members and r.status in ("present", "leave")})
+                possible += len(members)
+            else:
+                present += attended
+                possible += eligible
+        group_rows.append({"group": group, "students": len(members), "completed_classes": len(group_sessions), "attendance_rate": round(present * 100 / possible, 1) if possible else None})
+
+    verification_counts = {"WiFi + Liveness": 0, "WiFi verified": 0, "Manual / other": 0}
+    verified_records = [r for r in records if r.status == "present"]
+    for record in verified_records:
+        if record.network_verified and record.liveness_passed:
+            verification_counts["WiFi + Liveness"] += 1
+        elif record.network_verified:
+            verification_counts["WiFi verified"] += 1
+        else:
+            verification_counts["Manual / other"] += 1
+
+    return {
+        "courses": course_options,
+        "selected_course_id": selected_id,
+        "summary": {
+            "enrolled_students": len({e.student_id for e in enrolments}),
+            "average_attendance": round(attended_total * 100 / eligible_total, 1) if eligible_total else None,
+            "at_risk_students": len(risk_students),
+            "completed_classes": len(completed),
+            "tracked_classes": len(tracked),
+        },
+        "weekly": [
+            {
+                "week": day.isoformat(),
+                "rate": round(attended * 100 / eligible, 1) if eligible else None,
+                "classes": completed_count,
+                "tracked_classes": tracked_count,
+            }
+            for day, (attended, eligible, completed_count, tracked_count) in sorted(weekly.items())
+        ],
+        "weekdays": [{"day": day, "rate": round(weekdays[day][0] * 100 / weekdays[day][1], 1) if weekdays[day][1] else None, "classes": weekdays[day][2]} for day in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun") if day in weekdays],
+        "groups": group_rows,
+        "verification": [{"name": name, "count": count} for name, count in verification_counts.items()],
+    }

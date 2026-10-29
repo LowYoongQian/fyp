@@ -51,7 +51,7 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     <DialogContext.Provider value={{ alert, confirm }}>
       {children}
       {dialog && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[40000] flex items-center justify-center p-4">
           {/* Backdrop (no click event to close, user must explicitly interact with buttons) */}
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity" />
           

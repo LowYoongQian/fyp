@@ -1,7 +1,8 @@
 import re
 
 from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict, field_validator, model_validator
-from typing import Annotated, Optional, Any, Union
+from typing import Annotated, Optional, Any, Union, Literal
+from uuid import UUID
 from enum import Enum
 
 
@@ -66,6 +67,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: str
+    staff_role: Optional[str] = None
     user_id: Any
     profile_id: Optional[Any] = None        # students.id or lecturers.id
     name: Optional[str] = None
@@ -73,11 +75,43 @@ class TokenResponse(BaseModel):
     email: Optional[str] = None
     is_face_registered: Optional[bool] = None
     recovery_email_verified: Optional[bool] = None
+    recovery_prompt_dismissed: bool = False
+
+class LoginChallengeResponse(BaseModel):
+    requires_two_factor: Literal[True] = True
+    challenge_token: str
+    expires_in: int = 300
 
 # LLM Chatbot Schemas
+class TemporaryChatTurn(BaseModel):
+    role: Literal['user', 'assistant']
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class ChatContext(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    student_id: Optional[UUID] = None
+    course_id: Optional[UUID] = None
+    student_name: Optional[str] = Field(default=None, max_length=255)
+    course_code: Optional[str] = Field(default=None, max_length=255)
+    group: Optional[str] = Field(default=None, max_length=255)
+    intent: Optional[str] = Field(default=None, max_length=40)
+
+
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     session_id: Optional[str] = Field(default=None, max_length=36)
+    temporary: bool = False
+    messages: list[TemporaryChatTurn] = Field(default_factory=list, max_length=16)
+    context_state: ChatContext = Field(default_factory=ChatContext)
+
+    @model_validator(mode='after')
+    def isolate_temporary_context(self):
+        if self.temporary and self.session_id:
+            raise ValueError('Temporary chats cannot use a saved session')
+        if not self.temporary and (self.messages or self.context_state.model_fields_set):
+            raise ValueError('Client chat context is only accepted for temporary chats')
+        return self
 
     @field_validator("question")
     @classmethod
@@ -104,6 +138,8 @@ class QueryResponse(BaseModel):
     success: bool
     row_count: int = 0
     session_id: Optional[str] = None
+    context_state: dict = Field(default_factory=dict)
+    suggestions: list[str] = Field(default_factory=list)
 
 # Generic Response
 class MessageResponse(BaseModel):
@@ -182,7 +218,8 @@ class ReplacementClassCreate(BaseModel):
 
 class AttendanceSubmit(BaseModel):
     wifi_ssid: str
-    image_base64: str
+    image_base64: str = Field(min_length=1, max_length=8_000_000)
+    challenge_token: str = Field(min_length=40, max_length=64)
     liveness_passed: bool = True
     bssid: Optional[str] = None
     gateway_ip: Optional[str] = None
@@ -291,7 +328,9 @@ class AdminStudentUpdate(BaseModel):
 class AdminStaffCreate(BaseModel):
     model_config = ConfigDict(use_enum_values=True, validate_default=True)
     email: EmailStr
-    password: str = Field(min_length=8)
+    # Staff credentials are provisioned only through require_admin endpoints.
+    # Keep this narrower exception out of student and self-service auth schemas.
+    password: str = Field(min_length=4)
     name: str
     staff_id: StaffId
     role: Optional[StaffRole] = StaffRole.lecturer
@@ -299,7 +338,7 @@ class AdminStaffCreate(BaseModel):
 class AdminStaffUpdate(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     email: Optional[EmailStr] = None
-    password: Optional[str] = Field(default=None, min_length=8)
+    password: Optional[str] = Field(default=None, min_length=4)
     name: Optional[str] = None
     staff_id: Optional[StaffId] = None
     role: Optional[StaffRole] = None
@@ -320,7 +359,7 @@ class ProgrammeResponse(BaseModel):
 class CourseCreate(BaseModel):
     course_name: str
     course_code: str
-    credit_hours: Optional[float] = 3.0
+    credit_hours: float = Field(default=3.0, gt=0, le=60, allow_inf_nan=False)
     lecturer_id: Optional[Any] = None
     programme_id: Optional[Any] = None
     # No schedule_* fields: the timetable lives in class_meetings and is edited through
@@ -359,6 +398,10 @@ class AdminAttendanceUpdate(BaseModel):
     status: str
     wifi_verified: bool = True
     liveness_passed: bool = True
+
+class AdminAttendanceUpdateResponse(MessageResponse):
+    marked_at: UtcDateTime
+    method: str
 
 # Campus Network & Security Settings Schemas
 class CampusNetworkCreate(BaseModel):

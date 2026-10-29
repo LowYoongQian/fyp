@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from datetime import datetime, timedelta
-from utils.timeutil import utcnow
+from sqlalchemy import func
+from datetime import timedelta
+from utils.timeutil import iso_utc, utcnow
 from typing import List
 
 from db.database import get_db
@@ -10,9 +11,10 @@ from domain.scheduler import get_course_group_slots, session_window_utc
 from db.models import User, Student, Course, Enrolment, ClassSession, AttendanceRecord
 from utils.security import require_admin
 from domain.attendance import require_session_enrolment
+from domain.attendance_audit import attendance_snapshot, audit_attendance_edit
 from utils.db_helpers import get_or_404
 from schemas import (
-    MessageResponse, AdminAttendanceUpdate
+    AdminAttendanceUpdateResponse, AdminAttendanceUpdate
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin Attendance"])
@@ -29,7 +31,7 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
 
     sessions = db.query(ClassSession).options(
         joinedload(ClassSession.course).joinedload(Course.lecturer)
-    ).order_by(ClassSession.opened_at.desc()).all()
+    ).order_by(func.coalesce(ClassSession.scheduled_start, ClassSession.opened_at).desc(), ClassSession.id).all()
 
     # One clock for the whole response. Reading it per session let rows in the same
     # list be judged against different instants, so a list crossing a slot boundary
@@ -53,14 +55,13 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
 
             if now_utc > sched_end:
                 is_open = False
-                closed_at = sched_end
                 status_str = "Closed"
             elif now_utc < not_started_before:
                 status_str = "Active"
             else:
                 status_str = "On Going"
         else:
-            status_str = "Closed"
+            status_str = {"scheduled": "Scheduled", "needs_attention": "Needs Review", "cancelled": "Cancelled"}.get(s.status, "Closed")
             
         result.append({
             "id": s.id,
@@ -70,8 +71,11 @@ def get_sessions(db: Session = Depends(get_db), current_user: User = Depends(req
             "lecturer_name": lecturer.name if lecturer else "Unknown",
             "lecturer_role": lecturer.role if lecturer else "Lecturer",
             "class_group": s.class_group,
-            "opened_at": s.opened_at,
-            "closed_at": closed_at,
+            "scheduled_start": iso_utc(s.scheduled_start),
+            "scheduled_end": iso_utc(s.scheduled_end),
+            "opened_at": iso_utc(s.opened_at),
+            "closed_at": iso_utc(closed_at),
+            "class_status": s.status,
             "is_open": is_open,
             "status": status_str
         })
@@ -93,6 +97,12 @@ def get_admin_session_attendance(session_id: str, db: Session = Depends(get_db),
     # Fetch attendance records for this session
     records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id == str(session_id)).all()
     record_map = {r.student_id: r for r in records}
+    # A later allocation/group change must not hide the student's saved history
+    # for this exact dated class; current group members still appear unrecorded.
+    current_ids = {student.id for student in enrolled_students}
+    historical_ids = set(record_map) - current_ids
+    if historical_ids:
+        enrolled_students.extend(db.query(Student).filter(Student.id.in_(historical_ids)).all())
 
     # Build student attendance status list
     attendance_list = []
@@ -104,7 +114,8 @@ def get_admin_session_attendance(session_id: str, db: Session = Depends(get_db),
                 "student_name": s.name,
                 "student_code": s.student_code,
                 "status": rec.status,
-                "marked_at": rec.marked_at,
+                "marked_at": iso_utc(rec.marked_at),
+                "method": rec.method,
                 "confidence_score": rec.confidence_score,
                 # Outward names kept for the clients: the column is network_verified,
                 # and liveness_passed is NULL on rows where no check was attempted
@@ -120,7 +131,7 @@ def get_admin_session_attendance(session_id: str, db: Session = Depends(get_db),
                 "student_id": s.id,
                 "student_name": s.name,
                 "student_code": s.student_code,
-                "status": "absent",
+                "status": "unmarked",
                 "marked_at": None,
                 "confidence_score": None,
                 "wifi_verified": False,
@@ -133,10 +144,15 @@ def get_admin_session_attendance(session_id: str, db: Session = Depends(get_db),
         "course_code": course.course_code,
         "class_group": session.class_group,
         "is_open": session.is_open,
+        "class_status": session.status,
+        "scheduled_start": iso_utc(session.scheduled_start),
+        "scheduled_end": iso_utc(session.scheduled_end),
+        "opened_at": iso_utc(session.opened_at),
+        "closed_at": iso_utc(session.closed_at),
         "attendance_list": attendance_list
     }
 
-@router.put("/attendance/{session_id}/{student_id}", response_model=MessageResponse)
+@router.put("/attendance/{session_id}/{student_id}", response_model=AdminAttendanceUpdateResponse)
 def update_admin_attendance(
     session_id: str, 
     student_id: str, 
@@ -154,17 +170,22 @@ def update_admin_attendance(
     # took the course — that record would still land in attendance rates and the risk model.
     require_session_enrolment(db, session, student_id)
 
+    # Serialise edits, including the first attendance row, so before/after timestamps
+    # reflect each committed change rather than two admins racing the same student.
+    student = db.query(Student).filter(Student.id == student_id).with_for_update().one()
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id,
         AttendanceRecord.student_id == student_id
     ).first()
 
+    before = attendance_snapshot(record)
+    recorded_at = utcnow()
     if record:
         record.status = body.status
         record.method = f"admin_override:{current_user.id}"
         record.network_verified = body.wifi_verified
         record.liveness_passed = body.liveness_passed
-        record.marked_at = utcnow()
+        record.marked_at = recorded_at
     else:
         record = AttendanceRecord(
             session_id=str(session_id),
@@ -174,9 +195,10 @@ def update_admin_attendance(
             confidence_score=1.0,
             network_verified=body.wifi_verified,
             liveness_passed=body.liveness_passed,
-            marked_at=utcnow()
+            marked_at=recorded_at
         )
         db.add(record)
 
+    audit_attendance_edit(db, current_user, session, student, before, record)
     db.commit()
-    return {"message": "Attendance record updated successfully"}
+    return {"message": "Attendance record updated successfully", "marked_at": iso_utc(recorded_at), "method": record.method}

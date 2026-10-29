@@ -15,6 +15,7 @@ import time as time_module
 from domain.scheduler import calculate_schedule
 from domain.medical_leave import apply_approved_medical_leave
 from domain.class_lifecycle import close_class_if_due, needs_admin_escalation, reminder_stage
+from domain.semesters import within_semester
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,7 @@ def _sync_class_sessions_now(db: Session):
         _send_timed_lecturer_reminders(
             db, schedule_map, sessions_by_key, now_utc, now_local.date(), tz_offset,
         )
+        _send_timed_student_reminders(db, schedule_map, sessions_by_key, now_utc, now_local.date(), tz_offset)
 
         new_attention = []
         for i in range(7):
@@ -123,6 +125,8 @@ def _sync_class_sessions_now(db: Session):
             day_name = date_check.strftime("%A")
             for slot in schedule_map.values():
                 if slot["day"] != day_name or not slot.get("meeting_id"):
+                    continue
+                if not within_semester(slot.get("semester"), date_check):
                     continue
                 start_utc = datetime.combine(date_check, datetime.strptime(slot["start"], "%H:%M").time()) - tz_offset
                 end_utc = datetime.combine(date_check, datetime.strptime(slot["end"], "%H:%M").time()) - tz_offset
@@ -137,6 +141,7 @@ def _sync_class_sessions_now(db: Session):
                         status="needs_attention", is_open=False, opened_at=None,
                         class_group="All" if slot["role"] == "Lecture" else slot["class_group"],
                         room=slot["room"],
+                        semester=slot["semester"]["name"] if slot.get("semester") else None,
                     )
                     db.add(session)
                     sessions_list.append(session)
@@ -152,6 +157,8 @@ def _sync_class_sessions_now(db: Session):
         # Replacement classes do not have a weekly meeting_id, so advance the
         # materialized rows directly.
         for session in sessions_list:
+            if session.status == "open":
+                close_class_if_due(session, now_utc)
             if session.replacement_for_session_id and session.scheduled_end and now_utc >= session.scheduled_end:
                 if session.status == "scheduled":
                     session.status = "needs_attention"
@@ -258,6 +265,8 @@ def _send_timed_lecturer_reminders(db: Session, schedule_map: dict, sessions_by_
     for slot in schedule_map.values():
         if slot.get("day") != today.strftime("%A") or not slot.get("meeting_id"):
             continue
+        if not within_semester(slot.get("semester"), today):
+            continue
         start_utc = datetime.combine(today, datetime.strptime(slot["start"], "%H:%M").time()) - tz_offset
         end_utc = datetime.combine(today, datetime.strptime(slot["end"], "%H:%M").time()) - tz_offset
         session = sessions_by_key.get((str(slot["meeting_id"]), start_utc))
@@ -277,6 +286,30 @@ def _send_timed_lecturer_reminders(db: Session, schedule_map: dict, sessions_by_
             dedupe_key=f"class_reminder:{stage}:{slot['meeting_id']}:{today.isoformat()}",
             payload={"meeting_id": str(slot["meeting_id"]), "stage": stage, "date": today.isoformat()},
         )
+
+
+def _send_timed_student_reminders(db, schedule_map, sessions_by_key, now, today, offset):
+    # Run on the existing server scheduler, even when no student opens the app.
+    for slot in schedule_map.values():
+        if slot.get('day') != today.strftime('%A') or not slot.get('meeting_id'):
+            continue
+        if not within_semester(slot.get('semester'), today):
+            continue
+        start = datetime.combine(today, datetime.strptime(slot['start'], '%H:%M').time()) - offset
+        if not 0 <= (start - now).total_seconds() <= 15 * 60:
+            continue
+        session = sessions_by_key.get((str(slot['meeting_id']), start))
+        if session and session.status == 'cancelled':
+            continue
+        query = db.query(Student.user_id).join(Enrolment, Enrolment.student_id == Student.id).join(
+            User, User.id == Student.user_id).filter(Enrolment.course_id == slot['course_id'], User.status == 'Active')
+        if slot.get('class_group'):
+            query = query.filter(Enrolment.class_group == slot['class_group'])
+        for (user_id,) in query.distinct():
+            _add_notification(db, user_id=user_id, kind='class_reminder', title='Class starts soon',
+                body=f"Your class starts at {slot['start']} in {slot.get('room') or 'Room TBA'}.",
+                dedupe_key=f"reminder:{slot['meeting_id']}:{today.isoformat()}",
+                payload={'meeting_id': str(slot['meeting_id']), 'course_id': str(slot['course_id'])})
 
 
 def _notify_needs_attention(db: Session, session: ClassSession, meeting_id) -> None:

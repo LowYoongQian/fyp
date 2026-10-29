@@ -2,6 +2,8 @@ import axios from 'axios';
 
 // Base URL is injected at build time via Vite env (VITE_API_BASE_URL).
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
+export type RecordPage<T> = { items: T[]; total: number; page: number; per_page: number; stats: Record<string, number> };
+export type RecordPageQuery = { page: number; per_page: number; search?: string; status?: string; category?: string; submitted_from?: string; submitted_to?: string };
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -13,7 +15,7 @@ export const api = axios.create({
 // Attach Authorization Token to requests
 api.interceptors.request.use((config) => {
   const token = sessionStorage.getItem('auth_token');
-  if (token) {
+  if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -78,7 +80,7 @@ export const cachedGet = async (url: string, params?: any): Promise<any> => {
   if (pending) return pending;
 
   const generation = cacheGeneration;
-  const request = api.get(url, { params }).then(response => {
+  const request = api.get(url, { params, ...(url === '/auth/me' ? { timeout: 15000 } : {}) }).then(response => {
     // A response started before logout or a save must not restore stale cache.
     if (generation !== cacheGeneration) return response.data;
     const entry = { data: response.data, timestamp: Date.now() };
@@ -106,6 +108,13 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    const current = sessionStorage.getItem('auth_token');
+    const status = error.response?.status;
+    if (current && error.config?.headers?.Authorization === `Bearer ${current}` &&
+      !error.config?.url?.startsWith('/auth/login') &&
+      (status === 401 || (status === 403 && String(error.response?.data?.detail).includes('suspended or inactive')))) {
+      window.dispatchEvent(new CustomEvent('sas-session-ended', { detail: current }));
+    }
     // FastAPI 422 returns detail as an array of error objects. Rendering that
     // straight into JSX crashes React ("Objects are not valid as a React child"),
     // so flatten it to a string before any caller touches it.
@@ -125,6 +134,8 @@ api.interceptors.response.use(
 
 // Define data models supporting both integer and UUID string IDs
 export interface Course {
+  semester_id?: string | null;
+  semester?: AcademicSemester | null;
   id: number | string;
   course_name: string;
   course_code: string;
@@ -168,6 +179,19 @@ export interface Programme {
   name: string;
   code: string;
 }
+
+export interface AcademicSemester {
+  id: string;
+  programme_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  max_student_credits: number;
+  status: 'upcoming' | 'active' | 'ended';
+  course_ids?: string[];
+}
+export type SemesterWrite = Pick<AcademicSemester, 'programme_id' | 'name' | 'start_date' | 'end_date' | 'max_student_credits'> & { course_ids: string[] };
+export type AcademicCalendar = { server_time: string; timezone: string; courses: { course_id: string; course_code: string; semester: AcademicSemester | null }[] };
 
 export interface CourseStaffAssignment {
   id: number | string;
@@ -248,6 +272,22 @@ export interface LecturerDashboardSummary {
   overall_attendance_rate: number;
 }
 
+export interface AnalyticsOverview {
+  courses: Array<{ id: string | number; code: string; name: string }>;
+  selected_course_id: string | number | null;
+  summary: {
+    enrolled_students?: number;
+    average_attendance?: number | null;
+    at_risk_students?: number;
+    completed_classes?: number;
+    tracked_classes?: number;
+  };
+  weekly: Array<{ week: string; rate: number | null; classes: number; tracked_classes: number }>;
+  weekdays: Array<{ day: string; rate: number | null; classes: number }>;
+  groups: Array<{ group: string; students: number; completed_classes: number; attendance_rate: number | null }>;
+  verification: Array<{ name: string; count: number }>;
+}
+
 export interface StudentAttendance {
   student_id: number | string;
   student_name: string;
@@ -322,7 +362,15 @@ export interface AdminStaff {
   role?: string;
 }
 
+export interface FaceRegistration {
+  is_face_registered: boolean;
+  registration_version: string | null;
+}
+
 export interface AdminSession {
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
+  class_status?: string;
   id: number | string;
   course_id: number | string;
   course_code: string;
@@ -340,7 +388,8 @@ export interface AdminAttendanceRecord {
   student_id: number | string;
   student_name: string;
   student_code: string;
-  status: 'present' | 'absent' | 'leave';
+  status: 'present' | 'absent' | 'leave' | 'unmarked' | 'mc_pending' | 'mc_approved' | 'mc_rejected';
+  method?: string | null;
   marked_at: string | null;
   confidence_score: number | null;
   wifi_verified: boolean;
@@ -348,6 +397,11 @@ export interface AdminAttendanceRecord {
 }
 
 export interface AdminSessionAttendanceResponse {
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
+  opened_at?: string | null;
+  closed_at?: string | null;
+  class_status?: string;
   session_id: number | string;
   course_name: string;
   course_code: string;
@@ -422,7 +476,7 @@ export interface MedicalLeaveRecord {
   remarks?: string | null;
   submitted_at: string;
   ai_verdict?: 'valid' | 'needs_review';
-  ai_confidence?: number;
+  ai_confidence?: number | null;
   ai_summary?: string;
 }
 
@@ -465,6 +519,14 @@ export interface StudentActiveSession {
 }
 
 export const apiService = {
+  studentFeedbackPage: async (params: RecordPageQuery, signal?: AbortSignal): Promise<RecordPage<StudentFeedbackReport>> =>
+    (await api.get('/students/me/feedback/page', { params, signal, timeout: 15000 })).data,
+  studentMedicalPage: async (params: RecordPageQuery, signal?: AbortSignal): Promise<RecordPage<MedicalLeaveRecord>> =>
+    (await api.get('/students/me/medical-leave/page', { params, signal, timeout: 15000 })).data,
+  adminFeedbackPage: async (params: RecordPageQuery, signal?: AbortSignal): Promise<RecordPage<StudentFeedbackReport>> =>
+    (await api.get('/admin/reports/feedback/page', { params, signal, timeout: 15000 })).data,
+  adminMedicalPage: async (params: RecordPageQuery, signal?: AbortSignal): Promise<RecordPage<MCReportItem>> =>
+    (await api.get('/admin/reports/mc/page', { params, signal, timeout: 15000 })).data,
   // Real Backend Auth APIs
   login: async (email: string, password: string, portal?: string) => {
     const response = await api.post('/auth/login', { email, password, portal });
@@ -549,13 +611,22 @@ export const apiService = {
     return response.data;
   },
 
-  queryNatural: async (question: string, sessionId?: string) => {
-    const response = await api.post('/query/natural', {
+  queryNatural: async (question: string, sessionId?: string, options?: {
+    temporary?: boolean; messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    context_state?: Record<string, string | null>; signal?: AbortSignal;
+  }) => {
+    const response = await api.post(options?.temporary ? '/query/temporary' : '/query/natural', {
       question,
       session_id: sessionId || null,
-    });
+      ...(options?.temporary ? { temporary: true, messages: options.messages || [], context_state: options.context_state || {} } : {}),
+    }, { signal: options?.signal });
     return response.data;
   },
+
+  getNaturalSessions: async (before?: string): Promise<{
+    items: Array<{ id: string; title: string; updated_at: string }>;
+    has_more: boolean; next_cursor: string | null;
+  }> => (await api.get('/query/sessions', { params: { before, limit: 20 } })).data,
 
   getNaturalHistory: async (options?: { before?: string; sessionId?: string; limit?: number }): Promise<{
     session_id: string | null;
@@ -602,6 +673,10 @@ export const apiService = {
     return cachedGet('/analytics/risk-scores');
   },
 
+  getAnalyticsOverview: async (courseId?: number | string): Promise<AnalyticsOverview> => {
+    return cachedGet('/analytics/overview', courseId ? { course_id: courseId } : undefined);
+  },
+
   getAlertLogs: async (): Promise<AlertLog[]> => {
     return cachedGet('/lecturers/me/alerts');
   },
@@ -626,6 +701,12 @@ export const apiService = {
   adminCreateStudent: async (student: any): Promise<any> => {
     const response = await api.post('/admin/students', student);
     return response.data;
+  },
+  adminGetFaceRegistration: async (studentId: number | string, signal?: AbortSignal): Promise<FaceRegistration> => {
+    return (await api.get(`/admin/students/${studentId}/face`, { signal, timeout: 15000 })).data;
+  },
+  adminResetFace: async (studentId: number | string, current_password: string, registration_version: string): Promise<FaceRegistration> => {
+    return (await api.post(`/admin/students/${studentId}/face/reset`, { current_password, registration_version, confirm_reset: true }, { timeout: 15000 })).data;
   },
   adminUpdateStudent: async (studentId: number | string, student: any): Promise<any> => {
     const response = await api.put(`/admin/students/${studentId}`, student);
@@ -667,6 +748,10 @@ export const apiService = {
   },
 
   // Programmes CRUD
+  getAcademicCalendar: async (): Promise<AcademicCalendar> => (await api.get('/academic-calendar', { timeout: 10000 })).data,
+  adminGetSemesters: async (): Promise<AcademicSemester[]> => (await api.get('/admin/semesters')).data,
+  adminSaveSemester: async (body: SemesterWrite, id?: string): Promise<AcademicSemester> =>
+    (await (id ? api.put(`/admin/semesters/${id}`, body) : api.post('/admin/semesters', body))).data,
   adminGetProgrammes: async (): Promise<Programme[]> => {
     return cachedGet('/admin/programmes');
   },
@@ -712,6 +797,12 @@ export const apiService = {
     slot: { day: string; start: string; end: string; room: string }
   ): Promise<any> => {
     const response = await api.put(`/admin/timetable/${meetingId}`, slot);
+    clearApiCache();
+    return response.data;
+  },
+  adminDeleteTimetableSlot: async (meetingId: number | string): Promise<any> => {
+    const response = await api.delete(`/admin/timetable/${meetingId}`);
+    clearApiCache();
     return response.data;
   },
   adminCreateAssignment: async (assignment: { course_id: number | string; lecturer_id: number | string; role: string }): Promise<CourseStaffAssignment> => {
@@ -750,7 +841,7 @@ export const apiService = {
     const response = await api.get(`/admin/sessions/${encodeURIComponent(String(sessionId))}/attendance`);
     return response.data;
   },
-  adminUpdateAttendance: async (sessionId: number | string, studentId: number | string, data: { status: 'present' | 'absent'; wifi_verified: boolean; liveness_passed: boolean }): Promise<any> => {
+  adminUpdateAttendance: async (sessionId: number | string, studentId: number | string, data: { status: 'present' | 'absent'; wifi_verified: boolean; liveness_passed: boolean }): Promise<{ message: string; marked_at: string; method: string }> => {
     const response = await api.put(`/admin/attendance/${encodeURIComponent(String(sessionId))}/${encodeURIComponent(String(studentId))}`, data);
     return response.data;
   },
@@ -799,16 +890,16 @@ export const apiService = {
   studentGetEnrolments: async (): Promise<StudentEnrolmentDetail[]> => {
     return cachedGet('/students/me/enrolments');
   },
-  studentGetMedicalLeave: async (): Promise<MedicalLeaveRecord[]> => {
-    const response = await api.get('/students/me/medical-leave');
+  studentGetMedicalLeave: async (signal?: AbortSignal): Promise<MedicalLeaveRecord[]> => {
+    const response = await api.get('/students/me/medical-leave', { signal, timeout: 15000 });
     return response.data;
   },
   studentSubmitMedicalLeave: async (data: FormData, onProgress?: (percent: number) => void): Promise<MedicalLeaveRecord> => {
     const response = await api.post('/students/me/medical-leave', data, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: { 'Content-Type': undefined },
       onUploadProgress: event => {
         const ratio = event.progress ?? (event.total ? event.loaded / event.total : null);
-        onProgress?.(ratio === null ? 70 : Math.min(80, Math.max(5, Math.round(ratio * 80))));
+        if (ratio !== null) onProgress?.(Math.min(100, Math.max(0, Math.round(ratio * 100))));
       },
     });
     return response.data;
@@ -872,15 +963,14 @@ export const apiService = {
 
   // ─── User Profile & Account Settings APIs ──────────────────────────
   getUserProfile: async () => {
-    const response = await api.get('/auth/me');
-    return response.data;
+    return cachedGet('/auth/me');
   },
   changePassword: async (data: { current_password: string; new_password: string }) => {
     const response = await api.put('/auth/me/change-password', data);
     return response.data;
   },
-  updateUserSettings: async (settings: Record<string, any>) => {
-    const response = await api.put('/auth/me/settings', settings);
+  updateUserSettings: async (settings: Record<string, any>, options?: { timeout: number }) => {
+    const response = await api.put('/auth/me/settings', settings, options);
     return response.data;
   },
   updateUserAvatar: async (avatarUrl: string) => {
@@ -896,34 +986,34 @@ export const apiService = {
   },
 
   // Admin Reports & Audit Logs API
-  studentGetFeedback: async (): Promise<StudentFeedbackReport[]> => (await api.get('/students/me/feedback')).data,
+  studentGetFeedback: async (signal?: AbortSignal): Promise<StudentFeedbackReport[]> => (await api.get('/students/me/feedback', { signal, timeout: 15000 })).data,
   studentCreateFeedback: async (data: FormData): Promise<StudentFeedbackReport> =>
     (await api.post('/students/me/feedback', data, { headers: { 'Content-Type': undefined } })).data,
   downloadFeedbackAttachment: async (id: string, admin = false): Promise<Blob> =>
     (await api.get(`${admin ? '/admin/reports' : '/students/me'}/feedback/${encodeURIComponent(id)}/attachment`, { responseType: 'blob' })).data,
-  getAdminFeedback: async (status?: string, category?: string) => {
+  getAdminFeedback: async (status?: string, category?: string, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (status && status !== 'All') params.append('status', status);
     if (category && category !== 'All') params.append('category', category);
-    const response = await api.get<StudentFeedbackReport[]>(`/admin/reports/feedback?${params.toString()}`);
+    const response = await api.get<StudentFeedbackReport[]>(`/admin/reports/feedback?${params.toString()}`, { signal, timeout: 15000 });
     return response.data;
   },
   updateAdminFeedback: async (feedbackId: string, data: { status: string; admin_notes?: string; student_response?: string }) => {
     const response = await api.put<StudentFeedbackReport>(`/admin/reports/feedback/${feedbackId}`, data);
     return response.data;
   },
-  getAdminMCReports: async (status?: string) => {
+  getAdminMCReports: async (status?: string, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (status && status !== 'All') params.append('status', status);
-    const response = await api.get<MCReportItem[]>(`/admin/reports/mc?${params.toString()}`);
+    const response = await api.get<MCReportItem[]>(`/admin/reports/mc?${params.toString()}`, { signal, timeout: 15000 });
     return response.data;
   },
   getAdminMCProof: async (requestId: string): Promise<Blob> => {
     const response = await api.get(`/admin/reports/mc/${encodeURIComponent(requestId)}/proof`, { responseType: 'blob' });
     return response.data;
   },
-  updateAdminMCReport: async (recordId: string, status: string, source: MCReportItem['source'] = 'attendance') => {
-    const response = await api.put(`/admin/reports/mc/${recordId}`, { status, source });
+  updateAdminMCReport: async (recordId: string, status: string, source: MCReportItem['source'] = 'attendance', reviewerNote = '') => {
+    const response = await api.put(`/admin/reports/mc/${recordId}`, { status, source, reviewer_note: reviewerNote });
     return response.data;
   },
   getAdminAuditLogs: async (category?: string, search?: string) => {

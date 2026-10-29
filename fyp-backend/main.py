@@ -6,19 +6,27 @@ import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import false, select, text
+from sqlalchemy.exc import DBAPIError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from db.database import SessionLocal, engine
+from db.models import FaceEnrolmentRequest, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course
+from domain.account_security import validate_session
+from integrations.mobile_push import push_loop
+from utils.security import decode_token
 from domain.announcements import announcement_dict
 from domain.audit import reset_audit_client_ip, set_audit_client_ip
 from domain.security_settings import is_enabled
 from domain.session_sync import sync_class_sessions
-from integrations.network_verify import get_client_ip, get_server_local_ip
+from domain.live_updates import listen_for_commits
+from integrations.network_verify import get_client_ip, get_server_local_ip, trusted_proxy_ranges
 from routers import (
     admin_academic,
+    academic_calendar,
     admin_attendance,
     admin_audit,
     admin_config,
@@ -28,12 +36,15 @@ from routers import (
     analytics,
     attendance_features,
     auth,
+    account_security,
     lecturers,
     llm,
     medical_leave,
+    live_updates,
     sessions,
     student_self,
     students,
+    face_enrolment,
 )
 
 # Schema is owned by Alembic (`alembic upgrade head`, which the Procfile/Dockerfile run
@@ -48,6 +59,10 @@ from routers import (
 # cache there means a student cannot see a class that just opened, and still sees the
 # entry for one that just closed. Correctness beats the saved round trip on these.
 NO_STORE_PREFIXES = (
+    "/auth/server-time",
+    "/academic-calendar",
+    "/admin/semesters",
+    "/auth/",
     "/students/me/feedback",
     "/admin/reports/feedback",
     "/admin/reports/mc",
@@ -63,6 +78,8 @@ NO_STORE_PREFIXES = (
     "/students/me/medical-leave",
     "/lecturers/me/attendance-requests",
     "/notifications",
+    "/students/me/face",
+    "/admin/students",
 )
 
 
@@ -86,10 +103,18 @@ def _clear_server_response_cache():
     _server_response_cache.clear()
 
 
+def _validate_cache_session(authorization):
+    if authorization.lower().startswith('bearer '):
+        with SessionLocal() as db:
+            validate_session(db, decode_token(authorization[7:]))
+
+
 class ETagMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.method not in ("GET", "HEAD"):
             response = await call_next(request)
+            if request.url.path.startswith('/auth/'):
+                response.headers['Cache-Control'] = 'no-store'
             if request.method in ("POST", "PUT", "PATCH", "DELETE") and response.status_code < 400:
                 _clear_server_response_cache()
             return response
@@ -98,6 +123,12 @@ class ETagMiddleware(BaseHTTPMiddleware):
         if not _is_realtime(request.url.path):
             cached = _server_response_cache.get(cache_key)
             if cached and time.monotonic() - cached[0] < _SERVER_CACHE_TTL:
+                try:
+                    await asyncio.to_thread(_validate_cache_session, request.headers.get('authorization', ''))
+                except HTTPException as error:
+                    return JSONResponse({'detail': error.detail}, status_code=error.status_code)
+                except DBAPIError:
+                    return JSONResponse({'detail': 'Account verification is temporarily unavailable.'}, status_code=503)
                 _, body, status_code, headers, media_type = cached
                 _server_response_cache.move_to_end(cache_key)
                 if request.headers.get("if-none-match") == headers.get("ETag"):
@@ -223,6 +254,15 @@ async def _class_lifecycle_loop():
         await asyncio.sleep(60)
 
 
+async def _face_enrolment_expiry_loop():
+    while True:
+        try:
+            await asyncio.to_thread(face_enrolment.expire_requests)
+        except Exception as error:
+            logger.warning("Face enrolment expiry cleanup failed (%s)", type(error).__name__)
+        await asyncio.sleep(60)
+
+
 def _ping_pool():
     # Held open at the same time on purpose: one connection at a time would only ever
     # refresh the same pooled connection, leaving the rest to go stale. The admin pages
@@ -236,11 +276,49 @@ def _ping_pool():
             conn.close()
 
 
+def _check_face_enrolment_schema():
+    with engine.connect() as connection:
+        try:
+            # Validate every required column and backend read access without reading biometrics.
+            connection.execute(select(FaceEnrolmentRequest).where(false()))
+        except DBAPIError as error:
+            raise RuntimeError(
+                "Face enrolment database schema/access is not ready. From fyp-backend run "
+                "venv\\Scripts\\python.exe -m alembic upgrade head, check the backend database "
+                "role permissions, then restart using run_backend.bat."
+            ) from error
+
+
+def _check_account_security_schema():
+    try:
+        with engine.connect() as connection:
+            for model in (User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery):
+                connection.execute(select(model.__table__).where(false()))
+    except DBAPIError as error:
+        raise RuntimeError('Account security database schema/access is not ready; run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+
+
+def _check_semester_schema():
+    try:
+        with engine.connect() as connection:
+            connection.execute(select(AcademicSemester.__table__).where(false()))
+            connection.execute(select(Course.semester_id).where(false()))
+    except DBAPIError as error:
+        raise RuntimeError('Semester database schema/access is not ready; run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    trusted_proxy_ranges()  # Fail startup on unsafe proxy wildcard configuration.
+    await asyncio.to_thread(_check_face_enrolment_schema)
+    await asyncio.to_thread(_check_account_security_schema)
+    await asyncio.to_thread(_check_semester_schema)
     tasks = [
         asyncio.create_task(_keep_pool_warm()),
         asyncio.create_task(_class_lifecycle_loop()),
+        asyncio.create_task(_face_enrolment_expiry_loop()),
+        asyncio.create_task(listen_for_commits(_clear_server_response_cache)),
+        asyncio.create_task(push_loop()),
     ]
     try:
         yield
@@ -275,6 +353,8 @@ else:
     ]
 
 origin_regex = r"https?://((localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?|.*\.up\.railway\.app)"
+app.state.live_origins = allow_origins
+app.state.live_origin_regex = origin_regex
 
 app.add_middleware(ETagMiddleware)
 app.add_middleware(AuditClientIPMiddleware)
@@ -289,12 +369,15 @@ app.add_middleware(
 
 # Register routers
 app.include_router(auth.router)
+app.include_router(account_security.router)
 app.include_router(llm.router)
 app.include_router(sessions.router)
 app.include_router(students.router)
+app.include_router(face_enrolment.router)
 app.include_router(admin_students.router)
 app.include_router(admin_staff.router)
 app.include_router(admin_academic.router)
+app.include_router(academic_calendar.router)
 app.include_router(admin_attendance.router)
 app.include_router(admin_config.router)
 app.include_router(student_self.router)
@@ -305,6 +388,7 @@ app.include_router(admin_reports.student_router)
 app.include_router(admin_audit.router)
 app.include_router(attendance_features.router)
 app.include_router(medical_leave.router)
+app.include_router(live_updates.router)
 
 # Public announcements endpoint for home screen
 @app.get("/public/logo")
@@ -368,4 +452,4 @@ if __name__ == "__main__":
 
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, proxy_headers=False)

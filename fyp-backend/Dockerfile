@@ -36,7 +36,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # fetch failure breaks the build instead of a live check-in.
 ENV DEEPFACE_HOME=/opt/deepface
 RUN mkdir -p $DEEPFACE_HOME && \
-    python -c "from deepface import DeepFace; DeepFace.build_model('ArcFace')"
+    python -c "from deepface import DeepFace; DeepFace.build_model('ArcFace'); DeepFace.build_model('Fasnet', task='spoofing')"
 
 # Copy source code (after deps + weights so code edits don't invalidate them)
 COPY . .
@@ -52,4 +52,4 @@ EXPOSE 8000
 # Start uvicorn with dynamic $PORT support for Railway/Cloud deployments
 # Migrations run first and must succeed: a schema failure stops the container instead
 # of letting the app start against a half-migrated database.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --no-proxy-headers --host 0.0.0.0 --port ${PORT:-8000}"]

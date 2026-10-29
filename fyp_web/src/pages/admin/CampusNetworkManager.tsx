@@ -1,3 +1,5 @@
+import { TextInput } from '../../components/LimitedTextField';
+import { ModalLayer } from '../../components/ModalLayer';
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
 import type { CampusNetwork, SecuritySettings } from '../../services/api';
@@ -83,7 +85,8 @@ export const CampusNetworkManager: React.FC = () => {
   };
 
   const truthy = (v?: string) => String(v).toLowerCase() === 'true';
-  const isNetworkVerificationOn = truthy(settings['network_check_enabled']);
+  const isNetworkVerificationOn = settings.network_check_enabled !== 'false';
+  const networkSecurityLocked = settings.network_security_locked !== 'false';
 
   const resetForm = () => {
     setLabel(''); setCidr(''); setSsid(''); setBssidPrefix('');
@@ -182,8 +185,8 @@ export const CampusNetworkManager: React.FC = () => {
     e.preventDefault();
     setFormError(null);
     if (!label.trim()) { setFormError('Connection Name / Label is required.'); return; }
-    if (!cidr.trim() && !ssid.trim() && !bssidPrefix.trim()) {
-      setFormError('Provide at least one network attribute: CIDR, SSID, or BSSID.');
+    if (!cidr.trim()) {
+      setFormError('A campus CIDR/IP range is required; Wi-Fi names and MAC addresses are supporting information only.');
       return;
     }
     setCreating(true);
@@ -270,7 +273,8 @@ export const CampusNetworkManager: React.FC = () => {
       <button
         type="button"
         onClick={() => handleSettingChange(keyName, on ? 'false' : 'true')}
-        className="w-full flex items-start justify-between gap-4 p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-colors text-left cursor-pointer"
+        disabled={networkSecurityLocked && keyName !== 'trust_proxy_header'}
+        className="w-full flex items-start justify-between gap-4 p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-colors text-left cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
       >
         <div className="space-y-0.5">
           <p className="text-xs font-bold text-slate-800">{title}</p>
@@ -296,12 +300,11 @@ export const CampusNetworkManager: React.FC = () => {
     });
   }, [networks, searchQuery]);
 
-  const activePermittedCount = networks.filter(n => n.is_active).length;
+  const activePermittedCount = networks.filter(n => n.is_active && n.cidr).length;
 
   const isCurrentConnWhitelisted = useMemo(() => {
     if (!detectedConn) return false;
-    const targetSsid = detectedConn.ssid || 'Campus-Wi-Fi';
-    return networks.some(n => n.is_active && (n.ssid === targetSsid || n.cidr === detectedConn.cidr || n.label.includes(targetSsid)));
+    return networks.some(n => n.is_active && n.cidr && n.cidr === detectedConn.cidr);
   }, [networks, detectedConn]);
 
   return (
@@ -315,7 +318,7 @@ export const CampusNetworkManager: React.FC = () => {
               Network Security
             </h2>
             <p className="text-xs text-slate-500 font-sans">
-              Manage Wi-Fi verification and connections.
+              Verify campus IP ranges; Wi-Fi names and MAC addresses are supporting details only.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -362,7 +365,7 @@ export const CampusNetworkManager: React.FC = () => {
               </div>
               <p className="text-xs opacity-90 leading-relaxed font-sans">
                 {isNetworkVerificationOn
-                  ? `Only students connected to permitted Wi-Fi networks (${activePermittedCount} active) can submit attendance.`
+                  ? `Attendance requires a server-observed IP inside a configured campus range (${activePermittedCount} active).`
                   : 'Verification is OFF. Students can submit attendance anywhere without Wi-Fi checks.'}
               </p>
             </div>
@@ -373,18 +376,20 @@ export const CampusNetworkManager: React.FC = () => {
             onClick={() => {
               handleSettingChange('network_check_enabled', isNetworkVerificationOn ? 'false' : 'true');
             }}
+            disabled={networkSecurityLocked}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 border ${
               isNetworkVerificationOn
                 ? 'bg-white hover:bg-emerald-100/60 text-emerald-800 border-emerald-300'
                 : 'bg-white hover:bg-blue-100/60 text-blue-800 border-blue-300'
             }`}
           >
-            {isNetworkVerificationOn ? 'Switch to Public Mode' : 'Enforce Wi-Fi Check'}
+            {networkSecurityLocked ? 'Server-enforced protection' : isNetworkVerificationOn ? 'Switch to Public Mode' : 'Enforce Wi-Fi Check'}
           </button>
         </div>
       </div>
 
       {/* Container 1: Live Connection Auto-Capture */}
+      {!loading && activePermittedCount === 0 && <p role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-800">No active campus IP range is configured; check-in will be blocked until an administrator adds one. Wi-Fi names and MAC addresses alone cannot grant access.</p>}
       <div className="uipro-card bg-white space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
@@ -496,7 +501,7 @@ export const CampusNetworkManager: React.FC = () => {
                 ) : isCurrentConnWhitelisted ? (
                   <>
                     <Check className="h-3.5 w-3.5" />
-                    <span>Whitelisted</span>
+                    <span>IP range saved</span>
                   </>
                 ) : (
                   <>
@@ -529,7 +534,7 @@ export const CampusNetworkManager: React.FC = () => {
         <div className="grid md:grid-cols-2 gap-3">
           <ToggleRow keyName="network_check_enabled" title="Enable network verification" desc="Master switch. When off, system connection is public and attendance skips Wi-Fi checks." />
           <ToggleRow keyName="fail_closed" title="Fail-closed (block off-campus)" desc="Reject check-in when the network can't be verified. Off = allow but flag." />
-          <ToggleRow keyName="trust_proxy_header" title="Trust X-Forwarded-For" desc="Only enable when behind a trusted reverse proxy. Otherwise leave OFF." />
+          <ToggleRow keyName="trust_proxy_header" title="Trust configured proxy peers" desc="Forwarded addresses are accepted only from TRUSTED_PROXY_CIDRS configured on the server." />
           <ToggleRow keyName="demo_simulate_network" title="Demo: simulate campus IP" desc="Override observed IP with simulated IP below for localhost testing." />
         </div>
 
@@ -538,7 +543,7 @@ export const CampusNetworkManager: React.FC = () => {
             <label className="text-[10px] font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
               <Globe className="h-3.5 w-3.5" /> Simulated source IP (demo mode)
             </label>
-            <input
+            <TextInput
               type="text"
               value={settings.demo_simulated_ip || ''}
               onChange={(e) => handleSettingChange('demo_simulated_ip', e.target.value)}
@@ -585,7 +590,7 @@ export const CampusNetworkManager: React.FC = () => {
 
             <div className="relative w-full sm:w-64">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-              <input
+              <TextInput showCounter={false}
                 type="text"
                 placeholder="Search SSID, BSSID, name..."
                 value={searchQuery}
@@ -606,7 +611,7 @@ export const CampusNetworkManager: React.FC = () => {
           <div className="py-14 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl space-y-2">
             <Radio className="h-8 w-8 text-slate-300 mx-auto animate-pulse" />
             <p className="font-semibold text-slate-600">No network connection rules configured yet</p>
-            <p className="text-[11px] text-slate-400">Capture your current connection above or add a campus Wi-Fi network (e.g. SSID: <span className="font-mono text-slate-600">SWAS-Campus</span> or CIDR: <span className="font-mono text-slate-600">10.52.0.0/16</span>) to configure access permissions.</p>
+            <p className="text-[11px] text-slate-400">Add the campus LAN range or campus public egress IP (for example, 10.52.0.0/16); SSID-only rules cannot permit check-in.</p>
           </div>
         ) : (
           <div key={`table-saved-${showSavedSensitive}`} className="overflow-x-auto border border-slate-100 rounded-xl">
@@ -717,7 +722,7 @@ export const CampusNetworkManager: React.FC = () => {
 
       {/* Create Connection Rule Modal */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={() => setIsCreateOpen(false)}>
+        <ModalLayer className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4" onClick={() => setIsCreateOpen(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 animate-in zoom-in-95 duration-150" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <h3 className="font-display font-bold text-base text-slate-900 flex items-center gap-2">
@@ -731,7 +736,7 @@ export const CampusNetworkManager: React.FC = () => {
             <form onSubmit={handleCreate} className="space-y-3 font-sans text-xs">
               <div>
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Connection Name *</label>
-                <input
+                <TextInput
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   placeholder="e.g. Software Engineering Lab Node"
@@ -742,7 +747,7 @@ export const CampusNetworkManager: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Wi-Fi SSID</label>
-                  <input
+                  <TextInput
                     value={ssid}
                     onChange={(e) => setSsid(e.target.value)}
                     placeholder="SWAS-Campus"
@@ -751,7 +756,7 @@ export const CampusNetworkManager: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">BSSID / MAC Prefix</label>
-                  <input
+                  <TextInput
                     value={bssidPrefix}
                     onChange={(e) => setBssidPrefix(e.target.value)}
                     placeholder="AC:DE:48:11"
@@ -763,7 +768,7 @@ export const CampusNetworkManager: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">CIDR / Subnet</label>
-                  <input
+                  <TextInput
                     value={cidr}
                     onChange={(e) => setCidr(e.target.value)}
                     placeholder="10.52.0.0/16"
@@ -772,7 +777,7 @@ export const CampusNetworkManager: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Campus Location</label>
-                  <input
+                  <TextInput
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
                     placeholder="Block N - Room 302"
@@ -796,7 +801,7 @@ export const CampusNetworkManager: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </ModalLayer>
       )}
     </div>
   );

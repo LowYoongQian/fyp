@@ -18,6 +18,7 @@ if DATABASE_URL.startswith("postgresql://"):
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
+    hide_parameters=True,  # Never include authenticator ciphertext or device tokens in SQL errors.
     pool_size=10,
     max_overflow=20,
     pool_recycle=1800,  # recycle stale connections after 30 min

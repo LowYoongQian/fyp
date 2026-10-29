@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MainLayout } from './components/MainLayout';
 import {
@@ -9,7 +9,9 @@ import {
   ShimmerAnalytics,
   ShimmerAtRisk,
   ShimmerChatbot,
-  ShimmerAdminPanel
+  ShimmerAdminPanel,
+  ShimmerProfileModal,
+  ShimmerSettingsModal
 } from './components/Shimmer';
 import './App.css';
 import { applyThemePreference, getAccountThemePreference, resetThemeOnLogout } from './theme/themePreference';
@@ -37,8 +39,14 @@ const AttendanceManager = lazy(() => import('./pages/admin/AttendanceManager').t
 const StudentDashboard = lazy(() => import('./pages/student/StudentDashboard').then(module => ({ default: module.StudentDashboard })));
 const StudentMC = lazy(() => import('./pages/student/StudentMC').then(module => ({ default: module.StudentMC })));
 const StudentContact = lazy(() => import('./pages/student/StudentContact').then(module => ({ default: module.StudentContact })));
+const UserProfilePage = lazy(() => import('./components/UserProfilePage').then(module => ({ default: module.UserProfilePage })));
+const UserSettingsPage = lazy(() => import('./components/UserSettingsPage').then(module => ({ default: module.UserSettingsPage })));
+const ACCOUNT_TABS = ['profile', 'profile_security', 'settings'];
 
 const TAB_ROUTES: Record<string, string> = {
+  profile: 'account/profile',
+  profile_security: 'account/security',
+  settings: 'account/settings',
   dashboard: 'staff/dashboard',
   timetable: 'staff/timetable',
   attendance: 'staff/attendance',
@@ -69,9 +77,9 @@ const ROUTE_TABS = Object.fromEntries(
 ) as Record<string, string>;
 
 const ROLE_TABS: Record<'student' | 'lecturer' | 'admin', Set<string>> = {
-  student: new Set(['student_dashboard', 'student_timetable', 'student_mc', 'student_contact']),
-  lecturer: new Set(['dashboard', 'timetable', 'attendance', 'analytics', 'risk', 'course_announcements', 'chatbot']),
-  admin: new Set(['admin_dashboard', 'admin_students', 'admin_staff', 'admin_academic', 'admin_timetable', 'admin_attendance', 'admin_network', 'admin_announcements', 'admin_reports', 'admin_reports_feedback', 'admin_reports_mc', 'admin_audit']),
+  student: new Set([...ACCOUNT_TABS, 'student_dashboard', 'student_timetable', 'student_mc', 'student_contact']),
+  lecturer: new Set([...ACCOUNT_TABS, 'dashboard', 'timetable', 'attendance', 'analytics', 'risk', 'course_announcements', 'chatbot']),
+  admin: new Set([...ACCOUNT_TABS, 'admin_dashboard', 'admin_students', 'admin_staff', 'admin_academic', 'admin_timetable', 'admin_attendance', 'admin_network', 'admin_announcements', 'admin_reports', 'admin_reports_feedback', 'admin_reports_mc', 'admin_audit']),
 };
 
 const DEFAULT_TABS = { student: 'student_dashboard', lecturer: 'dashboard', admin: 'admin_dashboard' } as const;
@@ -95,6 +103,11 @@ const DashboardContent: React.FC = () => {
   const { isAuthenticated, loading, user } = useAuth();
   const [currentTab, setCurrentTab] = useState(() => tabFromLocation() || 'dashboard');
   const [tabLoading, setTabLoading] = useState(false);
+  const leaveGuard = useRef<(() => Promise<boolean>) | null>(null);
+  const navigating = useRef(false);
+  const registerLeaveGuard = useCallback((guard: (() => Promise<boolean>) | null) => {
+    leaveGuard.current = guard;
+  }, []);
 
   useEffect(() => {
     const applyThemeFromStorage = () => {
@@ -129,11 +142,24 @@ const DashboardContent: React.FC = () => {
 
   useEffect(() => {
     if (!user) return;
-    const restoreLocation = () => {
+    const restoreLocation = async () => {
       const requestedTab = tabFromLocation();
       const nextTab = requestedTab && ROLE_TABS[user.role].has(requestedTab)
         ? requestedTab
         : DEFAULT_TABS[user.role];
+      if (nextTab !== currentTab && leaveGuard.current) {
+        if (navigating.current) {
+          writeTabLocation(currentTab, true);
+          return;
+        }
+        navigating.current = true;
+        const allowed = await leaveGuard.current();
+        navigating.current = false;
+        if (!allowed) {
+          writeTabLocation(currentTab);
+          return;
+        }
+      }
       setTabLoading(false);
       setCurrentTab(nextTab);
       if (requestedTab !== nextTab) writeTabLocation(nextTab, true);
@@ -142,7 +168,7 @@ const DashboardContent: React.FC = () => {
     return () => {
       window.removeEventListener('popstate', restoreLocation);
     };
-  }, [user]);
+  }, [user, currentTab]);
 
   useEffect(() => {
     if (user?.role === 'lecturer') {
@@ -150,14 +176,15 @@ const DashboardContent: React.FC = () => {
     }
   }, [currentTab, user]);
 
-  const handleTabChange = (tab: string) => {
-    if (!user || !ROLE_TABS[user.role].has(tab)) return;
-    setTabLoading(true);
+  const handleTabChange = async (tab: string) => {
+    if (!user || !ROLE_TABS[user.role].has(tab) || tab === currentTab || navigating.current) return;
+    navigating.current = true;
+    const allowed = !leaveGuard.current || await leaveGuard.current();
+    navigating.current = false;
+    if (!allowed) return;
+    setTabLoading(false);
     setCurrentTab(tab);
     if (tabFromLocation() !== tab) writeTabLocation(tab);
-    setTimeout(() => {
-      setTabLoading(false);
-    }, 450);
   };
 
   if (loading) {
@@ -245,6 +272,11 @@ const DashboardContent: React.FC = () => {
     }
 
     switch (currentTab) {
+      case 'profile':
+      case 'profile_security':
+        return <UserProfilePage key={user?.user_id} onClose={() => handleTabChange(DEFAULT_TABS[user!.role])} initialTab={currentTab === 'profile_security' ? 'security' : 'profile'} />;
+      case 'settings':
+        return <UserSettingsPage key={user?.user_id} onClose={() => handleTabChange(DEFAULT_TABS[user!.role])} registerLeaveGuard={registerLeaveGuard} />;
       case 'dashboard':
         return <LecturerDashboard onNavigate={handleTabChange} />;
       case 'timetable':
@@ -300,7 +332,7 @@ const DashboardContent: React.FC = () => {
       setCurrentTab={handleTabChange}
       isLoading={tabLoading}
     >
-      <Suspense fallback={<ShimmerPage />}>
+      <Suspense fallback={ACCOUNT_TABS.includes(currentTab) ? <div role="status" aria-label="Loading account page" aria-busy="true" className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">{currentTab === 'settings' ? <ShimmerSettingsModal /> : <ShimmerProfileModal />}</div> : <ShimmerPage />}>
         {renderActiveTab()}
       </Suspense>
     </MainLayout>

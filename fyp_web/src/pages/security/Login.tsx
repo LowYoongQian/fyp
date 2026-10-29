@@ -1,9 +1,11 @@
+import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check } from 'lucide-react';
 import { swalError, swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
 import Swal from 'sweetalert2';
+import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
 import sasLogoLocal from '../../assets/saslogo.webp';
 
 export type SceneId = 'early_morning' | 'morning' | 'noon' | 'afternoon' | 'evening' | 'night' | 'late_night';
@@ -1002,8 +1004,9 @@ export const Login: React.FC = () => {
           localStorage.removeItem('remember_me_student');
           localStorage.removeItem('remember_student_email');
         }
-        if (!loginData.recovery_email_verified) {
-          await setupRecoveryEmail();
+        const dismissed = syncRecoveryReminder(loginData.user_id, loginData.recovery_prompt_dismissed);
+        if (!loginData.recovery_email_verified && !dismissed) {
+          await setupRecoveryEmail(loginData.user_id);
         }
       }
     } catch (err: any) {
@@ -1033,8 +1036,9 @@ export const Login: React.FC = () => {
             <label for="reset-school-email" class="password-reset-label">School email</label>
             <div class="password-reset-field" id="reset-school-email-field">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 8 6 8-6M4 4h16v16H4z"/></svg>
-              <input id="reset-school-email" type="email" class="password-reset-input" autocomplete="email" value="${email.replace(/"/g, '&quot;')}" placeholder="name@student.school.edu">
+              <input id="reset-school-email" type="email" maxlength="255" class="password-reset-input" autocomplete="email" value="${email.replace(/"/g, '&quot;')}" placeholder="name@student.school.edu" aria-describedby="reset-school-email-count">
             </div>
+            <span id="reset-school-email-count" class="block text-right text-[9px] leading-4 text-slate-400">0/255</span>
           </div>
         </div>`,
       showCancelButton: true,
@@ -1052,7 +1056,10 @@ export const Login: React.FC = () => {
       focusConfirm: false,
       didOpen: () => {
         const studentIdInput = document.getElementById('reset-student-id');
-        const schoolEmailInput = document.getElementById('reset-school-email');
+        const schoolEmailInput = document.getElementById('reset-school-email') as HTMLInputElement;
+        const updateCount = () => { document.getElementById('reset-school-email-count')!.textContent = `${schoolEmailInput.value.length}/255`; };
+        updateCount();
+        schoolEmailInput.addEventListener('input', updateCount);
         studentIdInput?.addEventListener('input', () => document.getElementById('reset-student-id-field')?.classList.remove('is-invalid'));
         schoolEmailInput?.addEventListener('input', () => document.getElementById('reset-school-email-field')?.classList.remove('is-invalid'));
         studentIdInput?.focus();
@@ -1088,9 +1095,33 @@ export const Login: React.FC = () => {
     }
   };
 
-  const setupRecoveryEmail = async () => {
+  const setupRecoveryEmail = async (userId: string | number) => {
     let emailDraft = '';
     let recoveryEmail: string | undefined;
+    let dismissed = recoveryReminderPreference(userId).dismissed;
+    let preferenceVersion = 0;
+    const preferenceMarkup = () => `<label class="recovery-reminder-choice">
+      <input id="recovery-reminder-checkbox" type="checkbox" ${dismissed ? 'checked' : ''} aria-describedby="recovery-reminder-description">
+      <span><strong>Do not show again</strong><span id="recovery-reminder-description">Hide these setup reminders for your account. You can still add a recovery email in Profile → Security & Password.</span></span>
+      </label><p id="recovery-reminder-status" class="recovery-reminder-status" role="status" aria-live="polite"></p>`;
+    const bindPreference = () => {
+      const checkbox = document.getElementById('recovery-reminder-checkbox') as HTMLInputElement;
+      const status = document.getElementById('recovery-reminder-status');
+      if (status && recoveryReminderPreference(userId).pending) status.textContent = 'Saved on this device; server sync is pending.';
+      checkbox.addEventListener('change', () => {
+        dismissed = checkbox.checked;
+        const choice = dismissed;
+        const version = ++preferenceVersion;
+        if (status) status.textContent = 'Saving your preference…';
+        void saveRecoveryReminder(userId, choice).then(saved => {
+          if (checkbox.isConnected && version === preferenceVersion && status) status.textContent = saved
+            ? 'Preference saved for your account.'
+            : recoveryReminderStoredLocally(userId)
+              ? 'Saved on this device; server sync will retry at your next sign-in.'
+              : 'Server sync is unavailable; your choice is kept for this visit only.';
+        });
+      });
+    };
 
     while (!recoveryEmail) {
       const result = await Swal.fire({
@@ -1105,11 +1136,12 @@ export const Login: React.FC = () => {
               <label for="recovery-email-input" class="password-reset-label">Personal Gmail</label>
               <div class="password-reset-field" id="recovery-email-field">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 8 6 8-6M4 4h16v16H4z"/></svg>
-                <input id="recovery-email-input" type="email" class="password-reset-input" autocomplete="email" value="${emailDraft.replace(/"/g, '&quot;')}" placeholder="yourname@gmail.com" aria-describedby="recovery-email-help">
+                <input id="recovery-email-input" type="email" maxlength="255" class="password-reset-input" autocomplete="email" value="${emailDraft.replace(/"/g, '&quot;')}" placeholder="yourname@gmail.com" aria-describedby="recovery-email-help recovery-email-count">
               </div>
+              <span id="recovery-email-count" class="block text-right text-[9px] leading-4 text-slate-400">0/255</span>
               <span id="recovery-email-help" class="password-reset-help">Use a personal Gmail you can access now.</span>
             </div>
-          </div>`,
+          </div>${preferenceMarkup()}`,
         showCancelButton: true,
         confirmButtonText: 'Send Code',
         cancelButtonText: 'Cancel',
@@ -1127,9 +1159,12 @@ export const Login: React.FC = () => {
           cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
         },
         didOpen: () => {
+          bindPreference();
           const input = document.getElementById('recovery-email-input') as HTMLInputElement;
+          document.getElementById('recovery-email-count')!.textContent = `${input.value.length}/255`;
           input?.addEventListener('input', () => {
             emailDraft = input.value;
+            document.getElementById('recovery-email-count')!.textContent = `${input.value.length}/255`;
             document.getElementById('recovery-email-field')?.classList.remove('is-invalid');
           });
           input?.focus();
@@ -1156,17 +1191,20 @@ export const Login: React.FC = () => {
       const cancelWarning = await Swal.fire({
         icon: 'warning',
         title: 'Your account will be harder to recover',
-        text: 'Without a recovery email, you cannot reset a forgotten password yourself.',
+        html: `<p class="recovery-email-intro">Without a recovery email, you cannot reset a forgotten password yourself.</p>${preferenceMarkup()}`,
         showCancelButton: true,
         confirmButtonText: 'Skip for Now',
         cancelButtonText: 'Go Back',
         reverseButtons: true,
         focusCancel: true,
         buttonsStyling: false,
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        didOpen: bindPreference,
         customClass: {
           popup: 'recovery-warning-popup !rounded-2xl !shadow-2xl !border !font-sans',
           title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-lg',
-          htmlContainer: '!text-slate-600 dark:!text-slate-300 !text-sm !leading-relaxed',
+          htmlContainer: 'password-reset-content !text-slate-600 dark:!text-slate-300 !text-sm !leading-relaxed',
           actions: 'password-reset-actions recovery-email-actions',
           confirmButton: 'recovery-warning-skip !rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button',
           cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
@@ -1791,10 +1829,10 @@ export const Login: React.FC = () => {
               )}
             </div>
             <div className="relative">
-              <Mail className={`absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 transition-colors ${
+              <Mail className={`!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 transition-colors ${
                 emailError ? 'text-rose-500' : 'text-slate-400'
               }`} />
-              <input
+              <TextInput
                 type="email"
                 value={email}
                 onChange={handleEmailChange}

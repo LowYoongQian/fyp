@@ -5,6 +5,8 @@ import re
 import google.generativeai as genai
 import httpx
 
+from integrations.private_storage import ensure_private_bucket
+
 
 ALLOWED_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 
@@ -25,7 +27,7 @@ def verify_medical_document(data: bytes, mime_type: str) -> dict:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-flash-lite-latest", generation_config={"temperature": 0})
     prompt = """Inspect this uploaded document. Decide whether its visible format is consistent with a medical certificate supporting leave. This is format screening, not proof of authenticity. Look for a clinic/provider, patient, issue date, leave dates or duration, and doctor/signature/stamp cues. Return JSON only: {\"verdict\":\"valid|needs_review|invalid\",\"confidence\":0.0,\"summary\":\"short plain English\",\"signals\":[\"...\"],\"missing\":[\"...\"]}. Use invalid only when clearly unrelated, unreadable, or not a medical document."""
-    response = model.generate_content([prompt, {"mime_type": mime_type, "data": data}])
+    response = model.generate_content([prompt, {"mime_type": mime_type, "data": data}], request_options={"timeout": 15})
     raw = (response.text or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
     result = json.loads(raw)
@@ -53,18 +55,17 @@ def _storage_config() -> tuple[str, str, str]:
 def upload_private_document(path: str, data: bytes, mime_type: str) -> None:
     url, key, bucket = _storage_config()
     headers = {"Authorization": f"Bearer {key}", "apikey": key}
-    with httpx.Client(timeout=30) as client:
-        response = client.post(f"{url}/storage/v1/object/{bucket}/{path}", headers={**headers, "Content-Type": mime_type}, content=data)
-        if response.status_code == 404:
-            created = client.post(f"{url}/storage/v1/bucket", headers={**headers, "Content-Type": "application/json"}, json={
-                "id": bucket, "name": bucket, "public": False,
-                "file_size_limit": 5 * 1024 * 1024,
-                "allowed_mime_types": sorted(ALLOWED_TYPES),
-            })
-            if created.status_code not in (200, 201, 409):
-                created.raise_for_status()
-            response = client.post(f"{url}/storage/v1/object/{bucket}/{path}", headers={**headers, "Content-Type": mime_type}, content=data)
-        response.raise_for_status()
+    with httpx.Client(timeout=30, headers=headers) as client:
+        ensure_private_bucket(client, url, bucket, 5 * 1024 * 1024, ALLOWED_TYPES)
+        client.post(f"{url}/storage/v1/object/{bucket}/{path}",
+                    headers={"Content-Type": mime_type}, content=data).raise_for_status()
+
+
+def delete_private_document(path: str) -> None:
+    url, key, bucket = _storage_config()
+    httpx.request("DELETE", f"{url}/storage/v1/object/{bucket}",
+                  headers={"Authorization": f"Bearer {key}", "apikey": key},
+                  json={"prefixes": [path]}, timeout=30).raise_for_status()
 
 
 def download_private_document(path: str) -> bytes:

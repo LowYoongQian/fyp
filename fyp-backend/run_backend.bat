@@ -23,6 +23,8 @@ if not exist "%HF_HOME%" mkdir "%HF_HOME%"
 if not exist "%TMP%" mkdir "%TMP%"
 
 set "PYTHON=%~dp0.venv\Scripts\python.exe"
+REM Existing installations may use venv rather than setup_backend.bat's .venv.
+if not exist "%PYTHON%" set "PYTHON=%~dp0venv\Scripts\python.exe"
 set "PAUSE_AFTER=1"
 set "RELOAD=--reload"
 
@@ -83,7 +85,7 @@ echo Press Ctrl+C to stop. If the port stays busy afterwards, run stop_backend.b
 echo.
 
 REM Use the project interpreter directly so PATH cannot hijack it.
-"%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port !BACKEND_PORT! %RELOAD%
+"%PYTHON%" -m uvicorn main:app --no-proxy-headers --host 0.0.0.0 --port !BACKEND_PORT! %RELOAD%
 set "APP_EXIT=%ERRORLEVEL%"
 
 echo.

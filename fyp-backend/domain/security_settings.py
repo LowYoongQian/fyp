@@ -9,6 +9,7 @@ Defaults are stated here so a missing row degrades to the safe setting rather th
 whatever `or ""` happens to mean: verification on, and closed on failure.
 """
 from sqlalchemy.orm import Session
+import os
 
 from db.models import SecuritySetting
 
@@ -33,7 +34,19 @@ def get_settings(db: Session) -> dict:
     """Every switch, with defaults filled in for rows that do not exist yet."""
     cfg = dict(DEFAULTS)
     cfg.update({r.key: (r.value or "") for r in db.query(SecuritySetting).all()})
+    # Missing/unknown environments are production-safe. DB toggles alone cannot
+    # turn off campus evidence or enable a simulated address on a live deployment.
+    locked = not development_network_demo_allowed()
+    if locked:
+        cfg.update(network_check_enabled="true", fail_closed="true", demo_simulate_network="false", demo_simulated_ip="")
+    cfg["network_security_locked"] = str(locked).lower()
+    if truthy(os.getenv("TRUST_PROXY_HEADERS", "false")):
+        cfg["trust_proxy_header"] = "true"
     return cfg
+
+
+def development_network_demo_allowed() -> bool:
+    return os.getenv("APP_ENV", "production").strip().lower() == "development" and truthy(os.getenv("ALLOW_INSECURE_NETWORK_DEMO", "false"))
 
 
 def is_enabled(db: Session, key: str) -> bool:

@@ -1,3 +1,5 @@
+import { TextInput } from '../../components/LimitedTextField';
+import { FloatingPanel } from '../../components/FloatingPanel';
 import React, { useState, useEffect } from 'react';
 import { apiService } from '../../services/api';
 import type { Course, Student, Enrolment } from '../../services/api';
@@ -160,7 +162,7 @@ export const AdminPanel: React.FC = () => {
             <form onSubmit={handleAddStudent} className="space-y-4 font-sans">
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-600">Full Name</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   value={studentName}
@@ -171,7 +173,7 @@ export const AdminPanel: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-600">Student Code (ST-ID)</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   pattern="ST[0-9]{7}"
@@ -195,7 +197,7 @@ export const AdminPanel: React.FC = () => {
             <form onSubmit={handleAddCourse} className="space-y-4 font-sans">
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-600">Course Name</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   value={courseName}
@@ -206,7 +208,7 @@ export const AdminPanel: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-600">Course Subject Code</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   value={courseCode}
@@ -247,7 +249,7 @@ export const AdminPanel: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                   </button>
                   {isStudentDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                       {students.map(s => (
                         <button
                           key={s.id}
@@ -264,7 +266,7 @@ export const AdminPanel: React.FC = () => {
                           <span className="text-[10px] text-slate-400 font-mono">{s.student_code}</span>
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -289,7 +291,7 @@ export const AdminPanel: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                   </button>
                   {isCourseDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                       {courses.map(c => (
                         <button
                           key={c.id}
@@ -306,7 +308,7 @@ export const AdminPanel: React.FC = () => {
                           <span className="text-[10px] text-slate-500 truncate">{c.course_name}</span>
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
@@ -329,7 +331,7 @@ export const AdminPanel: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                   </button>
                   {isGroupDropdownOpen && (
-                    <div className="absolute left-0 right-0 mt-1.5 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
+                    <FloatingPanel className="absolute left-0 right-0 mt-1.5 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl shadow-lg z-50 animate-in fade-in duration-100">
                       {[
                         { value: 'G1', label: 'G1 - Tutorial 1' },
                         { value: 'G2', label: 'G2 - Tutorial 2' }
@@ -348,14 +350,14 @@ export const AdminPanel: React.FC = () => {
                           {g.label}
                         </button>
                       ))}
-                    </div>
+                    </FloatingPanel>
                   )}
                 </div>
               </div>
 
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-600">Active Semester</label>
-                <input
+                <TextInput
                   type="text"
                   required
                   value={enrolSemester}

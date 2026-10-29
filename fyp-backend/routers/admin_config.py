@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from typing import List, Union, Optional
 
-from domain.security_settings import is_enabled
+from domain.security_settings import is_enabled, get_settings, truthy, development_network_demo_allowed
 from integrations.network_verify import get_client_ip
 from db.database import get_db
 import ipaddress
@@ -105,7 +105,9 @@ def detect_connection(request: Request, db: Session = Depends(get_db), current_u
     # Same policy read the check-in path uses, so both agree on what "trusted" means.
     trust_proxy = is_enabled(db, "trust_proxy_header")
 
-    client_ip = get_client_ip(request, trust_proxy) or "127.0.0.1"
+    client_ip = get_client_ip(request, trust_proxy)
+    if not client_ip:
+        raise HTTPException(503, "Unable to observe the client network address. Check trusted proxy configuration and start Uvicorn with --no-proxy-headers.")
 
     # Resolve local LAN/Wi-Fi socket interface IP if client is on loopback
     ipv6_address = None
@@ -168,17 +170,18 @@ def get_campus_networks(db: Session = Depends(get_db), current_user: User = Depe
 
 def _validate_cidr(cidr: str):
     try:
-        ipaddress.ip_network(cidr, strict=False)
+        network = ipaddress.ip_network(cidr, strict=False)
+        if network.prefixlen == 0 or network.network_address.is_loopback:
+            raise HTTPException(400, "Use the actual campus IP range, not all addresses or localhost.")
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid CIDR/subnet: '{cidr}'. Example: 10.52.0.0/16")
 
 
 @router.post("/campus-networks", response_model=CampusNetworkResponse, status_code=201)
 def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    if not (body.cidr or body.ssid or body.bssid_prefix):
-        raise HTTPException(status_code=400, detail="Provide at least one rule: CIDR, SSID, or BSSID prefix.")
-    if body.cidr:
-        _validate_cidr(body.cidr)
+    if not (body.cidr or "").strip():
+        raise HTTPException(status_code=400, detail="A campus CIDR/IP range is required. SSID and BSSID alone cannot verify campus presence.")
+    _validate_cidr(body.cidr)
     net = CampusNetwork(
         label=body.label,
         cidr=body.cidr,
@@ -195,6 +198,10 @@ def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_d
 @router.put("/campus-networks/{net_id}", response_model=CampusNetworkResponse)
 def update_campus_network(net_id: Union[int, str], body: CampusNetworkUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     net = get_or_404(db, CampusNetwork, str(net_id), detail="Campus network rule not found")
+    effective_cidr = body.cidr if body.cidr is not None else net.cidr
+    effective_active = body.is_active if body.is_active is not None else net.is_active
+    if effective_active and not (effective_cidr or "").strip():
+        raise HTTPException(400, "Add a campus CIDR/IP range before activating this rule.")
     if body.cidr is not None and body.cidr != "":
         _validate_cidr(body.cidr)
     for field in ("label", "cidr", "ssid", "bssid_prefix", "is_active"):
@@ -225,12 +232,17 @@ ALLOWED_SETTING_KEYS = {
 
 @router.get("/security-settings", response_model=dict)
 def get_security_settings(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    rows = db.query(SecuritySetting).all()
-    return {r.key: r.value for r in rows}
+    return get_settings(db)
 
 
 @router.put("/security-settings", response_model=dict)
 def update_security_settings(body: SecuritySettingsUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    if not development_network_demo_allowed():
+        for key in ("network_check_enabled", "fail_closed"):
+            if key in body.settings and not truthy(body.settings[key]):
+                raise HTTPException(400, "Campus network verification must remain enabled and fail-closed outside explicitly enabled local demos.")
+        if truthy(body.settings.get("demo_simulate_network", "false")) or body.settings.get("demo_simulated_ip", "").strip():
+            raise HTTPException(400, "Network simulation is disabled on this server.")
     for key, value in body.settings.items():
         if key not in ALLOWED_SETTING_KEYS:
             continue
@@ -245,5 +257,4 @@ def update_security_settings(body: SecuritySettingsUpdate, db: Session = Depends
         else:
             db.add(SecuritySetting(key=key, value=value))
     db.commit()
-    rows = db.query(SecuritySetting).all()
-    return {r.key: r.value for r in rows}
+    return get_settings(db)

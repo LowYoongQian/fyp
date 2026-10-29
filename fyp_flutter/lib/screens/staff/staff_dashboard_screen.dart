@@ -10,6 +10,8 @@ import '../../widgets/shimmer_loading.dart';
 import '../../main.dart';
 import '../system/profile_screen.dart';
 import 'attendance_request_screen.dart';
+import '../../services/live_updates.dart';
+import '../../services/academic_calendar.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 3: Lecturer/Staff Dashboard widget
@@ -33,7 +35,7 @@ class StaffDashboard extends StatefulWidget {
     required this.staffName,
     required this.staffCode,
     required this.staffEmail,
-    this.staffRole = 'Lecturer',
+    this.staffRole = 'Staff',
     required this.authToken,
     required this.apiBaseUrl,
     required this.isDatabaseOffline,
@@ -60,12 +62,23 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
   int historyCurrentPage = 1;
   int historyPageSize = 4;
+  int _dashboardTabIndex = 0;
+  int _tabTransitionDirection = 1;
+  double _tabDragOffset = 0;
+  bool _isTabDragging = false;
+  int _reviewPage = 0;
+  static const int _reviewPageSize = 2;
+  String _reviewCourseFilter = 'All';
+  String _reviewGroupFilter = 'Any';
 
   String? selectedCourseId;
   String selectedGroup = 'All';
 
   Timer? _poller;
   bool _pollInProgress = false;
+  LiveUpdates? _live;
+  DateTime _lastRefresh = DateTime.now();
+  final Set<String> _pendingTopics = {};
 
   String get _timetableCacheKey => 'cached_staff_${widget.staffId}_timetable';
   String get _coursesCacheKey => 'cached_staff_${widget.staffId}_courses';
@@ -74,14 +87,18 @@ class _StaffDashboardState extends State<StaffDashboard> {
   void initState() {
     super.initState();
     loadLecturerData();
+    _startLive();
     _poller = Timer.periodic(const Duration(seconds: 10), (_) {
-      unawaited(_pollDashboardData());
+      if (_live?.foreground != false && (_live?.connected != true || DateTime.now().difference(_lastRefresh).inSeconds >= 60)) {
+        unawaited(_pollDashboardData());
+      }
     });
   }
 
   @override
   void dispose() {
     _poller?.cancel();
+    _live?.dispose();
     super.dispose();
   }
 
@@ -171,6 +188,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
             'courseId': t['course_id'] ?? t['courseId'] ?? '',
             'course_id': t['course_id'] ?? t['courseId'] ?? '',
             'courseCode': t['course_code'] ?? t['courseCode'] ?? '',
+            'semester': t['semester'],
             'course_code': t['course_code'] ?? t['courseCode'] ?? '',
             'courseName': t['course_name'] ?? t['courseName'] ?? '',
             'course_name': t['course_name'] ?? t['courseName'] ?? '',
@@ -473,6 +491,152 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
+  Widget _dashboardTabs(bool isDarkMode) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tabWidth = constraints.maxWidth / 2;
+          return Stack(
+            children: [
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                left: _dashboardTabIndex * tabWidth,
+                width: tabWidth,
+                top: 0,
+                bottom: 0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: isDarkMode
+                        ? const Color(0xFF800000)
+                        : Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(
+                          alpha: isDarkMode ? 0.2 : 0.04,
+                        ),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  _dashboardTab(
+                    0,
+                    'Classes',
+                    Icons.calendar_month_outlined,
+                    isDarkMode,
+                  ),
+                  _dashboardTab(
+                    1,
+                    'Attendance',
+                    Icons.fact_check_outlined,
+                    isDarkMode,
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _handleTabSwipeStart(DragStartDetails details) {
+    setState(() => _isTabDragging = true);
+  }
+
+  void _handleTabSwipeUpdate(DragUpdateDetails details) {
+    final delta = details.primaryDelta ?? 0;
+    if ((_dashboardTabIndex == 0 && delta > 0) ||
+        (_dashboardTabIndex == 1 && delta < 0)) {
+      return;
+    }
+    setState(() {
+      _tabDragOffset = (_tabDragOffset + delta).clamp(-90.0, 90.0);
+    });
+  }
+
+  void _handleTabSwipe(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    final moveForward = velocity < -220 || _tabDragOffset < -55;
+    final moveBack = velocity > 220 || _tabDragOffset > 55;
+    if (moveForward && _dashboardTabIndex == 0) {
+      _selectDashboardTab(1);
+    } else if (moveBack && _dashboardTabIndex == 1) {
+      _selectDashboardTab(0);
+    }
+    if (mounted) {
+      setState(() {
+        _isTabDragging = false;
+        _tabDragOffset = 0;
+      });
+    }
+  }
+
+  void _handleTabSwipeCancel() {
+    setState(() {
+      _isTabDragging = false;
+      _tabDragOffset = 0;
+    });
+  }
+
+  void _selectDashboardTab(int index) {
+    if (index == _dashboardTabIndex) return;
+    setState(() {
+      _tabTransitionDirection = index > _dashboardTabIndex ? 1 : -1;
+      _dashboardTabIndex = index;
+    });
+  }
+
+  Widget _dashboardTab(int index, String label, IconData icon, bool isDarkMode) {
+    final selected = _dashboardTabIndex == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => _selectDashboardTab(index),
+        borderRadius: BorderRadius.circular(9),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: selected ? const Color(0xFF2563EB) : const Color(0xFF94A3B8)),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected
+                      ? (isDarkMode ? Colors.white : const Color(0xFF1E293B))
+                      : const Color(0xFF94A3B8),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _todayClassesSection(
     Color primaryTextColor,
     Color secondaryTextColor,
@@ -641,46 +805,186 @@ class _StaffDashboardState extends State<StaffDashboard> {
         .where((item) => !todayIds.contains('${item['id']}'))
         .toList();
     if (reviews.isEmpty) return const SizedBox.shrink();
+    final courseCodes = reviews
+        .map((item) => '${item['course_code']}')
+        .where((code) => code.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    final effectiveReviewFilter = courseCodes.contains(_reviewCourseFilter)
+        ? _reviewCourseFilter
+        : 'All';
+    final courseFilteredReviews = effectiveReviewFilter == 'All'
+        ? reviews
+        : reviews.where((item) => '${item['course_code']}' == effectiveReviewFilter).toList();
+    final groupCodes = courseFilteredReviews
+        .map((item) => '${item['class_group'] ?? 'All'}')
+        .toSet()
+        .toList()
+      ..sort();
+    final effectiveGroupFilter = groupCodes.contains(_reviewGroupFilter)
+        ? _reviewGroupFilter
+        : 'Any';
+    final filteredReviews = effectiveGroupFilter == 'Any'
+        ? courseFilteredReviews
+        : courseFilteredReviews
+            .where((item) => '${item['class_group'] ?? 'All'}' == effectiveGroupFilter)
+            .toList();
+    final pageCount = filteredReviews.isEmpty
+        ? 1
+        : (filteredReviews.length / _reviewPageSize).ceil();
+    final safePage = _reviewPage >= pageCount ? pageCount - 1 : _reviewPage;
+    final pageReviews = filteredReviews
+        .skip(safePage * _reviewPageSize)
+        .take(_reviewPageSize)
+        .toList();
+    Widget filterSelect({
+      required String value,
+      required List<String> items,
+      required IconData icon,
+      required String Function(String) label,
+      required ValueChanged<String?> onChanged,
+    }) {
+      return Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(color: isDarkMode ? const Color(0xFF475569) : const Color(0xFFE2E8F0)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: const Color(0xFF64748B)),
+            const SizedBox(width: 7),
+            Expanded(
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: value,
+                  isExpanded: true,
+                  dropdownColor: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+                  style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w600, color: primaryTextColor),
+                  items: items.map((item) => DropdownMenuItem(value: item, child: Text(label(item), overflow: TextOverflow.ellipsis))).toList(),
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDarkMode ? const Color(0xFF292619) : const Color(0xFFFFFBEB),
+        color: isDarkMode ? const Color(0xFF111827) : Colors.white,
         border: Border.all(
-          color: isDarkMode ? const Color(0xFF713F12) : const Color(0xFFFDE68A),
+          color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
         ),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDarkMode ? 0.14 : 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.warning_amber_rounded,
-                size: 20,
-                color: Color(0xFFD97706),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.pending_actions_outlined,
+                  size: 18,
+                  color: Color(0xFFD97706),
+                ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Classes to review',
+                      style: GoogleFonts.spaceGrotesk(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: primaryTextColor,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${filteredReviews.length} pending confirmation',
+                      style: GoogleFonts.inter(fontSize: 10, color: secondaryTextColor),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
                 child: Text(
-                  'Classes Need Review',
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: primaryTextColor,
-                  ),
+                  '${reviews.length}',
+                  style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFFD97706)),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text(
             'Confirm classes that happened, or cancel those that did not.',
             style: GoogleFonts.inter(fontSize: 11, color: secondaryTextColor),
           ),
-          const SizedBox(height: 10),
-          ...reviews.map((raw) {
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: filterSelect(
+                  value: effectiveReviewFilter,
+                  items: ['All', ...courseCodes],
+                  icon: Icons.menu_book_outlined,
+                  label: (value) => value == 'All' ? 'All classes' : value,
+                  onChanged: (value) => setState(() {
+                    _reviewCourseFilter = value ?? 'All';
+                    _reviewGroupFilter = 'Any';
+                    _reviewPage = 0;
+                  }),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: filterSelect(
+                  value: effectiveGroupFilter,
+                  items: ['Any', ...groupCodes],
+                  icon: Icons.groups_outlined,
+                  label: (value) => value == 'Any'
+                      ? 'All groups'
+                      : value == 'All'
+                          ? 'Lecture'
+                          : value,
+                  onChanged: (value) => setState(() {
+                    _reviewGroupFilter = value ?? 'Any';
+                    _reviewPage = 0;
+                  }),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...pageReviews.map((raw) {
             final lesson = Map<String, dynamic>.from(raw as Map);
             final start = DateTime.tryParse(
               (lesson['scheduled_start'] ?? '').toString(),
@@ -689,12 +993,12 @@ class _StaffDashboardState extends State<StaffDashboard> {
               margin: const EdgeInsets.only(top: 8),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
-                borderRadius: BorderRadius.circular(9),
+                color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: isDarkMode
                       ? const Color(0xFF475569)
-                      : const Color(0xFFFDE68A),
+                      : const Color(0xFFE2E8F0),
                 ),
               ),
               child: Column(
@@ -713,12 +1017,19 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         ),
                       ),
                       if (lesson['escalated'] == true)
-                        Text(
-                          'OVER 24 HOURS',
-                          style: GoogleFonts.inter(
-                            fontSize: 8,
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xFFDC2626),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            'OVERDUE',
+                            style: GoogleFonts.inter(
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFFDC2626),
+                            ),
                           ),
                         ),
                     ],
@@ -732,19 +1043,22 @@ class _StaffDashboardState extends State<StaffDashboard> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                  Row(
                     children: [
-                      FilledButton.icon(
-                        onPressed: () => _markClassHeld(lesson),
-                        icon: const Icon(Icons.check_circle_outline, size: 16),
-                        label: const Text('Class Held'),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => _markClassHeld(lesson),
+                          icon: const Icon(Icons.check_circle_outline, size: 15),
+                          label: const Text('Class Held'),
+                        ),
                       ),
-                      OutlinedButton.icon(
-                        onPressed: () => _cancelTodayClass(lesson),
-                        icon: const Icon(Icons.event_busy, size: 16),
-                        label: const Text('Class Cancelled'),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _cancelTodayClass(lesson),
+                          icon: const Icon(Icons.event_busy, size: 15),
+                          label: const Text('Cancel Class'),
+                        ),
                       ),
                     ],
                   ),
@@ -752,21 +1066,64 @@ class _StaffDashboardState extends State<StaffDashboard> {
               ),
             );
           }),
+          if (filteredReviews.length > _reviewPageSize) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Text(
+                  '${safePage * _reviewPageSize + 1}-${(safePage * _reviewPageSize + pageReviews.length)} of ${filteredReviews.length}',
+                  style: GoogleFonts.inter(fontSize: 10, color: secondaryTextColor),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Previous page',
+                  onPressed: safePage > 0 ? () => setState(() => _reviewPage = safePage - 1) : null,
+                  icon: const Icon(Icons.chevron_left, size: 18),
+                ),
+                Text('${safePage + 1} / $pageCount', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold)),
+                IconButton(
+                  tooltip: 'Next page',
+                  onPressed: safePage + 1 < pageCount ? () => setState(() => _reviewPage = safePage + 1) : null,
+                  icon: const Icon(Icons.chevron_right, size: 18),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Future<void> _pollDashboardData() async {
+  void _startLive() {
+    _live?.dispose();
+    _live = LiveUpdates(baseUrl: widget.apiBaseUrl, token: widget.authToken,
+        onTopics: (topics) => _pollDashboardData(topics: topics));
+  }
+
+  @override
+  void didUpdateWidget(covariant StaffDashboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.authToken != widget.authToken || oldWidget.apiBaseUrl != widget.apiBaseUrl) _startLive();
+  }
+
+  Future<void> _pollDashboardData({Set<String>? topics}) async {
+    _pendingTopics.addAll(topics ?? {'timetable', 'sessions', 'attendance'});
     if (!mounted || _pollInProgress) return;
     _pollInProgress = true;
     try {
-      await Future.wait([
-        fetchTimetable(),
-        fetchActiveSessions(),
-        fetchTodayClasses(),
-        fetchClassesNeedingAttention(),
-      ]);
+      while (mounted && _pendingTopics.isNotEmpty) {
+        final changed = Set<String>.from(_pendingTopics);
+        _pendingTopics.clear();
+        if (changed.containsAll({'timetable', 'sessions', 'attendance'})) _lastRefresh = DateTime.now();
+        await Future.wait([
+          if (changed.contains('timetable')) fetchTimetable(),
+          if (changed.contains('timetable')) fetchMyCourses(),
+          if (changed.contains('sessions') || changed.contains('attendance')) ...[
+            fetchActiveSessions(), fetchTodayClasses(), fetchClassesNeedingAttention(),
+          ],
+          if (changed.contains('attendance') && selectedCourseId != null) fetchCourseSessions(selectedCourseId!, silent: true),
+        ]);
+      }
     } finally {
       _pollInProgress = false;
     }
@@ -831,11 +1188,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
-  Future<void> fetchCourseSessions(String courseId) async {
+  Future<void> fetchCourseSessions(String courseId, {bool silent = false}) async {
     if (!mounted) return;
-    setState(() {
-      isFetchingHistory = true;
-    });
+    if (!silent) setState(() { isFetchingHistory = true; });
 
     try {
       final uri = Uri.parse(
@@ -856,7 +1211,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         if (mounted) {
           setState(() {
             courseSessionsHistory = data;
-            historyCurrentPage = 1;
+            if (!silent) historyCurrentPage = 1;
           });
         }
       }
@@ -1200,7 +1555,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     final todayName = _dayOfWeekName(now.weekday);
 
     final todaySlots = myTimetable.where((slot) {
-      return (slot['day'] as String).toLowerCase() == todayName.toLowerCase();
+      return (slot['day'] as String).toLowerCase() == todayName.toLowerCase() && (SemesterWindow.parse(slot['semester'])?.contains(now) ?? true);
     }).toList();
     todaySlots.sort(
       (a, b) => (a['startTime'] as String).compareTo(b['startTime'] as String),
@@ -1230,7 +1585,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
       final matchingSlots = myTimetable.where((slot) {
         return (slot['day'] as String).toLowerCase() ==
-            targetDayName.toLowerCase();
+            targetDayName.toLowerCase() && (SemesterWindow.parse(slot['semester'])?.contains(targetDate) ?? true);
       }).toList();
 
       for (var slot in matchingSlots) {
@@ -1983,9 +2338,15 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         child: SingleChildScrollView(
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onHorizontalDragStart: _handleTabSwipeStart,
+                            onHorizontalDragUpdate: _handleTabSwipeUpdate,
+                            onHorizontalDragEnd: _handleTabSwipe,
+                            onHorizontalDragCancel: _handleTabSwipeCancel,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                               // Profile Card
                               GlassCard(
                                 child: Row(
@@ -2067,8 +2428,45 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                   ],
                                 ),
                               ),
+                              const SizedBox(height: 16),
+                              _dashboardTabs(isDarkMode),
                               const SizedBox(height: 20),
 
+                              AnimatedContainer(
+                                duration: _isTabDragging
+                                    ? Duration.zero
+                                    : const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                                transform: Matrix4.translationValues(
+                                  _tabDragOffset,
+                                  0,
+                                  0,
+                                ),
+                                child: TweenAnimationBuilder<double>(
+                                  key: ValueKey<int>(_dashboardTabIndex),
+                                  tween: Tween<double>(begin: 0, end: 1),
+                                  duration: const Duration(milliseconds: 260),
+                                  curve: Curves.easeOutCubic,
+                                  builder: (context, value, child) {
+                                    return ClipRect(
+                                      child: Opacity(
+                                        opacity: value,
+                                        child: Transform.translate(
+                                          offset: Offset(
+                                            _tabTransitionDirection *
+                                                24 *
+                                                (1 - value),
+                                            0,
+                                          ),
+                                          child: child,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                              if (_dashboardTabIndex == 0) ...[
                               _classesNeedingReviewSection(
                                 primaryTextColor,
                                 secondaryTextColor,
@@ -2459,7 +2857,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                 },
                               ),
                               const SizedBox(height: 24),
+                              ],
 
+                              if (_dashboardTabIndex == 1) ...[
                               // Course Sessions & Attendance History Section
                               Text(
                                 "Course Sessions & Attendance History",
@@ -3412,7 +3812,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                   );
                                 },
                               ),
-                            ],
+                              ],
+                                  ],
+                                  ),
+                                ),
+                              ),
+                              ],
+                            ),
                           ),
                         ),
                       ),

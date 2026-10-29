@@ -1,11 +1,14 @@
 from domain.medical_leave import review_attendance_request
+from domain.notification_inbox import TAB_KINDS, DEFAULT_TABS, inbox_counts, public_notification, tab_expression, notify_administrators, enqueue_notification
+from domain.record_pages import RecordFilters
 import json
 import math
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -38,16 +41,7 @@ class AttendanceRequestReview(BaseModel):
 
 def add_notification(db: Session, user_id: str, kind: str, title: str, body: str,
                      dedupe_key: str, payload: dict | None = None) -> None:
-    if not user_id or db.query(UserNotification.id).filter(
-        UserNotification.user_id == user_id,
-        UserNotification.dedupe_key == dedupe_key,
-    ).first():
-        return
-    db.add(UserNotification(
-        user_id=user_id, kind=kind, title=title, body=body,
-        dedupe_key=dedupe_key,
-        payload=json.dumps(payload or {}, separators=(",", ":")),
-    ))
+    enqueue_notification(db, user_id, kind, title, body, dedupe_key, payload)
 
 
 def ensure_course_announcement_notifications(db: Session, user: User, student: Student) -> None:
@@ -62,9 +56,21 @@ def ensure_course_announcement_notifications(db: Session, user: User, student: S
     for row in visible_announcements(db, "students", programmes, courses, groups):
         if not row.creator_user_id:
             continue
-        add_notification(db, user.id, "course_announcement", row.title,
-            f"{row.target_course_code}: {row.content[:180]}", f"announcement:{row.id}",
+        add_notification(db, user.id, "course_announcement" if row.target_scope == "course" else "general_announcement", row.title,
+            f"{row.target_course_code}: {row.content[:180]}" if row.target_course_code else row.content[:180], f"announcement:{row.id}",
             {"announcement_id": row.id, "course_code": row.target_course_code})
+
+
+def ensure_staff_announcement_notifications(db, user):
+    lecturer = db.query(Lecturer).filter_by(user_id=user.id).first()
+    if not lecturer:
+        return
+    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
+    for row in visible_announcements(db, "staff",
+        {course.programme.code for course in courses if course.programme},
+        {course.course_code for course in courses}):
+        add_notification(db, user.id, "general_announcement", row.title, row.content[:180],
+            f"announcement:{row.id}", {"announcement_id": row.id})
 
 
 def notify_timetable_change(db: Session, meeting: ClassMeeting, old_slot: str) -> None:
@@ -446,6 +452,9 @@ def create_student_request(body: AttendanceRequestCreate, db: Session = Depends(
         add_notification(db, lecturer.user_id, "attendance_request", "New attendance request",
                          f"{student.name} sent a {kind} request for {course.course_code}.",
                          f"request:{row.id}:submitted", {"request_id": row.id})
+    notify_administrators(db, "medical_submission" if kind == "leave" else "attendance_request",
+        "New attendance request", f"{student.name} sent a {kind} request for {course.course_code}.",
+        f"request:{row.id}:submitted", {"request_id": row.id})
     db.commit()
     db.refresh(row)
     return _request_dict(row, course)
@@ -494,6 +503,72 @@ def review_request(request_id: str, body: AttendanceRequestReview, db: Session =
     course = db.get(Course, row.course_id)
     db.commit()
     return _request_dict(row, course, student)
+
+
+class InboxRead(BaseModel):
+    ids: list[UUID] | None = Field(default=None, min_length=1, max_length=50)
+    tab: str | None = Field(default=None, max_length=64)
+    through: datetime | None = None
+
+    @model_validator(mode="after")
+    def single_scope(self):
+        if (self.ids is not None and (self.tab is not None or self.through is not None)) or (
+            self.ids is None and (self.tab is None or self.through is None)
+        ):
+            raise ValueError("Choose notification IDs or a tab and its snapshot timestamp.")
+        return self
+
+
+@router.get("/notifications/inbox")
+def notification_inbox(limit: int = Query(30, ge=1, le=50), before: datetime | None = Query(None),
+                       before_id: UUID | None = Query(None), db: Session = Depends(get_db),
+                       current_user: User = Depends(get_current_user)):
+    if current_user.role not in DEFAULT_TABS:
+        raise HTTPException(403, "This account role cannot access the notification inbox.")
+    if (before is None) != (before_id is None):
+        raise HTTPException(422, "An older-notice cursor needs both timestamp and ID.")
+    cursor = RecordFilters.utc(before)
+    if current_user.role == "student":
+        student = require_own_profile(db, Student, current_user.id, "Student")
+        _ensure_reminder(db, current_user, student)
+        ensure_course_announcement_notifications(db, current_user, student)
+        db.commit()
+    elif current_user.role == "lecturer":
+        ensure_staff_announcement_notifications(db, current_user)
+        db.commit()
+    now = utcnow()
+    if not current_user.notifications_enabled or not current_user.in_app_notifications:
+        return {"items": [], "unread_count": 0, "by_tab": {}, "snapshot_at": iso_utc(now), "next_cursor": None}
+    target = tab_expression(current_user.role)
+    query = db.query(UserNotification, target).populate_existing().filter(UserNotification.user_id == current_user.id)
+    if cursor:
+        query = query.filter(or_(UserNotification.created_at < cursor,
+            and_(UserNotification.created_at == cursor, UserNotification.id < str(before_id))))
+    rows = query.order_by(UserNotification.created_at.desc(), UserNotification.id.desc()).limit(limit + 1).all()
+    shown = rows[:limit]
+    last = shown[-1][0] if len(rows) > limit else None
+    return {"items": [public_notification(row, tab) for row, tab in shown], **inbox_counts(db, current_user),
+        "snapshot_at": iso_utc(now), "next_cursor": {"before": iso_utc(last.created_at), "before_id": last.id} if last else None}
+
+
+@router.patch("/notifications/read")
+def read_inbox(body: InboxRead, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role not in DEFAULT_TABS:
+        raise HTTPException(403, "This account role cannot access the notification inbox.")
+    query = db.query(UserNotification).filter(UserNotification.user_id == current_user.id, UserNotification.read_at.is_(None))
+    if body.ids is not None:
+        query = query.filter(UserNotification.id.in_([str(value) for value in body.ids]))
+    else:
+        allowed = set(TAB_KINDS[current_user.role].values()) | {DEFAULT_TABS[current_user.role]}
+        if body.tab not in allowed:
+            raise HTTPException(422, "This notification destination is not available to your role.")
+        through = RecordFilters.utc(body.through)
+        if through > utcnow():
+            raise HTTPException(422, "Use the inbox snapshot timestamp, not a future timestamp.")
+        query = query.filter(tab_expression(current_user.role) == body.tab, UserNotification.created_at <= through)
+    changed = query.update({"read_at": utcnow()}, synchronize_session=False)
+    db.commit()
+    return {"marked_count": changed}
 
 
 @router.get("/notifications")

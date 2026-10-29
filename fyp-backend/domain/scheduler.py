@@ -1,7 +1,7 @@
 import random
 from datetime import datetime, timedelta
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from db.models import ClassMeeting, Course, CourseStaffAssignment, Enrolment
 from utils.timeutil import local_offset
@@ -67,13 +67,15 @@ def calculate_schedule(db: Session) -> dict:
     The identifying fields ride along in each value so callers that need every group
     of one assignment can filter on them instead of parsing the key back apart.
     """
-    rows = db.query(ClassMeeting).all()
+    rows = db.query(ClassMeeting).options(joinedload(ClassMeeting.course)).all()
     return {
         meeting_key_for(r.role, r.course_id, r.assignment_id, r.class_group): {
             "day": r.day, "start": r.start, "end": r.end, "room": r.room,
             "role": r.role, "course_id": r.course_id,
             "assignment_id": r.assignment_id, "class_group": r.class_group,
             "meeting_id": r.id,
+            "semester": {"name": r.course.semester.name, "start_date": r.course.semester.start_date,
+                         "end_date": r.course.semester.end_date} if r.course and r.course.semester_id else None,
         }
         for r in rows
     }
@@ -141,6 +143,8 @@ def slot_bounds_local(slot: dict, local_date) -> tuple[datetime, datetime]:
     """Reject malformed or non-positive timetable windows."""
     start = datetime.combine(local_date, datetime.strptime(slot["start"], "%H:%M").time())
     end = datetime.combine(local_date, datetime.strptime(slot["end"], "%H:%M").time())
+    if start.strftime("%H:%M") != slot["start"] or end.strftime("%H:%M") != slot["end"]:
+        raise ValueError("Timetable time must use 24-hour HH:MM format")
     if end <= start:
         raise ValueError("Class end must be after start")
     return start, end

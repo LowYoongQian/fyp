@@ -21,7 +21,10 @@ from db.models import (
     User,
 )
 from domain.attendance import require_session_enrolment
+from domain.semesters import campus_date, course_semester, require_semester_date, within_semester
+from domain.checkin_challenge import consume_challenge, issue_challenge
 from domain.audit import log_audit_event
+from domain.attendance_audit import attendance_snapshot, audit_attendance_edit
 from domain.class_lifecycle import (
     barred_list_readiness,
     class_can_open,
@@ -46,6 +49,7 @@ from integrations.face import (
     _extract_face_embedding,
 )
 from integrations.network_verify import get_client_ip, verify_network
+from integrations.live_face import extract_live_embedding
 from routers.attendance_features import add_notification
 from schemas import (
     AttendanceResponse,
@@ -133,6 +137,9 @@ def _class_group(meeting: ClassMeeting) -> str:
 
 
 def _semester_for(db: Session, course_id: str) -> str | None:
+    semester = course_semester(db, course_id)
+    if semester:
+        return semester.name
     row = db.query(Enrolment.semester).filter(Enrolment.course_id == course_id).first()
     return row[0] if row else None
 
@@ -214,6 +221,7 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
     # compares against timetable strings ("14:00") that are campus local, and the host
     # clock is UTC on Railway — so this rejected every on-time open by 8 hours.
     now_local = campus_now()
+    require_semester_date(db, course.id, now_local.date())
     slot = validate_session_opening(db, body.course_id, body.class_group, now_local, body.meeting_id)
     if not slot:
         raise HTTPException(status_code=400, detail="No matching class is scheduled today")
@@ -275,6 +283,8 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
         ).all()
     result = []
     for meeting in meetings:
+        if not within_semester(course_semester(db, meeting.course_id), today):
+            continue
         start, end = _scheduled_bounds({"start": meeting.start, "end": meeting.end}, today)
         lesson = db.query(ClassSession).filter(
             ClassSession.meeting_id == meeting.id, ClassSession.scheduled_start == start
@@ -361,6 +371,9 @@ def open_scheduled_class(id: str, db: Session = Depends(get_db), current_user: U
     lesson = get_or_404(db, ClassSession, id, "Class")
     require_course_access(db, current_user, lesson.course_id, "open this class")
     now = utcnow()
+    require_semester_date(db, lesson.course_id, campus_date(now))
+    if lesson.scheduled_start:
+        require_semester_date(db, lesson.course_id, campus_date(lesson.scheduled_start))
     if lesson.status not in ("scheduled", "needs_attention"):
         raise HTTPException(status_code=400, detail=f"A {lesson.status} class cannot be opened")
     if not lesson.scheduled_start or not lesson.scheduled_end:
@@ -420,6 +433,9 @@ def arrange_replacement_class(id: str, body: ReplacementClassCreate,
                               db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     cancelled = get_or_404(db, ClassSession, id, "Cancelled class")
     course = require_course_access(db, current_user, cancelled.course_id, "arrange a replacement class")
+    require_semester_date(db, course.id, campus_now().date())
+    require_semester_date(db, course.id, campus_date(body.scheduled_start))
+    require_semester_date(db, course.id, campus_date(body.scheduled_end))
     if cancelled.status != "cancelled":
         raise HTTPException(status_code=400, detail="A replacement can only be arranged for a cancelled class")
     existing_replacements = db.query(ClassSession).filter(
@@ -462,10 +478,9 @@ def get_barred_list_readiness(course_id: str | None = None, db: Session = Depend
 # question, so the two shapes cannot drift apart.
 
 # 4. Student Check-in (Student only — face liveness + network location verification)
-@router.post("/{id}/attend", response_model=AttendanceResponse)
-def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    # Check if session exists and is active
+def require_open_checkin(db: Session, id: str):
     session = get_or_404(db, ClassSession, id, "Session")
+    require_semester_date(db, session.course_id, campus_now().date())
         
     if session.is_open:
         now_utc = utcnow()
@@ -490,6 +505,28 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
             
     if not session.is_open:
         raise HTTPException(status_code=400, detail="Attendance check-in has closed for this session")
+    return session
+
+
+@router.post("/{id}/checkin-challenge")
+def create_checkin_challenge(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    if current_user.status.lower() != "active":
+        raise HTTPException(403, "This student account is not active")
+    session = require_open_checkin(db, id)
+    student = require_own_profile(db, Student, current_user.id, "Student")
+    require_session_enrolment(db, session, student.id, status_code=403)
+    if db.query(AttendanceRecord).filter(AttendanceRecord.student_id == student.id, AttendanceRecord.session_id == id).first():
+        raise HTTPException(400, "You have already registered attendance for this session")
+    if session.scheduled_start is None or session.scheduled_end is None:
+        validate_student_checkin(db, session.course_id, session.class_group, campus_now())
+    return issue_challenge(db, student.id, id)
+
+
+@router.post("/{id}/attend", response_model=AttendanceResponse)
+def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    if current_user.status.lower() != "active":
+        raise HTTPException(403, "This student account is not active")
+    session = require_open_checkin(db, id)
 
     # Get student profile
     student = require_own_profile(db, Student, current_user.id, "Student")
@@ -511,8 +548,7 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
         validate_student_checkin(db, session.course_id, session.class_group, campus_now())
 
     # 1. Liveness & Face Verification
-    liveness_passed = body.liveness_passed
-    if not liveness_passed:
+    if not body.liveness_passed:
         raise HTTPException(status_code=400, detail="Face liveness check failed. Please perform the gesture challenge correctly.")
     # Require an actual captured image (no mock/placeholder accepted).
     if not (body.image_base64 or "").strip():
@@ -531,8 +567,10 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
             status_code=400,
             detail="No registered face found. Please register your face before checking in."
         )
+    registered_face_updated_at = stored_emb.updated_at
+    challenge_ms = consume_challenge(db, body.challenge_token, student.id, id)
     try:
-        live_bytes  = _extract_face_embedding(body.image_base64, enforce_detection=False)
+        live_bytes  = extract_live_embedding(body.image_base64)
         live_vec    = _embedding_to_floats(live_bytes)
         stored_vec  = _embedding_to_floats(stored_emb.embedding)
         distance    = _cosine_distance(live_vec, stored_vec)
@@ -551,8 +589,8 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
     # Behavioral biometrics: flag abnormally fast completions as suspicious.
     # Legitimate users need at least ~800 ms per challenge (2 challenges → ~1600 ms minimum).
     # Values below 800 ms indicate automation, replay, or a spoofed gesture event.
-    challenge_ms = body.liveness_challenge_ms
-    liveness_suspicious = bool(challenge_ms is not None and challenge_ms < 800)
+    # Issued/claimed timestamps are server-owned; supplied client durations cannot hide fast attempts.
+    liveness_suspicious = challenge_ms < 800
 
     # 2. Network-based location verification
     source_ip = get_client_ip(request, trust_proxy_header=truthy(cfg["trust_proxy_header"]))
@@ -580,22 +618,28 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
         if not network_verified and truthy(cfg["fail_closed"]):
             raise HTTPException(
                 status_code=403,
-                detail="You must be connected to the campus network to check in. "
-                       "Verification failed for your current connection."
+                detail=verify_detail
             )
     else:
         network_verified = True  # check disabled -> don't block
 
-    # Register attendance record. liveness_passed (what the client reported) and
-    # liveness_suspicious (gesture faster than the floor) are separate columns —
-    # they used to be two names for one, so whichever was assigned last won and the
-    # reported result was thrown away.
+    # Recheck the authoritative window after inference/network work, which can take seconds.
+    db.refresh(session)
+    require_open_checkin(db, id)
+    # Serialise with face registration/reset: a scan validated before a reset
+    # must not create attendance after that reset commits.
+    db.query(Student).filter(Student.id == student.id).with_for_update().first()
+    db.refresh(stored_emb)
+    if (not stored_emb.is_active or stored_emb.updated_at != registered_face_updated_at
+            or _cosine_distance(live_vec, _embedding_to_floats(stored_emb.embedding)) > _FACE_MATCH_THRESHOLD):
+        raise HTTPException(409, "Your registered face changed during this scan. Please scan again.")
+    # Both liveness and elapsed challenge time now come from the server.
     record = AttendanceRecord(
         student_id=student.id,
         session_id=id,
         status="present",
         confidence_score=confidence_score,
-        liveness_passed=liveness_passed,
+        liveness_passed=True,
         marked_at=utcnow(),
         source_ip=source_ip,
         local_ip=body.local_ip,
@@ -774,11 +818,14 @@ def update_lecturer_attendance(
 
     require_session_enrolment(db, session, student_id)
 
+    student = db.query(Student).filter(Student.id == student_id).with_for_update().one()
+
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.session_id == session_id,
         AttendanceRecord.student_id == student_id
     ).first()
     
+    before = attendance_snapshot(record)
     if record:
         record.status = body.status
         record.marked_at = utcnow()
@@ -803,6 +850,7 @@ def update_lecturer_attendance(
         )
         db.add(record)
         
+    audit_attendance_edit(db, current_user, session, student, before, record)
     db.commit()
     return {"status": "success", "message": "Attendance record updated successfully"}
 
@@ -842,7 +890,7 @@ def verify_attendance_network(
         networks=active_networks,
     )
 
-    reason = "passed" if network_verified else ("not_whitelisted" if not active_networks else "subnet_mismatch")
+    reason = "passed" if network_verified else ("configuration_required" if not any(n.cidr for n in active_networks) else "subnet_mismatch")
 
     return {
         "verified": network_verified,

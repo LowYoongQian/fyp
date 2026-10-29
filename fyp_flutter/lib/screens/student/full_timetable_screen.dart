@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../main.dart';
+import '../../services/academic_calendar.dart';
 import '../../widgets/aurora_background.dart';
 import '../../widgets/glass_card.dart';
 
@@ -39,7 +40,19 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     'SAT',
     'SUN',
   ];
-  String _selectedWeek = "Week 1";
+  late DateTime _weekMonday;
+  SemesterWindow? get _semester => sharedSemester(_schedule);
+  String get _selectedWeek {
+    final term = _semester;
+    if (term == null) return 'Weekly view';
+    final week = term.weekFor(_weekMonday);
+    if (_weekMonday.add(const Duration(days: 6)).isBefore(term.start)) {
+      return 'Semester upcoming';
+    }
+    if (_weekMonday.isAfter(term.end)) return 'Semester ended';
+    return 'Week $week';
+  }
+
   late PageController _pageController;
   late List<Map<String, dynamic>> _schedule;
 
@@ -52,16 +65,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     _selectedDayIndex = math.min(6, math.max(0, todayWeekday - 1));
     _pageController = PageController(initialPage: _selectedDayIndex);
 
-    // Initialize selected week dynamically based on current time
-    final now = ApiConfig.now;
-    final semesterStart = DateTime(2026, 6, 15);
-    int weekNum = 1;
-    if (now.isAfter(semesterStart)) {
-      final daysDiff = now.difference(semesterStart).inDays;
-      weekNum = (daysDiff / 7).floor() + 1;
-      if (weekNum > 14) weekNum = 14;
-    }
-    _selectedWeek = "Week $weekNum";
+    _weekMonday = calendarMonday(ApiConfig.now);
     WidgetsBinding.instance.addPostFrameCallback((_) => _refreshSchedule());
   }
 
@@ -104,12 +108,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
 
   String _getFormattedDateForDay(int dayIndex) {
     try {
-      final weekNumStr = _selectedWeek.replaceAll(RegExp(r'[^0-9]'), '');
-      final weekNum = int.tryParse(weekNumStr) ?? 1;
-      final semesterStart = DateTime(2026, 6, 15);
-      final targetDate = semesterStart.add(
-        Duration(days: (weekNum - 1) * 7 + dayIndex),
-      );
+      final targetDate = _dateForDay(dayIndex);
       final dayStr = targetDate.day.toString().padLeft(2, '0');
       final monthStr = targetDate.month.toString().padLeft(2, '0');
       return "$dayStr/$monthStr/${targetDate.year}";
@@ -118,14 +117,10 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     }
   }
 
-  int get _selectedWeekNumber =>
-      int.tryParse(_selectedWeek.replaceAll(RegExp(r'[^0-9]'), '')) ?? 1;
+  int get _selectedWeekNumber => _semester?.weekFor(_weekMonday) ?? 0;
 
-  DateTime _dateForDay(int dayIndex) => DateTime(
-    2026,
-    6,
-    15,
-  ).add(Duration(days: (_selectedWeekNumber - 1) * 7 + dayIndex));
+  DateTime _dateForDay(int dayIndex) =>
+      _weekMonday.add(Duration(days: dayIndex));
 
   int _timeMinutes(dynamic value) {
     final parts = value.toString().split(':');
@@ -142,6 +137,8 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
   }
 
   Future<void> _showWeekPicker() async {
+    final term = _semester;
+    if (term == null) return;
     final selected = await showModalBottomSheet<int>(
       context: context,
       showDragHandle: true,
@@ -152,75 +149,81 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
       builder: (context) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Choose semester week',
-                style: GoogleFonts.spaceGrotesk(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Choose semester week',
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '15 June – 20 September 2026',
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: const Color(0xFF64748B),
+                const SizedBox(height: 4),
+                Text(
+                  '${term.name}: ${term.start.toIso8601String().substring(0, 10)} – ${term.end.toIso8601String().substring(0, 10)}',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: const Color(0xFF64748B),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 4,
-                  childAspectRatio: 1.65,
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
-                ),
-                itemCount: 14,
-                itemBuilder: (context, index) {
-                  final week = index + 1;
-                  final active = week == _selectedWeekNumber;
-                  return InkWell(
-                    onTap: () => Navigator.pop(context, week),
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: active
-                            ? const Color(0xFF2563EB)
-                            : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
+                const SizedBox(height: 18),
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    childAspectRatio: 1.65,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                  ),
+                  itemCount: term.weeks,
+                  itemBuilder: (context, index) {
+                    final week = index + 1;
+                    final active = week == _selectedWeekNumber;
+                    return InkWell(
+                      onTap: () => Navigator.pop(context, week),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
                           color: active
                               ? const Color(0xFF2563EB)
-                              : const Color(0xFFE2E8F0),
+                              : const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: active
+                                ? const Color(0xFF2563EB)
+                                : const Color(0xFFE2E8F0),
+                          ),
+                        ),
+                        child: Text(
+                          'W$week',
+                          style: GoogleFonts.spaceGrotesk(
+                            fontWeight: FontWeight.w700,
+                            color: active
+                                ? Colors.white
+                                : const Color(0xFF475569),
+                          ),
                         ),
                       ),
-                      child: Text(
-                        'W$week',
-                        style: GoogleFonts.spaceGrotesk(
-                          fontWeight: FontWeight.w700,
-                          color: active
-                              ? Colors.white
-                              : const Color(0xFF475569),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
     if (selected != null && mounted) {
-      setState(() => _selectedWeek = 'Week $selected');
+      setState(
+        () => _weekMonday = term.firstMonday.add(
+          Duration(days: (selected - 1) * 7),
+        ),
+      );
     }
   }
 
@@ -319,7 +322,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                     ),
                   ),
                   content: Text(
-                    "This timetable displays your dynamic class times for the 2026/05 Academic Semester.\n\nClasses are synchronized between academic registers and your group enrolments.",
+                    "Dates use Malaysia time and the current server clock. Semester dates are set by the academic office; courses without a configured semester retain their weekly timetable.",
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       color: const Color(0xFF475569),
@@ -438,7 +441,11 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                     final dayClasses =
                         _schedule.where((item) {
                           return item['day'].toString().toLowerCase() ==
-                              selectedDayName.toLowerCase();
+                                  selectedDayName.toLowerCase() &&
+                              (SemesterWindow.parse(
+                                    item['semester'],
+                                  )?.contains(_dateForDay(dayIndex)) ??
+                                  true);
                         }).toList()..sort(
                           (a, b) => _timeMinutes(
                             a['startTime'],

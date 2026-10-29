@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import { TextInput, TextArea } from '../../components/LimitedTextField';
+import { ModalLayer } from '../../components/ModalLayer';
+import { CustomDropdown } from '../../components/CustomDropdown';
+import React, { useState, useCallback } from 'react';
 import {
   MessageSquare,
   AlertTriangle,
@@ -15,6 +18,13 @@ import { apiService } from '../../services/api';
 import type { StudentFeedbackReport } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { swalSuccess, swalError } from '../../utils/swal';
+import { apiErrorMessage } from '../../utils/apiError';
+import { useLiveResource } from '../../hooks/useLiveResource';
+import { RecordsStatus } from '../../components/RecordsStatus';
+import { RecordPagination } from '../../components/RecordPagination';
+import { SubmissionTime, SubmissionTimeFilter } from '../../components/SubmissionTime';
+import { matchesSubmissionRange, submissionFilterParams, type SubmissionRange } from '../../utils/submissionTime';
+import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 
 interface ComplaintTicket {
   id: string;
@@ -29,10 +39,18 @@ interface ComplaintTicket {
   resolvedAt?: string;
 }
 
+const toTicket = (row: StudentFeedbackReport): ComplaintTicket => ({
+  id: row.id, category: row.category, priority: row.priority, subject: row.subject,
+  message: row.message, attachmentName: row.attachment_name || undefined,
+  status: row.status === 'Pending' ? 'Open' : row.status === 'In Progress' ? 'In Review' : row.status,
+  createdAt: row.created_at,
+  adminResponse: row.student_response || undefined,
+});
+
 export const StudentContact: React.FC = () => {
-  const [tickets, setTickets] = useState<ComplaintTicket[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [submissionRange, setSubmissionRange] = useState<SubmissionRange>({ from: '', to: '' });
 
   // Modal & Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -43,27 +61,20 @@ export const StudentContact: React.FC = () => {
   const [attachment, setAttachment] = useState<File | null>(null);
 
   const { user } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const toTicket = (row: StudentFeedbackReport): ComplaintTicket => ({
-    id: row.id, category: row.category, priority: row.priority, subject: row.subject,
-    message: row.message, attachmentName: row.attachment_name || undefined,
-    status: row.status === 'Pending' ? 'Open' : row.status === 'In Progress' ? 'In Review' : row.status,
-    createdAt: new Date(row.created_at.endsWith('Z') || /[+-]\d\d:\d\d$/.test(row.created_at) ? row.created_at : row.created_at + 'Z').toLocaleString(),
-    adminResponse: row.student_response || undefined,
-  });
-  useEffect(() => {
-    let active = true;
-    setTickets([]);
-    setLoading(true);
-    setLoadError(false);
-    apiService.studentGetFeedback().then(rows => {
-      if (active) setTickets(rows.map(toTicket));
-    }).catch(() => { if (active) setLoadError(true); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [user?.user_id]);
+  const search = useDebouncedSearch(searchQuery);
+  const pageKey = JSON.stringify([user?.user_id, filterStatus, search, submissionRange]);
+  const [pageSelection, setPageSelection] = useState({ key: '', page: 1 });
+  const currentPage = pageSelection.key === pageKey ? pageSelection.page : 1;
+  const setCurrentPage = (page: number) => setPageSelection({ key: pageKey, page });
+  const loadTickets = useCallback(async (signal: AbortSignal) => {
+    const result = await apiService.studentFeedbackPage({ page: currentPage, per_page: 8, search,
+      status: filterStatus === 'Open' ? 'Pending' : filterStatus === 'In Review' ? 'In Progress' : filterStatus,
+      ...submissionFilterParams(submissionRange) }, signal);
+    return { ...result, items: result.items.map(toTicket) };
+  }, [currentPage, search, filterStatus, submissionRange]);
+  const { data, setData, loading, error, refresh } = useLiveResource(loadTickets, JSON.stringify([pageKey, currentPage]), ['feedback']);
+  const tickets = data?.items || [];
 
   const downloadAttachment = async (ticket: ComplaintTicket) => {
     try {
@@ -105,42 +116,43 @@ export const StudentContact: React.FC = () => {
       data.append('category', category); data.append('priority', priority);
       if (attachment) data.append('attachment', attachment);
       const created = await apiService.studentCreateFeedback(data);
-      setTickets(previous => [toTicket(created), ...previous]);
+      setData(previous => {
+        const ticket = toTicket(created);
+        const matches = (filterStatus === 'All' || filterStatus === ticket.status)
+          && matchesSubmissionRange(ticket.createdAt, submissionRange)
+          && [ticket.id, ticket.subject, ticket.message, ticket.category].some(value => value.toLowerCase().includes(search.toLowerCase()));
+        return { ...previous!, items: matches ? [ticket, ...(previous?.items || []).filter(row => row.id !== ticket.id)].slice(0, 8) : previous?.items || [],
+          total: (previous?.total || 0) + (matches ? 1 : 0), stats: { ...previous?.stats, Pending: (previous?.stats.Pending || 0) + 1 } };
+      });
+      setCurrentPage(1);
+      void refresh();
       setSubject(''); setMessage(''); setAttachment(null); setIsModalOpen(false);
       swalSuccess('Complaint Ticket Created', `Ticket ID ${created.id} submitted to Admin Helpdesk. Response will be posted here.`);
-    } catch {
-      swalError('Submission Failed', 'Your ticket could not be confirmed. Your form has been kept; check your connection and try again.');
+    } catch (error) {
+      swalError('Submission Failed', apiErrorMessage(error, 'Your ticket could not be confirmed. Your form has been kept; check your connection and try again.'));
     } finally { setSubmitting(false); }
   };
-  // Filtered List
-  const filteredTickets = tickets.filter(t => {
-    const matchesStatus = filterStatus === 'All' || t.status === filterStatus;
-    const matchesSearch =
-      t.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.category.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesStatus && matchesSearch;
-  });
-
-  const totalTickets = tickets.length;
-  const openTickets = tickets.filter(t => t.status === 'Open').length;
-  const inReviewTickets = tickets.filter(t => t.status === 'In Review').length;
-  const resolvedTickets = tickets.filter(t => t.status === 'Resolved').length;
+  const filteredTickets = tickets;
+  const totalTickets = data === undefined ? '—' : Object.values(data.stats).reduce((sum, value) => sum + value, 0);
+  const openTickets = data === undefined ? '—' : data.stats.Pending || 0;
+  const inReviewTickets = data === undefined ? '—' : data.stats['In Progress'] || 0;
+  const resolvedTickets = data === undefined ? '—' : data.stats.Resolved || 0;
+  const page = data?.page || currentPage;
+  const paginatedTickets = tickets;
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12 max-w-7xl mx-auto">
       {/* Header Banner (Theme Dynamic) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-indigo-700 via-purple-700 to-slate-800 dark:from-indigo-900/40 dark:via-purple-900/30 dark:to-slate-900/50 p-6 rounded-2xl border border-indigo-200 dark:border-indigo-500/20 shadow-lg text-white">
+      <div className="uipro-card relative flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-indigo-200 dark:text-indigo-400 font-semibold text-xs uppercase tracking-wider">
+          <div className="flex items-center gap-2 text-brand-blue dark:text-blue-400 font-semibold text-xs uppercase tracking-wider">
             <Mail className="w-4 h-4" />
             <span>Admin Helpdesk & Complaints</span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight font-space text-white">
+          <h1 className="text-2xl font-bold tracking-tight font-space text-slate-900 dark:text-white">
             Contact Admin & Inquiries
           </h1>
-          <p className="text-sm text-slate-200 dark:text-slate-400 max-w-2xl">
+          <p className="text-sm text-slate-500 dark:text-slate-400 max-w-2xl">
             Lodge attendance discrepancies, face scanner technical issues, or general complaints directly to system administrators and academic coordinators.
           </p>
         </div>
@@ -148,19 +160,17 @@ export const StudentContact: React.FC = () => {
         <button
           disabled={loading}
           onClick={() => setIsModalOpen(true)}
-          className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-white text-indigo-800 hover:bg-slate-100 dark:bg-indigo-600 dark:text-white dark:hover:bg-indigo-500 font-semibold text-sm transition-all shadow-md cursor-pointer shrink-0"
+          className="relative z-10 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-brand-blue text-white hover:bg-blue-700 font-semibold text-sm transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
         >
           <Plus className="w-4 h-4" />
           <span>New Complaint Ticket</span>
         </button>
       </div>
 
-      {loading && <p role="status">Loading your tickets...</p>}
-      {loadError && <p role="alert">Unable to load your tickets. Please refresh and try again.</p>}
       {/* Stats Grid (Theme Synced) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex items-center gap-4 shadow-xs">
-          <div className="w-11 h-11 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
+          <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
             <MessageSquare className="w-5.5 h-5.5" />
           </div>
           <div>
@@ -209,7 +219,7 @@ export const StudentContact: React.FC = () => {
               onClick={() => setFilterStatus(status)}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer whitespace-nowrap ${
                 filterStatus === status
-                  ? 'bg-indigo-600 text-white shadow-sm'
+                  ? 'bg-blue-600 text-white shadow-sm'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700/80'
               }`}
             >
@@ -220,32 +230,34 @@ export const StudentContact: React.FC = () => {
 
         <div className="relative flex-grow md:max-w-xs">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
-          <input
+          <TextInput showCounter={false}
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search Ticket ID, subject..."
-            className="w-full pl-9 pr-4 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+            className="w-full pl-9 pr-4 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-blue-500"
           />
         </div>
       </div>
 
+      <SubmissionTimeFilter value={submissionRange} onChange={setSubmissionRange} />
+      <RecordsStatus loading={loading} error={error} retry={() => void refresh()} />
       {/* Tickets List Cards (Theme Synced) */}
       <div className="space-y-4">
-        {loading || loadError ? null : filteredTickets.length === 0 ? (
+        {data === undefined ? null : filteredTickets.length === 0 ? (
           <div className="uipro-card bg-white dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-800 p-12 text-center space-y-3 shadow-xs">
             <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 dark:text-slate-500 mx-auto">
               <MessageSquare className="w-6 h-6" />
             </div>
             <div className="text-slate-800 dark:text-slate-300 font-medium text-sm">No Complaint Tickets Found</div>
             <p className="text-slate-500 dark:text-slate-400 text-xs max-w-sm mx-auto">
-              {searchQuery || filterStatus !== 'All'
+              {searchQuery || filterStatus !== 'All' || submissionRange.from || submissionRange.to
                 ? 'No tickets match your active filter criteria.'
                 : 'You have not submitted any complaint tickets yet.'}
             </p>
           </div>
         ) : (
-          filteredTickets.map(ticket => (
+          paginatedTickets.map(ticket => (
             <div
               key={ticket.id}
               className="uipro-card bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 rounded-2xl p-5 transition-all space-y-4 shadow-xs"
@@ -253,7 +265,7 @@ export const StudentContact: React.FC = () => {
               {/* Ticket Top Meta */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800/80 pb-3">
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400">{ticket.id}</span>
+                  <span className="font-mono text-xs font-bold text-blue-600 dark:text-blue-400">{ticket.id}</span>
                   
                   {/* Category Badge */}
                   <span className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300 font-medium">
@@ -275,7 +287,7 @@ export const StudentContact: React.FC = () => {
 
                 {/* Status Badge */}
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-400 dark:text-slate-500">{ticket.createdAt}</span>
+                  <div><span className="block mb-1 text-[10px] text-slate-400">Submitted</span><SubmissionTime value={ticket.createdAt} /></div>
                   {ticket.status === 'Resolved' && (
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20 text-[11px] font-semibold">
                       <CheckCircle2 className="w-3 h-3" />
@@ -305,12 +317,12 @@ export const StudentContact: React.FC = () => {
                 </p>
               </div>
 
-              {ticket.attachmentName && <button type="button" onClick={() => downloadAttachment(ticket)} className="text-sm text-indigo-600 underline">Download {ticket.attachmentName}</button>}
+              {ticket.attachmentName && <button type="button" onClick={() => downloadAttachment(ticket)} className="text-sm text-blue-600 underline">Download {ticket.attachmentName}</button>}
               {/* Admin Response Box */}
               {ticket.adminResponse && (
-                <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-500/20 rounded-xl p-3.5 space-y-1">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
-                    <MessageCircle className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-500/20 rounded-xl p-3.5 space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700 dark:text-blue-300">
+                    <MessageCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <span>Admin Helpdesk Response</span>
                   </div>
                   <p className="text-xs text-slate-800 dark:text-slate-200 pl-5">{ticket.adminResponse}</p>
@@ -321,14 +333,16 @@ export const StudentContact: React.FC = () => {
         )}
       </div>
 
+      {data !== undefined && <RecordPagination page={page} pageSize={8} total={data.total} onChange={setCurrentPage} />}
+
       {/* Modal: New Complaint Ticket */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200">
+        <ModalLayer className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400">
                   <MessageSquare className="w-5 h-5" />
                 </div>
                 <div>
@@ -349,17 +363,20 @@ export const StudentContact: React.FC = () => {
               {/* Category */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Inquiry Category</label>
-                <select
+                <CustomDropdown
+                  ariaLabel="Inquiry Category"
+                  fullWidth
+                  className="w-full"
                   value={category}
-                  onChange={e => setCategory(e.target.value as any)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="Attendance Discrepancy">Attendance Discrepancy (Marked absent by error)</option>
-                  <option value="Face Verification Issue">Face Verification Issue (Camera / Biometric error)</option>
-                  <option value="Lecturer Feedback">Lecturer & Class Roster Feedback</option>
-                  <option value="System Bug">System Bug / Technical Error</option>
-                  <option value="General Inquiry">General Academic Inquiry</option>
-                </select>
+                  onChange={setCategory}
+                  options={[
+                    { value: 'Attendance Discrepancy', label: 'Attendance Discrepancy (Marked absent by error)' },
+                    { value: 'Face Verification Issue', label: 'Face Verification Issue (Camera / Biometric error)' },
+                    { value: 'Lecturer Feedback', label: 'Lecturer & Class Roster Feedback' },
+                    { value: 'System Bug', label: 'System Bug / Technical Error' },
+                    { value: 'General Inquiry', label: 'General Academic Inquiry' },
+                  ]}
+                />
               </div>
 
               {/* Priority */}
@@ -373,7 +390,7 @@ export const StudentContact: React.FC = () => {
                       onClick={() => setPriority(p)}
                       className={`py-2 rounded-xl text-xs font-medium border transition-all cursor-pointer ${
                         priority === p
-                          ? 'bg-indigo-600 border-indigo-500 text-white shadow-sm'
+                          ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
                           : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                       }`}
                     >
@@ -386,12 +403,13 @@ export const StudentContact: React.FC = () => {
               {/* Subject */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Subject Title</label>
-                <input
+                <TextInput
                   type="text"
                   value={subject}
+                  maxLength={200}
                   onChange={e => setSubject(e.target.value)}
                   placeholder="e.g. Marked absent for BMCS2073 lecture on 24th July"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-blue-500"
                   required
                 />
               </div>
@@ -399,12 +417,13 @@ export const StudentContact: React.FC = () => {
               {/* Detailed Message */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Detailed Message / Description</label>
-                <textarea
+                <TextArea
                   value={message}
+                  maxLength={10000}
                   onChange={e => setMessage(e.target.value)}
                   rows={4}
                   placeholder="Please describe your inquiry, date of class, and any error message received..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-indigo-500 resize-none"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-200 text-xs focus:outline-none focus:border-blue-500 resize-none"
                   required
                 />
               </div>
@@ -413,7 +432,7 @@ export const StudentContact: React.FC = () => {
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Optional Attachment (Screenshot/Photo)</label>
                 <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
-                  <UploadCloud className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <UploadCloud className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />
                   <div className="flex-grow min-w-0">
                     {attachment ? (
                       <span className="text-xs text-slate-800 dark:text-slate-200 truncate block">{attachment.name}</span>
@@ -421,7 +440,7 @@ export const StudentContact: React.FC = () => {
                       <span className="text-xs text-slate-500 dark:text-slate-400 block">Attach screenshot or proof (optional)</span>
                     )}
                   </div>
-                  <label className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium cursor-pointer transition-colors shrink-0">
+                  <label className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium cursor-pointer transition-colors shrink-0">
                     {attachment ? 'Change' : 'Browse'}
                     <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={handleFileChange} className="hidden" />
                   </label>
@@ -439,14 +458,14 @@ export const StudentContact: React.FC = () => {
                 </button>
                 <button
                   type="submit" disabled={submitting}
-                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-md cursor-pointer"
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all shadow-md cursor-pointer"
                 >
                   {submitting ? 'Submitting...' : 'Submit Ticket'}
                 </button>
               </div>
             </form>
           </div>
-        </div>
+        </ModalLayer>
       )}
     </div>
   );

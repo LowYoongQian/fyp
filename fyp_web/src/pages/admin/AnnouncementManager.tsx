@@ -1,3 +1,5 @@
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput, TextArea } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
@@ -49,7 +51,7 @@ const AnnouncementSelect = <T extends string>({ value, onChange, options, ariaLa
     <div
       className="relative"
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null) && !(event.relatedTarget as Element | null)?.closest('[data-floating-panel]')) setOpen(false);
       }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') setOpen(false);
@@ -75,7 +77,7 @@ const AnnouncementSelect = <T extends string>({ value, onChange, options, ariaLa
       </button>
 
       {open && (
-        <div
+        <FloatingPanel
           role="listbox"
           aria-label={ariaLabel}
           className="absolute z-50 mt-2 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10 animate-in fade-in slide-in-from-top-1 duration-150"
@@ -106,7 +108,7 @@ const AnnouncementSelect = <T extends string>({ value, onChange, options, ariaLa
               </button>
             );
           })}
-        </div>
+        </FloatingPanel>
       )}
     </div>
   );
@@ -730,8 +732,8 @@ export const AnnouncementManager: React.FC = () => {
                 <div className="space-y-1">
                   <label className="font-semibold text-slate-700">Bulletin Title</label>
                   <div className="relative">
-                    <FileText className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                    <input
+                    <FileText className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <TextInput
                       type="text"
                       value={title}
                       onChange={(e) => {
@@ -871,9 +873,8 @@ export const AnnouncementManager: React.FC = () => {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <label className="font-semibold text-slate-700">Message</label>
-                    <span className="text-[10px] tabular-nums text-slate-400">{content.length} characters</span>
                   </div>
-                  <textarea
+                  <TextArea
                     rows={6}
                     value={content}
                     onChange={(e) => {
@@ -955,8 +956,8 @@ export const AnnouncementManager: React.FC = () => {
                 <div className="space-y-2">
                   <label className="font-semibold text-slate-700">Title</label>
                   <div className="relative">
-                    <FileText className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                    <input
+                    <FileText className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <TextInput
                       type="text"
                       value={title}
                       onChange={(e) => {
@@ -1110,9 +1111,8 @@ export const AnnouncementManager: React.FC = () => {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <label className="font-semibold text-slate-700">Message</label>
-                    <span className="text-[10px] tabular-nums text-slate-400">{content.length} characters</span>
                   </div>
-                  <textarea
+                  <TextArea
                     rows={6}
                     value={content}
                     onChange={(e) => {

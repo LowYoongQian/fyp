@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput } from '../../components/LimitedTextField';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiService } from '../../services/api';
 import type { AdminStaff } from '../../services/api';
@@ -49,7 +51,7 @@ const StaffRoleDropdown: React.FC<{
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div role="listbox" className="absolute left-0 right-0 top-full z-40 mt-1.5 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-150">
+          <FloatingPanel role="listbox" className="absolute left-0 right-0 top-full z-40 mt-1.5 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-150">
             {staffRoles.map(option => {
               const selected = option === value;
               return (
@@ -69,7 +71,7 @@ const StaffRoleDropdown: React.FC<{
                 </button>
               );
             })}
-          </div>
+          </FloatingPanel>
         </>
       )}
     </div>
@@ -100,6 +102,8 @@ export const StaffManager: React.FC = () => {
   const [role, setRole] = useState('Lecturer');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
+  const mutationPending = useRef(false);
+  const requestVersion = useRef(0);
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
@@ -107,29 +111,35 @@ export const StaffManager: React.FC = () => {
   }, [page, searchQuery]);
 
   const handleSearchChange = (val: string) => {
+    if (mutationPending.current) return;
     setSearchQuery(val);
     setPage(1);
   };
 
-  const fetchStaff = async () => {
-    setLoading(true);
+  const fetchStaff = async (silent = false) => {
+    if (mutationPending.current) return;
+    const version = ++requestVersion.current;
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const skip = (page - 1) * limit;
       // Search is server-side: filtering staffList here would only ever match the
       // 10 rows on the current page.
       const res = await apiService.adminGetStaff(skip, limit, searchQuery.trim());
+      if (version !== requestVersion.current) return;
       setStaffList(res.items);
       setTotalCount(res.total);
     } catch (err: any) {
+      if (version !== requestVersion.current) return;
       setError('Failed to fetch lecturer staff registry. Please ensure backend is running.');
       console.error(err);
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   };
 
   const handleOpenCreate = () => {
+    if (mutationPending.current) return;
     setName('');
     setEmail('');
     setPassword('');
@@ -141,6 +151,7 @@ export const StaffManager: React.FC = () => {
   };
 
   const handleOpenEdit = (staff: AdminStaff) => {
+    if (mutationPending.current) return;
     setSelectedStaff(staff);
     setName(staff.name);
     setEmail(staff.email);
@@ -176,28 +187,38 @@ export const StaffManager: React.FC = () => {
 
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedStaff) return;
+    if (!selectedStaff || mutationPending.current) return;
+    const previous = selectedStaff;
+    const optimistic = !password.trim();
+    mutationPending.current = true;
+    requestVersion.current++;
     setFormError(null);
     setFormSubmitting(true);
-    try {
-      await apiService.adminUpdateStaff(selectedStaff.id, {
-        email,
-        password: password.trim() ? password : undefined,
-        name,
-        staff_id: staffId,
-        role
-      });
+    if (optimistic) {
+      setLoading(false);
+      setStaffList(rows => rows.map(row => row.id === previous.id ? { ...row, ...{ email, name, staff_id: staffId, role } } : row));
       setIsEditOpen(false);
-      fetchStaff();
+    }
+    try {
+      await apiService.adminUpdateStaff(previous.id, { ...{ email, name, staff_id: staffId, role }, password: password.trim() ? password : undefined });
+      setIsEditOpen(false);
+      mutationPending.current = false;
+      setFormSubmitting(false);
+      void fetchStaff(true);
       await swalSuccess('Profile Updated', `${name}'s profile has been saved.`);
     } catch (err: any) {
-      setFormError(err.response?.data?.detail || 'Failed to update lecturer account.');
+      if (optimistic) {
+        setStaffList(rows => rows.map(row => row.id === previous.id ? previous : row));
+        await swalError('Save Failed', err.response?.data?.detail || 'The previous profile has been restored.');
+      } else setFormError(err.response?.data?.detail || 'Failed to update account.');
     } finally {
+      mutationPending.current = false;
       setFormSubmitting(false);
     }
   };
 
   const handleDelete = async (staffRecordId: number | string, staffName: string) => {
+    if (mutationPending.current) return;
     const isConfirmed = await swalConfirmDelete(
       staffName,
       'This will cascadingly delete all their courses, schedules, and active check-in sessions.'
@@ -216,6 +237,7 @@ export const StaffManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {formSubmitting && !isCreateOpen && !isEditOpen && <p role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-700">Saving changes… Pending server confirmation.</p>}
       {/* Top Header Card */}
       <div className="uipro-card bg-white/75 backdrop-blur-md relative overflow-hidden">
         
@@ -244,7 +266,7 @@ export const StaffManager: React.FC = () => {
         {/* Search Toolbar */}
         <div className="relative max-w-md w-full">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <input
+          <TextInput showCounter={false}
             type="text"
             placeholder="Search by name, staff ID, or email..."
             value={searchQuery}
@@ -320,7 +342,7 @@ export const StaffManager: React.FC = () => {
                 <button
                   type="button"
                   disabled={page === 1}
-                  onClick={() => setPage(p => Math.max(p - 1, 1))}
+onClick={() => { if (!mutationPending.current) setPage(p => Math.max(p - 1, 1)); }}
                   className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Previous
@@ -331,7 +353,7 @@ export const StaffManager: React.FC = () => {
                 <button
                   type="button"
                   disabled={page >= Math.ceil(totalCount / limit)}
-                  onClick={() => setPage(p => p + 1)}
+onClick={() => { if (!mutationPending.current) setPage(p => p + 1); }}
                   className="py-1.5 px-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Next
@@ -372,8 +394,8 @@ export const StaffManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Staff Name</label>
                 <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <User className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     value={name}
@@ -387,8 +409,8 @@ export const StaffManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Staff ID</label>
                 <div className="relative">
-                  <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Hash className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     pattern="T[0-9]{6}"
@@ -404,8 +426,8 @@ export const StaffManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Mail className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="email"
                     required
                     value={email}
@@ -428,6 +450,7 @@ export const StaffManager: React.FC = () => {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
+                    minLength={4}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
@@ -497,8 +520,8 @@ export const StaffManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Staff Name</label>
                 <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <User className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     value={name}
@@ -512,8 +535,8 @@ export const StaffManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Staff ID</label>
                 <div className="relative">
-                  <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Hash className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="text"
                     required
                     pattern="T[0-9]{6}"
@@ -529,8 +552,8 @@ export const StaffManager: React.FC = () => {
               <div className="space-y-1">
                 <label className="font-semibold text-slate-600">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
+                  <Mail className="!-mt-2 absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <TextInput
                     type="email"
                     required
                     value={email}
@@ -552,6 +575,7 @@ export const StaffManager: React.FC = () => {
                   <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
                     type={showPassword ? 'text' : 'password'}
+                    minLength={4}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"

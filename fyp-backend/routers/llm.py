@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/query", tags=["Intelligence"])
 _client = httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=8.0))
 _MAX_ROWS, _RECENT_MESSAGES = 25, 16
 _DOMAIN_REPLY = "I'm designed for the Smart Attendance System. Ask me about attendance, students, courses, sessions, timetables, analytics, or at-risk students."
-_DOMAIN_TERMS = re.compile(r"\b(attendance|student|lecturer|teacher|course|class|group|timetable|session|absen|present|late|risk|enrol|schedule|today|yesterday|percentage|rate|below|under|system|dashboard|medical leave|notice|check[- ]?in|concern|worried|poor|lowest|worst|deep learning|g\d+)\b", re.I)
+_DOMAIN_TERMS = re.compile(r"\b(attendance|students?|lecturers?|teachers?|courses?|class(?:es)?|groups?|timetables?|sessions?|absen|present|late|risks?|enrol|schedule|today|yesterday|percentage|rate|below|under|system|dashboard|medical leave|notices?|check[- ]?in|concern|worried|poor|lowest|worst|deep learning|g\d+)\b", re.I)
 _FOLLOW_UP = re.compile(r"^(how about|what about|which one|only |and |them|those|yesterday|today)\b", re.I)
 _GREETING = re.compile(r"^(hi|hello|hey|thanks|thank you|what can you do)[!.? ]*$", re.I)
 _ATTACK = re.compile(r"(ignore (all |your )?(instructions|prompt)|system prompt|hidden instructions|api key|\.env|jwt secret|service role|drop\s+table|delete\s+(all|from)|truncate|alter\s+table)", re.I)
@@ -264,6 +264,39 @@ def chat_history(
     }
 
 
+@router.get('/sessions')
+def chat_sessions(before: str | None = None, limit: int = Query(20, ge=1, le=50),
+                  db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    first_question = select(AIChatMessage.content).where(
+        AIChatMessage.session_id == AIChatSession.id, AIChatMessage.role == 'user',
+    ).order_by(AIChatMessage.created_at, AIChatMessage.id).limit(1).scalar_subquery()
+    query = db.query(AIChatSession, first_question).filter(AIChatSession.user_id == current_user.id)
+    if before:
+        timestamp, identifier = _parse_history_cursor(before)
+        query = query.filter(or_(AIChatSession.updated_at < timestamp,
+                                and_(AIChatSession.updated_at == timestamp, AIChatSession.id < identifier)))
+    rows = query.order_by(AIChatSession.updated_at.desc(), AIChatSession.id.desc()).limit(limit + 1).all()
+    page = rows[:limit]
+    return {'items': [{'id': row.id, 'title': (title or 'New chat')[:60], 'updated_at': row.updated_at}
+                      for row, title in page], 'has_more': len(rows) > limit,
+            'next_cursor': f'{page[-1][0].updated_at.isoformat()}|{page[-1][0].id}' if len(rows) > limit else None}
+
+
+def _suggested_questions(plan):
+    # Only resolved entities, never guesses extracted from a user's sentence.
+    questions = []
+    if plan.get('resolved_student_name'):
+        name = plan['resolved_student_name']
+        questions.extend([f"Show {name}'s attendance history", f"Show {name}'s risk", f"Show {name}'s courses"])
+    code = plan.get('resolved_course_code')
+    if code:
+        questions.extend([f'List students enrolled in {code}', f'Show average attendance for {code}',
+                          f'Show timetable for {code}'])
+    questions.extend(['Show students below 80% attendance', 'Show average attendance across my courses',
+                      'List all enrolled students', 'Show my timetable'])
+    return list(dict.fromkeys(questions))[:8]
+
+
 def _student_answer(db: Session, plan: dict, courses: list[Course]) -> tuple[str, int]:
     course_ids = [course.id for course in courses]
     resolution = resolve_student(
@@ -438,8 +471,9 @@ async def _store_embedding(db: Session, message_id: str, content: str) -> None:
 async def natural_query(body: QueryRequest, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     started, row_count, plan = time.perf_counter(), 0, {}
     _enforce_rate_limit(current_user.id)
-    session = _owned_session(db, body.session_id, current_user.id)
-    recent = _chronological_messages(
+    # Detached objects are request-local: temporary content is never added to the DB.
+    session = AIChatSession(context_state=body.context_state.model_dump(mode='json', exclude_none=True)) if body.temporary else _owned_session(db, body.session_id, current_user.id)
+    recent = [AIChatMessage(role=turn.role, content=turn.content) for turn in body.messages] if body.temporary else _chronological_messages(
         db.query(AIChatMessage)
         .filter(AIChatMessage.session_id == session.id)
         .order_by(AIChatMessage.created_at.desc())
@@ -465,13 +499,13 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
             elif not OPENROUTER_API_KEY:
                 raise RuntimeError("AI planner is not configured")
             else:
-                semantic_context = await _memory_context(db, current_user.id, question) if _MEMORY_WORTHY.search(question) else []
+                semantic_context = await _memory_context(db, current_user.id, question) if not body.temporary and _MEMORY_WORTHY.search(question) else []
                 plan = await _plan(question, recent, courses, semantic_context)
             validated = apply_context(AIPlan.model_validate(plan), question, session.context_state)
             plan = validated.model_dump(exclude_none=True)
             if plan.get("intent") == "memory":
-                memories = await _memory_context(db, current_user.id, question)
-                answer = ("Relevant earlier questions:\n\n" + "\n".join(f"- {item}" for item in memories)) if memories else "I could not find a relevant earlier discussion."
+                memories = await _memory_context(db, current_user.id, question) if not body.temporary else []
+                answer = 'Temporary chats do not access saved conversations.' if body.temporary else (("Relevant earlier questions:\n\n" + "\n".join(f"- {item}" for item in memories)) if memories else "I could not find a relevant earlier discussion.")
             else:
                 answer, row_count = _answer_from_database(db, plan, courses)
             next_context = dict(session.context_state or {})
@@ -480,6 +514,7 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
             selected_course = _match_course(courses, plan.get("course_code") or plan.get("course_hint"))
             if selected_course:
                 next_context.update(course_id=selected_course.id, course_code=selected_course.course_code)
+                plan['resolved_course_code'] = selected_course.course_code
             if plan.get("group"):
                 next_context["group"] = plan["group"]
             next_context["intent"] = plan.get("intent")
@@ -493,6 +528,9 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
         except Exception as exc:
             logger.error("AI request failed model=%s type=%s", OPENROUTER_CHAT_MODEL, type(exc).__name__)
             raise HTTPException(status_code=503, detail="The AI Assistant is temporarily unavailable. Please try again shortly.") from exc
+    if body.temporary:
+        return QueryResponse(answer=answer, success=answer != _INTERRUPTED_REPLY, row_count=row_count,
+                             context_state=session.context_state or {}, suggestions=_suggested_questions(plan))
     user_message = AIChatMessage(id=str(uuid.uuid4()), session_id=session.id, role="user", content=question)
     db.add_all([user_message, AIChatMessage(id=str(uuid.uuid4()), session_id=session.id, role="assistant", content=answer)])
     session.updated_at = func.now()
@@ -502,4 +540,12 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
         await _store_embedding(db, user_message.id, question)
     db.commit()
     logger.info("AI request completed model=%s duration_ms=%d", OPENROUTER_CHAT_MODEL, int((time.perf_counter()-started)*1000))
-    return QueryResponse(answer=answer, success=True, row_count=row_count, session_id=session.id)
+    return QueryResponse(answer=answer, success=answer != _INTERRUPTED_REPLY, row_count=row_count, session_id=session.id,
+                         suggestions=_suggested_questions(plan))
+
+
+@router.post('/temporary', response_model=QueryResponse)
+async def temporary_query(body: QueryRequest, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    if not body.temporary:
+        raise HTTPException(422, 'This endpoint requires temporary chat mode')
+    return await natural_query(body, db, current_user)

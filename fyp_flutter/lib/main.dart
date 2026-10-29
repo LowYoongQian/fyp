@@ -12,19 +12,24 @@ import 'services/local_cache_service.dart';
 import 'services/offline_checkin_sync.dart';
 import 'services/server_discovery_service.dart';
 import 'services/user_service.dart';
+import 'services/account_security.dart';
+import 'services/mobile_push.dart';
+import 'screens/system/notifications_screen.dart';
 import 'config/app_config.dart';
 import 'widgets/aurora_background.dart';
 import 'screens/security/login_screen.dart';
 import 'screens/student/student_dashboard_screen.dart';
 import 'screens/staff/staff_dashboard_screen.dart';
 import 'screens/student/face_scanner_screen.dart';
+import 'screens/student/face_registration_required.dart';
 import 'screens/system/home_screen.dart';
 import 'screens/system/settings_screen.dart';
 import 'widgets/shimmer_loading.dart';
 import 'i18n/app_localizations.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await MobilePush.initialize();
   runApp(const MainApp());
 }
 
@@ -267,6 +272,7 @@ class AppRoot extends StatefulWidget {
 class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   String _studentUserId = "";
   Timer? _offlineTimer;
+  bool _checkingSessions = false;
   bool _offlineBusy = false;
   List<Map<String, Object?>> _offlineRows = [];
   int selectedTab = 0; // 0: Home, 1: Student Portal, 2: Staff Portal
@@ -283,6 +289,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   String studentCode = "";
   String studentEmail = "";
   bool isFaceRegistered = false;
+  String? _faceRegistrationVersion;
+  int _faceStatusGeneration = 0;
+  bool _registeringFace = false;
+  bool _savingFace = false;
   bool isCheckedInToday = false;
   List<Map<String, dynamic>> attendanceHistory = [];
   List<Map<String, dynamic>> studentSchedule = [];
@@ -295,7 +305,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   String staffName = "";
   String staffCode = "";
   String staffEmail = "";
-  String staffRole = "Lecturer";
+  String staffRole = "Staff";
 
   @override
   void initState() {
@@ -304,21 +314,77 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     _offlineTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
         unawaited(_syncOffline());
+        unawaited(_checkSessions());
       }
     });
     _initApp();
+    AccountSecurity.endedToken.addListener(_sessionEnded);
+    MobilePush.onOpen = (notifications, token) {
+      if (!mounted || (token != studentAuthToken && token != staffAuthToken)) return;
+      Navigator.push(context, MaterialPageRoute(builder: (_) => NotificationsScreen(authToken: token,
+        apiBaseUrl: ApiConfig.getEffectiveUrl(), initialNotifications: notifications)));
+    };
   }
 
   @override
   void dispose() {
     _offlineTimer?.cancel();
+    MobilePush.onOpen = null;
+    AccountSecurity.endedToken.removeListener(_sessionEnded);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(_syncOffline());
+    if (state == AppLifecycleState.resumed) { unawaited(_syncOffline()); unawaited(_checkSessions()); }
+  }
+
+  void _sessionEnded() {
+    final token = AccountSecurity.endedToken.value;
+    if (!mounted || token.isEmpty) return;
+    if (token == studentAuthToken) {
+      handleStudentLogout();
+    } else if (token == staffAuthToken) {
+      handleStaffLogout();
+    } else { return; }
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
+  Future<void> _checkSessions() async {
+    if (_checkingSessions) return;
+    _checkingSessions = true;
+    try {
+      for (final token in [studentAuthToken, staffAuthToken].where((value) => value.isNotEmpty).toList()) {
+        final response = await http.get(Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/me'),
+          headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 12));
+        if (!mounted) continue;
+        if (response.statusCode == 200 && token == studentAuthToken) {
+          try { await refreshStudentFaceStatus(); } catch (_) {}
+        }
+        if (![401, 403].contains(response.statusCode)) continue;
+        if (token == studentAuthToken) {
+          handleStudentLogout();
+        } else if (token == staffAuthToken) {
+          handleStaffLogout();
+        } else { continue; }
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Your session ended. Please sign in again.')));
+      }
+    } catch (_) { /* Offline does not falsely suspend an account. */ }
+    finally { _checkingSessions = false; }
+  }
+
+  void _selectPortal(int index) {
+    setState(() => selectedTab = index);
+    final token = index == 2 ? staffAuthToken : studentAuthToken;
+    if (token.isNotEmpty) unawaited(MobilePush.bind(token, ApiConfig.getEffectiveUrl()));
+  }
+
+  void _openSettings() {
+    final staff = selectedTab == 2 || (studentAuthToken.isEmpty && staffAuthToken.isNotEmpty);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(
+      authToken: staff ? staffAuthToken : studentAuthToken, apiBaseUrl: ApiConfig.getEffectiveUrl())));
   }
 
   Future<void> _syncOffline() async {
@@ -544,6 +610,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 'identifier': rawInput,
                 'password': password,
                 'device_id': deviceId,
+                'portal': portalType,
               }),
             )
             .timeout(const Duration(seconds: 12));
@@ -564,7 +631,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         throw Exception(_detailOf(response, 'Login failed'));
       }
 
-      final authData = jsonDecode(response.body);
+      var authData = jsonDecode(response.body);
+      if (authData['requires_two_factor'] == true) {
+        if (!context.mounted) return;
+        final verified = await AccountSecurity.verifyLogin(context, apiUrl, authData['challenge_token']);
+        if (verified == null) return;
+        authData = verified;
+      }
       final role = authData['role'] as String;
       if (portalType == 'student' && role != 'student') {
         throw Exception("This account is not a student account.");
@@ -597,6 +670,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           studentName = name;
           studentCode = code;
           isFaceRegistered = faceReg;
+          _faceRegistrationVersion = null;
+          _faceStatusGeneration++;
           isStudentLoggedIn = true;
         } else {
           staffAuthToken = token;
@@ -604,14 +679,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           staffEmail = resolvedEmail;
           staffName = name;
           staffCode = code;
-          staffRole = (authData['staff_role'] ?? authData['role'] ?? 'Lecturer')
-              .toString();
+          staffRole =
+              (authData['staff_role'] ??
+                      (authData['role'] == 'admin' ? 'Admin' : 'Staff'))
+                  .toString()
+                  .trim();
           if (staffRole.toLowerCase() == 'lecturer') staffRole = 'Lecturer';
           if (staffRole.toLowerCase() == 'admin') staffRole = 'Admin';
           if (staffRole.toLowerCase() == 'tutor') staffRole = 'Tutor';
           isStaffLoggedIn = true;
         }
       });
+
+      unawaited(MobilePush.bind(token, apiUrl));
 
       if (portalType == 'student') {
         // Authentication is complete: reveal the cached/empty dashboard now and
@@ -622,11 +702,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           await _setupRecoveryEmail(context, token);
         }
         unawaited(syncData(context));
-        if (!isFaceRegistered) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showFaceRegistrationPrompt(context);
-          });
-        }
+        unawaited(refreshStudentFaceStatus().catchError((Object _) {}));
       }
     } catch (e) {
       showErrorDialog(_friendlyError(e), context);
@@ -814,6 +890,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       schedule.add({
         'courseId': c['course_id'],
         'meetingId': c['id'],
+        'semester': c['semester'],
         'courseCode': c['course_code'] ?? 'Unknown',
         'courseName': c['course_name'] ?? 'Unknown',
         'group': c['role'] ?? 'Lecture',
@@ -880,6 +957,47 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   // Load attendance history + today's check-in status + course timetable from backend.
+  Future<void> refreshStudentAttendance() async {
+    final token = studentAuthToken;
+    if (token.isEmpty) return;
+    final response = await _apiGet('/students/me/attendance', context);
+    if (!mounted || studentAuthToken != token || response.statusCode != 200) return;
+    final rows = jsonDecode(response.body) as List;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    bool checkedIn = false;
+    final history = rows.map((r) {
+      final marked = DateTime.tryParse(r['marked_at'] ?? '')?.toLocal();
+      final status = r['status'] ?? 'present';
+      final detail = r['verify_detail'] as String?;
+      String label = 'Unknown';
+      if (status == 'absent' && detail != null && detail.isNotEmpty) {
+        label = detail;
+      } else if (marked != null) {
+        final today = marked.year == ApiConfig.now.year && marked.month == ApiConfig.now.month && marked.day == ApiConfig.now.day;
+        final hour = marked.hour % 12 == 0 ? 12 : marked.hour % 12;
+        final time = '$hour:${marked.minute.toString().padLeft(2, '0')} ${marked.hour >= 12 ? 'PM' : 'AM'}';
+        label = today ? 'Today, $time' : '${months[marked.month - 1]} ${marked.day}, ${marked.year}, $time';
+        if (today) checkedIn = true;
+      }
+      return <String, dynamic>{'courseCode': r['course_code'] ?? 'Unknown', 'courseName': r['course_name'] ?? 'Unknown',
+        'group': r['class_group'] ?? '-', 'date': label, 'status': status == 'present' ? 'Verified' : 'Absent',
+        'wifiVerified': r['network_verified'] ?? false, 'faceVerified': r['liveness_passed'] == true};
+    }).toList();
+    setState(() { attendanceHistory = history; isCheckedInToday = checkedIn; });
+    if (studentAuthToken == token) await LocalCacheService.saveAttendanceCache(rows.map((row) => Map<String, dynamic>.from(row)).toList());
+  }
+
+  Future<void> refreshStudentAnnouncements() async {
+    final token = studentAuthToken;
+    if (token.isEmpty) return;
+    final response = await _apiGet('/students/me/announcements', context);
+    if (!mounted || studentAuthToken != token || response.statusCode != 200) return;
+    final notices = (jsonDecode(response.body) as List).map((row) => Map<String, dynamic>.from(row)).toList();
+    setState(() => studentAnnouncements = notices);
+    final prefs = await SharedPreferences.getInstance();
+    if (studentAuthToken == token) await prefs.setString('cached_student_announcements', jsonEncode(notices));
+  }
+
   Future<void> syncData(BuildContext context) async {
     await _syncOffline();
     final prefs = await SharedPreferences.getInstance();
@@ -1221,6 +1339,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         'gateway_ip': netPayload['gateway_ip'],
         'local_ip': netPayload['local_ip'],
         'liveness_challenge_ms': challengeMs,
+        'challenge_token': extraDetails?['challenge_token'],
         'device_id': deviceId,
       };
       if (!current()) return;
@@ -1234,7 +1353,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               },
               body: jsonEncode(checkInPayload),
             )
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 45));
       } on TimeoutException {
         await LocalCacheService.enqueueCheckIn(owner, server, sessionId, requestId, capturedAt, checkInPayload);
         if (current()) {
@@ -1303,7 +1422,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         }
       }
       if (!current()) return;
-      setState(() => isFaceRegistered = true);
+      try { await refreshStudentFaceStatus(); } catch (_) {}
       await syncData(context);
 
       if (!mounted) return;
@@ -1701,13 +1820,35 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // throw happens inside the catch block it surfaced nowhere. A backend 400 then
   // looked to the student like the scan simply did nothing.
   Future<void> registerFace(BuildContext _) async {
-    Navigator.push(
+    if (_registeringFace || _savingFace || isSyncing) return;
+    setState(() => _registeringFace = true);
+    final ownerToken = studentAuthToken;
+    final ownerServer = ApiConfig.getEffectiveUrl();
+    bool current() => mounted && studentAuthToken == ownerToken && isStudentLoggedIn && ApiConfig.getEffectiveUrl() == ownerServer;
+    try {
+      await refreshStudentFaceStatus();
+      if (!current()) return;
+      if (isFaceRegistered) {
+        showErrorDialog('Your face is already registered and cannot be changed in the app. Visit the administration office if you need a reset.', context);
+        return;
+      }
+    } catch (error) {
+      if (current()) showErrorDialog(_friendlyError(error), context);
+      return;
+    } finally {
+      if (current()) setState(() => _registeringFace = false);
+    }
+    if (!current() || isFaceRegistered) return;
+    final registrationVersion = _faceRegistrationVersion;
+    setState(() => _registeringFace = true);
+    try {
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => FaceScannerScreen(
           title: "Face Registration",
-          onScanComplete: (imageBase64, livenessPassed, {int? challengeMs}) async {
-            if (!mounted) return;
+          onScanComplete: (imageBase64, livenessPassed, {int? challengeMs, String? challengeToken}) async {
+            if (!current()) return;
             if (imageBase64 == null || imageBase64.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
@@ -1731,10 +1872,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               return;
             }
 
-            setState(() => isSyncing = true);
+            setState(() { _savingFace = true; isSyncing = true; });
             try {
-              // Backend stores the embedding server-side (requires a real JWT).
-              final apiUrl = ApiConfig.getEffectiveUrl();
+              // Registration is confirmed only after the server verifies the live face.
+              final apiUrl = ownerServer;
               final http.Response response;
               try {
                 response = await http
@@ -1742,11 +1883,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       Uri.parse('$apiUrl/students/me/face'),
                       headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': 'Bearer $studentAuthToken',
+                        'Authorization': 'Bearer $ownerToken',
                       },
-                      body: jsonEncode({'image_base64': imageBase64}),
+                      body: jsonEncode({'image_base64': imageBase64, 'registration_version': registrationVersion}),
                     )
-                    .timeout(const Duration(seconds: 15));
+                    .timeout(const Duration(seconds: 45));
               } on TimeoutException {
                 throw Exception(
                   "The server took too long to respond. Please try again.",
@@ -1766,249 +1907,76 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 );
               }
 
-              if (!mounted) return;
-              setState(() => isFaceRegistered = true);
+              if (!current()) return;
+              final result = jsonDecode(response.body) as Map<String, dynamic>;
+              if (result['is_face_registered'] != true) throw StateError('Registration was not confirmed. Refresh and try again.');
+              setState(() { _faceStatusGeneration++; isFaceRegistered = true; _faceRegistrationVersion = result['registration_version'] as String?; });
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text("Face registration completed successfully!"),
+                  content: Text('Face registered successfully. Only the administration office can reset it.'),
                   backgroundColor: Color(0xFF10B981),
                 ),
               );
             } catch (e) {
-              if (mounted) showErrorDialog(_friendlyError(e), context);
+              // A timed-out POST may have committed; fetch truth before allowing retry.
+              if (current()) {
+                try { await refreshStudentFaceStatus(); } catch (_) {}
+              }
+              if (current()) showErrorDialog(_friendlyError(e), context);
             } finally {
-              if (mounted) setState(() => isSyncing = false);
+              if (current()) setState(() { _savingFace = false; isSyncing = false; });
             }
           },
         ),
       ),
     );
+    } finally {
+      if (current()) setState(() => _registeringFace = false);
+    }
   }
 
-  // Face matching on its own: scan, compare against the stored embedding, show the
-  // distance. No session, no timetable window, no network check, and nothing written
-  // to the database -- so the recognition step can be tested outside class hours,
-  // where no session can legally be open. Same `context` reasoning as registerFace.
-  Future<void> testFaceMatch(BuildContext _) async {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => FaceScannerScreen(
-          title: "Face Match Test",
-          onScanComplete: (imageBase64, livenessPassed, {int? challengeMs}) async {
-            if (!mounted) return;
-            if (imageBase64 == null || imageBase64.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("Test cancelled: no selfie captured."),
-                  backgroundColor: Color(0xFFDC2626),
-                ),
-              );
-              return;
-            }
-            // Liveness is deliberately NOT required here. This screen tests identity
-            // matching alone; the real check-in still enforces liveness.
-
-            setState(() => isSyncing = true);
-            try {
-              final apiUrl = ApiConfig.getEffectiveUrl();
-              final http.Response response;
-              try {
-                response = await http
-                    .post(
-                      Uri.parse('$apiUrl/students/me/face/verify'),
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer $studentAuthToken',
-                      },
-                      body: jsonEncode({'image_base64': imageBase64}),
-                    )
-                    .timeout(const Duration(seconds: 20));
-              } on TimeoutException {
-                throw Exception(
-                  "The server took too long to respond. Please try again.",
-                );
-              } catch (_) {
-                throw Exception(
-                  "Cannot reach the server. Make sure the backend is running.",
-                );
-              }
-
-              if (response.statusCode != 200) {
-                throw Exception(
-                  _detailOf(
-                    response,
-                    'Face match test failed (${response.statusCode}).',
-                  ),
-                );
-              }
-
-              final result = jsonDecode(response.body) as Map<String, dynamic>;
-              final matched = result['matched'] == true;
-              final distance = result['distance'];
-              final threshold = result['threshold'];
-
-              if (!mounted) return;
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: Row(
-                    children: [
-                      Icon(
-                        matched
-                            ? Icons.verified_user
-                            : Icons.report_gmailerrorred,
-                        color: matched
-                            ? const Color(0xFF10B981)
-                            : const Color(0xFFDC2626),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(matched ? "Face Matched" : "No Match"),
-                    ],
-                  ),
-                  content: Text(
-                    matched
-                        ? "Identity confirmed as ${result['student_name']}.\n\n"
-                              "Distance $distance (threshold $threshold).\n"
-                              "Lower is a closer match."
-                        : "This face does not match the registered profile.\n\n"
-                              "Distance $distance exceeds the threshold of $threshold.",
-                    style: GoogleFonts.inter(fontSize: 12.5),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text("Close"),
-                    ),
-                  ],
-                ),
-              );
-            } catch (e) {
-              if (mounted) showErrorDialog(_friendlyError(e), context);
-            } finally {
-              if (mounted) setState(() => isSyncing = false);
-            }
-          },
-        ),
-      ),
-    );
+  Future<void> refreshStudentFaceStatus() async {
+    final token = studentAuthToken;
+    final server = ApiConfig.getEffectiveUrl();
+    if (token.isEmpty) return;
+    final generation = ++_faceStatusGeneration;
+    // Do not reuse the path-only GET cache across account/server switches.
+    final response = await http.get(Uri.parse('$server/students/me/face/status'),
+      headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 12));
+    if (!mounted || generation != _faceStatusGeneration || token != studentAuthToken || server != ApiConfig.getEffectiveUrl()) return;
+    if (response.statusCode != 200) throw StateError(_detailOf(response, 'Unable to load face registration status.'));
+    final result = jsonDecode(response.body) as Map<String, dynamic>;
+    if (result['is_face_registered'] is! bool || !result.containsKey('registration_version')) {
+      throw StateError('Face registration status could not be confirmed. Please refresh and try again.');
+    }
+    setState(() { isFaceRegistered = result['is_face_registered'] == true; _faceRegistrationVersion = result['registration_version'] as String?; });
   }
 
-  void _showFaceRegistrationPrompt(BuildContext context) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext ctx) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: Row(
-            children: [
-              const Icon(
-                Icons.face_retouching_natural,
-                color: Color(0xFF2563EB),
-                size: 28,
-              ),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Text(
-                  "Face Profile Required",
-                  style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Welcome, $studentName!",
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                "To enable attendance check-in and biometric verification, you need to register your face profile.",
-                style: GoogleFonts.inter(
-                  color: const Color(0xFF475569),
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF0FDF4),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFDCFCE7)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.light_mode,
-                      color: Color(0xFF16A34A),
-                      size: 16,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        "Please take the selfie in a well-lit area.",
-                        style: GoogleFonts.inter(
-                          color: const Color(0xFF15803D),
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(
-                "Later",
-                style: GoogleFonts.inter(
-                  color: const Color(0xFF64748B),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                registerFace(context);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: Text(
-                "Register Now",
-                style: GoogleFonts.inter(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
+  Future<void> _endServerSession(String token) async {
+    if (token.isEmpty) return;
+    // Request revocation immediately, independently of device unregistration.
+    unawaited(MobilePush.unbind(token));
+    try { await AccountSecurity.request(ApiConfig.getEffectiveUrl(), token, '/auth/logout', body: {}); }
+    catch (failure) { if (failure is SecurityFailure && [401, 403].contains(failure.status)) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Signed out locally; server sign-out could not be confirmed.')));
+      } }
   }
 
   void handleStudentLogout() {
+    final token = studentAuthToken;
+    unawaited(_endServerSession(token));
     setState(() {
       studentAuthToken = "";
       _studentUserId = "";
       _offlineRows = [];
       isStudentLoggedIn = false;
+      isFaceRegistered = false;
+      _faceRegistrationVersion = null;
+      _faceStatusGeneration++;
+      _registeringFace = false;
+      _savingFace = false;
       isCheckedInToday = false;
       attendanceHistory = [];
       studentAnnouncements = [];
@@ -2025,6 +1993,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   void handleStaffLogout() {
+    final token = staffAuthToken;
+    unawaited(_endServerSession(token));
     final previousStaffId = staffId;
     setState(() {
       staffAuthToken = "";
@@ -2142,18 +2112,24 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         bodyContent = HomeScreen(
           announcements: publicAnnouncements,
           onRefresh: fetchPublicAnnouncements,
-          onSettingsPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const SettingsScreen()),
-            );
-          },
-          onTabSelected: (idx) => setState(() => selectedTab = idx),
+          onSettingsPressed: _openSettings,
+          onTabSelected: _selectPortal,
         );
         break;
       case 1: // Student Portal
         bodyContent = isStudentLoggedIn
-            ? MainScreen(
+            ? !isFaceRegistered
+              ? FaceRegistrationRequired(
+                  studentName: studentName,
+                  busy: _registeringFace || _savingFace || isSyncing,
+                  onRegister: () => registerFace(context),
+                  onLogout: handleStudentLogout,
+                  onRefresh: () async {
+                    try { await refreshStudentFaceStatus(); }
+                    catch (error) { if (mounted) showErrorDialog(_friendlyError(error), context); }
+                  },
+                )
+              : MainScreen(
                 studentId: studentId,
                 studentName: studentName,
                 studentCode: studentCode,
@@ -2169,6 +2145,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 onLogout: handleStudentLogout,
                 onSyncRequested: () => syncData(context),
                 onTimetableRefresh: refreshStudentTimetable,
+                onAttendanceRefresh: refreshStudentAttendance,
+                onAnnouncementsRefresh: refreshStudentAnnouncements,
                 onCheckInComplete:
                     (
                       sessId,
@@ -2191,7 +2169,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       extraDetails: extraDetails,
                     ),
                 onRegisterFace: () => registerFace(context),
-                onTestFaceMatch: () => testFaceMatch(context),
+                onFaceStatusRefresh: refreshStudentFaceStatus,
               )
             : LoginScreen(
                 portalType: 'student',
@@ -2229,13 +2207,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         bodyContent = HomeScreen(
           announcements: publicAnnouncements,
           onRefresh: fetchPublicAnnouncements,
-          onSettingsPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const SettingsScreen()),
-            );
-          },
-          onTabSelected: (idx) => setState(() => selectedTab = idx),
+          onSettingsPressed: _openSettings,
+          onTabSelected: _selectPortal,
         );
     }
 
@@ -2322,7 +2295,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           width: double.infinity,
           child: BottomNavigationBar(
             currentIndex: selectedTab,
-            onTap: (idx) => setState(() => selectedTab = idx),
+            onTap: _selectPortal,
             backgroundColor: surfaceColor,
             elevation: 0,
             type: BottomNavigationBarType.fixed,

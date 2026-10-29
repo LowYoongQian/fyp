@@ -1,6 +1,9 @@
+import { FloatingPanel } from '../../components/FloatingPanel';
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
+import { useLiveRefresh } from '../../hooks/useLiveRefresh';
+import { isLiveConnected, subscribeLive } from '../../services/liveUpdates';
 import { swalSuccess } from '../../utils/swal';
 import { ShimmerTableRows } from '../../components/Shimmer';
 import { Pet } from '../../components/Pet';
@@ -37,6 +40,73 @@ interface LecturerDashboardProps {
   onNavigate?: (page: StaffPageId) => void;
 }
 
+const CAMPUS_TIME_ZONE = 'Asia/Kuala_Lumpur';
+
+const getCampusClock = (date: Date) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: CAMPUS_TIME_ZONE,
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? '';
+  return { day: value('weekday'), minutes: Number(value('hour')) * 60 + Number(value('minute')) };
+};
+
+const parseScheduleTimeToMinutes = (value?: string | null): number | null => {
+  const match = value?.trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+};
+
+const LocalClock: React.FC = () => {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const time = now.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const date = now.toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local device time';
+
+  return (
+    <section
+      aria-label={`Local time ${time}, ${date}, ${timeZone}`}
+      className="overflow-hidden rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50 shadow-xs dark:border-slate-700 dark:from-slate-800 dark:via-slate-900 dark:to-slate-950"
+    >
+      <div className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-brand-blue shadow-sm ring-1 ring-blue-100 dark:bg-slate-900 dark:text-sky-400 dark:ring-slate-700">
+            <Clock className="h-4.5 w-4.5" />
+          </div>
+          <div>
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Time</p>
+            <p className="mt-0.5 text-[10px] font-medium text-slate-500 dark:text-slate-400">{date}</p>
+          </div>
+        </div>
+        <div className="sm:text-right">
+          <time dateTime={now.toISOString()} className="block font-mono text-3xl font-black tabular-nums leading-none tracking-tight text-slate-900 dark:text-white sm:text-[2rem]">
+            {time}
+          </time>
+          <p className="mt-1.5 text-[9px] font-bold uppercase tracking-wider text-brand-blue dark:text-sky-400">{timeZone}</p>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
@@ -54,7 +124,13 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
   const [creating, setCreating] = useState(false);
   const [creationError, setCreationError] = useState<string | null>(null);
   const [renderKey, setRenderKey] = useState<number>(0);
+  const [scheduleNow, setScheduleNow] = useState(() => new Date());
   const triggerReRender = () => setRenderKey(prev => prev + 1);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setScheduleNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const courseDropdownRef = useRef<HTMLDivElement>(null);
   const groupDropdownRef = useRef<HTMLDivElement>(null);
@@ -83,6 +159,17 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
   const [realAnnouncements, setRealAnnouncements] = useState<Announcement[]>([]);
 
   const pollingRef = useRef<any>(null);
+  const unsubscribeMonitor = useRef<(() => void) | null>(null);
+
+  useLiveRefresh(async () => {
+    const [active, summary, today, attention] = await Promise.all([apiService.getActiveSessions(), apiService.getLecturerDashboardSummary(), apiService.getTodayClasses(), apiService.getClassesNeedingAttention()]);
+    setActiveSessions(active); setDashboardSummary(summary); setTodayClasses(today); setClassesNeedingAttention(attention);
+  }, ['sessions', 'attendance'], String(user?.user_id));
+  useLiveRefresh(async () => {
+    const [list, enrolled] = await Promise.all([apiService.getCourses(), apiService.getLecturerEnrolments()]);
+    setCourses(list); setEnrolments(enrolled);
+  }, ['timetable'], String(user?.user_id));
+  useLiveRefresh(async () => setRealAnnouncements(await apiService.lecturerGetAnnouncements()), ['notices'], String(user?.user_id));
 
   const getCourseIdentifier = (c: Course): string => {
     if (!c) return '';
@@ -257,7 +344,9 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
 
   const startPolling = (sessionId: number | string) => {
     stopPolling();
+    let last = Date.now();
     const tick = async () => {
+      last = Date.now();
       try {
         const data = await apiService.getSessionAttendance(sessionId);
         setAttendanceData(data);
@@ -267,10 +356,15 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
     };
 
     tick();
-    pollingRef.current = setInterval(tick, 5000);
+    unsubscribeMonitor.current = subscribeLive(['attendance'], () => { void tick(); });
+    pollingRef.current = setInterval(() => {
+      if (Date.now() - last >= (isLiveConnected() ? 60000 : 5000)) void tick();
+    }, 1000);
   };
 
   const stopPolling = () => {
+    unsubscribeMonitor.current?.();
+    unsubscribeMonitor.current = null;
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
@@ -368,7 +462,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                   <span className="mt-2 block h-4 w-16 rounded-md shimmer-placeholder" />
                 ) : (
                   <span className="text-[10px] font-bold text-brand-blue bg-brand-blue-light px-2 py-0.5 rounded-md uppercase tracking-wider mt-1 inline-block">
-                    {profile?.role || 'Lecturer'}
+                    {profile?.role || 'Staff'}
                   </span>
                 )}
               </div>
@@ -631,6 +725,8 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
               )}
 
               <form key={`session-form-${renderKey}-${selectedCourseId}-${classGroup}`} onSubmit={handleCreateSession} className="space-y-4 font-sans">
+                <LocalClock />
+
                 {/* Select Subject Course */}
                 <div className="space-y-1.5 relative" ref={courseDropdownRef}>
                   <label className="text-[10px] font-bold text-slate-400 dark:text-slate-400 uppercase tracking-wider">Select Subject Course</label>
@@ -668,7 +764,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                     </button>
 
                     {isCourseOpen && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
                         {courses.length === 0 ? (
                           <div className="px-4 py-3 text-xs text-slate-400 dark:text-slate-500 text-center font-medium">No courses available</div>
                         ) : (
@@ -705,7 +801,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                             );
                           })
                         )}
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
@@ -732,6 +828,12 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                       };
                     }
 
+                    const term = course.semester;
+                    const campusDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(scheduleNow);
+                    if (term && (campusDay < term.start_date || campusDay > term.end_date)) {
+                      return { canStart: false, displayText: term.name,
+                        subText: `Semester runs ${term.start_date} – ${term.end_date}; attendance is closed outside these dates.`, isWithinOneHour: false };
+                    }
                     const { schedule_day, schedule_start, schedule_end, schedule_room } = course;
                     const roomStr = schedule_room ? `Room: ${schedule_room}` : 'Room TBA';
 
@@ -744,30 +846,9 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                       };
                     }
 
-                    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                    const now = new Date();
-                    const currentDayName = daysOfWeek[now.getDay()];
-
-                    const parseTimeToMinutes = (timeStr: string): number | null => {
-                      if (!timeStr) return null;
-                      const clean = timeStr.trim().toUpperCase();
-                      const isPM = clean.includes('PM');
-                      const isAM = clean.includes('AM');
-                      const numPart = clean.replace(/(AM|PM)/g, '').trim();
-                      const parts = numPart.split(':');
-                      let hours = parseInt(parts[0], 10);
-                      const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
-
-                      if (isNaN(hours)) return null;
-                      if (isPM && hours < 12) hours += 12;
-                      if (isAM && hours === 12) hours = 0;
-
-                      return hours * 60 + minutes;
-                    };
-
-                    const startMinutes = parseTimeToMinutes(schedule_start);
-                    const endMinutes = schedule_end ? parseTimeToMinutes(schedule_end) : null;
-                    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+                    const { day: currentDayName, minutes: currentMinutes } = getCampusClock(scheduleNow);
+                    const startMinutes = parseScheduleTimeToMinutes(schedule_start);
+                    const endMinutes = parseScheduleTimeToMinutes(schedule_end);
 
                     const formattedDay = schedule_day ? (schedule_day.charAt(0).toUpperCase() + schedule_day.slice(1).toLowerCase()) : 'Today';
                     const isSameDay = !schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
@@ -855,29 +936,11 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                                   if (!schedule_start) return 'Flexible schedule';
 
                                   const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                                  const now = new Date();
-                                  const currentDayIndex = now.getDay();
-                                  const currentDayName = daysOfWeek[currentDayIndex];
-
-                                  const parseTimeToMinutes = (timeStr: string): number | null => {
-                                    if (!timeStr) return null;
-                                    const clean = timeStr.trim().toUpperCase();
-                                    const isPM = clean.includes('PM');
-                                    const isAM = clean.includes('AM');
-                                    const numPart = clean.replace(/(AM|PM)/g, '').trim();
-                                    const parts = numPart.split(':');
-                                    let hours = parseInt(parts[0], 10);
-                                    const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
-
-                                    if (isNaN(hours)) return null;
-                                    if (isPM && hours < 12) hours += 12;
-                                    if (isAM && hours === 12) hours = 0;
-
-                                    return hours * 60 + minutes;
-                                  };
-
-                                  const startMinutes = parseTimeToMinutes(schedule_start);
-                                  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+                                  const campusClock = getCampusClock(scheduleNow);
+                                  const currentDayName = campusClock.day;
+                                  const currentDayIndex = daysOfWeek.indexOf(currentDayName);
+                                  const startMinutes = parseScheduleTimeToMinutes(schedule_start);
+                                  const currentMinutes = campusClock.minutes;
 
                                   const formattedDay = schedule_day ? (schedule_day.charAt(0).toUpperCase() + schedule_day.slice(1).toLowerCase()) : 'Today';
                                   const isSameDay = !schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
@@ -944,7 +1007,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                     </button>
 
                     {isGroupOpen && selectedCourseId && (
-                      <div className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-60 overflow-y-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-700/80 shadow-2xl rounded-2xl p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
                         {['All', ...getAvailableGroupsForCourse(selectedCourseId)].map((g) => {
                           const isSelected = classGroup === g;
                           const labelText = g === 'All' ? 'Lecture (All Allocation Groups)' : `Group ${g.replace('G', '')}`;
@@ -975,7 +1038,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                             </button>
                           );
                         })}
-                      </div>
+                      </FloatingPanel>
                     )}
                   </div>
                 </div>
@@ -998,30 +1061,11 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                   } else if (!selectedCourse.schedule_start) {
                     canStart = true;
                   } else {
-                    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                    const now = new Date();
-                    const currentDayName = daysOfWeek[now.getDay()];
-
-                    const parseTimeToMinutes = (timeStr: string): number | null => {
-                      if (!timeStr) return null;
-                      const clean = timeStr.trim().toUpperCase();
-                      const isPM = clean.includes('PM');
-                      const isAM = clean.includes('AM');
-                      const numPart = clean.replace(/(AM|PM)/g, '').trim();
-                      const parts = numPart.split(':');
-                      let hours = parseInt(parts[0], 10);
-                      const minutes = parts[1] ? parseInt(parts[1], 10) : 0;
-
-                      if (isNaN(hours)) return null;
-                      if (isPM && hours < 12) hours += 12;
-                      if (isAM && hours === 12) hours = 0;
-
-                      return hours * 60 + minutes;
-                    };
-
-                    const startMinutes = parseTimeToMinutes(selectedCourse.schedule_start);
-                    const endMinutes = selectedCourse.schedule_end ? parseTimeToMinutes(selectedCourse.schedule_end) : null;
-                    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+                    const campusClock = getCampusClock(scheduleNow);
+                    const currentDayName = campusClock.day;
+                    const startMinutes = parseScheduleTimeToMinutes(selectedCourse.schedule_start);
+                    const endMinutes = parseScheduleTimeToMinutes(selectedCourse.schedule_end);
+                    const currentMinutes = campusClock.minutes;
 
                     const formattedDay = selectedCourse.schedule_day ? (selectedCourse.schedule_day.charAt(0).toUpperCase() + selectedCourse.schedule_day.slice(1).toLowerCase()) : 'Today';
                     const isSameDay = !selectedCourse.schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();

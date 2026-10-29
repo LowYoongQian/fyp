@@ -1,3 +1,6 @@
+import { FloatingPanel } from '../../components/FloatingPanel';
+import { TextInput, TextArea } from '../../components/LimitedTextField';
+import { ModalLayer } from '../../components/ModalLayer';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
 import type { RiskScore, AlertLog } from '../../services/api';
@@ -90,7 +93,7 @@ function CustomDropdown<T extends string | number>({
 
       {/* Floating Menu Popover */}
       {isOpen && (
-        <div className="absolute right-0 mt-1.5 w-48 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans">
+        <FloatingPanel className="absolute right-0 mt-1.5 w-48 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans">
           <div className="max-h-60 overflow-y-auto space-y-0.5 custom-scrollbar">
             {options.map(opt => {
               const isSelected = opt.value === value;
@@ -114,7 +117,7 @@ function CustomDropdown<T extends string | number>({
               );
             })}
           </div>
-        </div>
+        </FloatingPanel>
       )}
     </div>
   );
@@ -395,7 +398,7 @@ export const AtRisk: React.FC = () => {
                 {/* Search Bar with Clear Button */}
                 <div className="relative flex-1 min-w-[200px] max-w-sm">
                   <Search className="h-4 w-4 text-slate-400 dark:text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
+                  <TextInput showCounter={false}
                     type="text"
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
@@ -700,7 +703,7 @@ export const AtRisk: React.FC = () => {
 
       {/* Dispatch Warning Email Modal */}
       {selectedStudentForAlert && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 dark:bg-slate-950/70 backdrop-blur-xs p-4">
+        <ModalLayer className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 dark:bg-slate-950/70 backdrop-blur-xs p-4">
           <div className="max-w-lg w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-2xl space-y-5 shadow-2xl relative text-slate-900 dark:text-slate-100">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <h3 className="font-sans text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-2">
@@ -731,7 +734,7 @@ export const AtRisk: React.FC = () => {
               <label className="text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider text-[9px]">
                 Email Body
               </label>
-              <textarea
+              <TextArea
                 value={customDraft}
                 onChange={e => setCustomDraft(e.target.value)}
                 rows={8}
@@ -758,7 +761,7 @@ export const AtRisk: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </ModalLayer>
       )}
     </div>
   );

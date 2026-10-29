@@ -8,14 +8,16 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import Lecturer, Student, User
-from schemas import LoginRequest, RegisterRequest, TokenResponse
+from db.models import AuthAttempt, AuthLoginChallenge, Lecturer, Student, User
+from schemas import LoginRequest, RegisterRequest, TokenResponse, LoginChallengeResponse
+from domain.account_security import (active, token_hash, lock_user, factor_for, check_factor_limit,
+    verify_factor, new_session, revoke_all)
 from utils.db_helpers import ensure_unique, require_email_domain
 from utils.security import (
     create_access_token,
@@ -64,11 +66,22 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     return {"message": "Registration successful", "user_id": str(user.id)}
 
 # User Login Endpoint
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     raw = (body.identifier or body.email or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="Email or ID is required")
+
+    attempt_key = token_hash(raw.lower())
+    # Reserve the bucket atomically: concurrent first attempts must not lose failures.
+    if db.bind.dialect.name == 'postgresql':
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    db.execute(insert(AuthAttempt).values(key=attempt_key, failures=0, updated_at=utcnow()).on_conflict_do_nothing(index_elements=['key']))
+    attempt = db.query(AuthAttempt).filter_by(key=attempt_key).with_for_update().first()
+    if attempt and attempt.blocked_until and attempt.blocked_until > utcnow():
+        raise HTTPException(429, 'Too many login attempts. Try again in 15 minutes.')
 
     user = None
     student = None
@@ -85,7 +98,20 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
             if lecturer:
                 user = db.query(User).filter(User.id == str(lecturer.user_id)).first()
 
-    if not user or not verify_password(body.password, user.password_hash):
+    verified_hash = user.password_hash if user else None
+    if not user or not verify_password(body.password, verified_hash):
+        if not attempt:
+            attempt = AuthAttempt(key=attempt_key, failures=0, updated_at=utcnow())
+            db.add(attempt)
+        if (utcnow() - attempt.updated_at).total_seconds() > 900:
+            attempt.failures = 0
+        attempt.failures += 1
+        attempt.updated_at = utcnow()
+        attempt.blocked_until = utcnow() + timedelta(minutes=15) if attempt.failures >= 5 else None
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
@@ -103,19 +129,36 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
                 detail="Access denied: Staff and Admin only portal"
             )
 
-    if user.role == "student" and student is None:
+    user = lock_user(db, user.id)
+    if user.password_hash != verified_hash and not verify_password(body.password, user.password_hash):
+        raise HTTPException(401, 'Password changed. Sign in again.')
+    if attempt:
+        attempt.failures, attempt.blocked_until, attempt.updated_at = 0, None, utcnow()
+    label = 'Mobile device' if body.device_id else 'Web browser'
+    if user.two_factor_enabled:
+        factor = factor_for(db, user.id)
+        check_factor_limit(factor)
+        if not factor.secret:
+            raise HTTPException(409, 'Authenticator setup is incomplete. Contact the administrator.')
+        challenge = secrets.token_urlsafe(32)
+        db.add(AuthLoginChallenge(token_hash=token_hash(challenge), user_id=user.id,
+            auth_version=user.auth_version, expires_at=utcnow() + timedelta(minutes=5), device_label=label))
+        db.commit()
+        return {'requires_two_factor': True, 'challenge_token': challenge, 'expires_in': 300}
+    return _login_response(db, user, label)
+
+
+def _login_response(db, user, label):
+    student, lecturer = None, None
+    if user.role == "student":
         student = db.query(Student).filter(Student.user_id == str(user.id)).first()
-    elif user.role == "lecturer" and lecturer is None:
+    elif user.role == "lecturer":
         lecturer = db.query(Lecturer).filter(Lecturer.user_id == str(user.id)).first()
 
-    token_data: dict = {"user_id": str(user.id), "role": user.role}
-    token = create_access_token(token_data)
-
-    try:
-        user.last_login_at = utcnow()
-        db.commit()
-    except Exception:
-        db.rollback()
+    session = new_session(db, user, label)
+    token = create_access_token({'user_id': str(user.id), 'role': user.role, 'sid': str(session.id)},
+                                expires_delta=session.expires_at - utcnow())
+    db.commit()  # Never issue a usable token if persistence failed.
 
     resp = {
         "access_token": token,
@@ -127,6 +170,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         "status": user.status or "Active",
         "last_login_at": iso_utc(user.last_login_at),
         "recovery_email_verified": bool(user.recovery_email_verified),
+        "recovery_prompt_dismissed": bool(user.recovery_prompt_dismissed),
     }
     if student is not None:
         resp.update({
@@ -137,6 +181,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         })
     elif lecturer is not None:
         resp.update({
+            "staff_role": lecturer.role,
             "profile_id": str(lecturer.id),
             "name": lecturer.name,
             "code": lecturer.staff_id,
@@ -149,6 +194,27 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         })
 
     return resp
+
+
+class MFALogin(BaseModel):
+    challenge_token: str = Field(min_length=32, max_length=128)
+    code: str = Field(min_length=6, max_length=32)
+
+
+@router.post('/login/verify', response_model=TokenResponse)
+def verify_login(body: MFALogin, db: Session = Depends(get_db)):
+    challenge = db.get(AuthLoginChallenge, token_hash(body.challenge_token))
+    if not challenge:
+        raise HTTPException(401, 'Login verification expired. Sign in again.')
+    user = lock_user(db, challenge.user_id)
+    challenge = db.query(AuthLoginChallenge).filter_by(token_hash=challenge.token_hash).populate_existing().with_for_update().first()
+    if challenge.consumed_at or challenge.expires_at <= utcnow() or challenge.auth_version != user.auth_version:
+        raise HTTPException(401, 'Login verification expired. Sign in again.')
+    if not user.two_factor_enabled:
+        raise HTTPException(401, 'Account security changed. Sign in again.')
+    verify_factor(db, factor_for(db, user.id), body.code)
+    challenge.consumed_at = utcnow()
+    return _login_response(db, user, challenge.device_label)
 
 @router.get("/server-time")
 def get_server_time():
@@ -163,6 +229,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 class UserSettingsUpdate(BaseModel):
+    recovery_prompt_dismissed: Optional[bool] = None
     theme_preference: Optional[str] = None
     font_size_preference: Optional[str] = None
     language_preference: Optional[str] = None
@@ -171,6 +238,10 @@ class UserSettingsUpdate(BaseModel):
     push_notifications: Optional[bool] = None
     in_app_notifications: Optional[bool] = None
     two_factor_enabled: Optional[bool] = None
+    push_quiet_enabled: Optional[bool] = None
+    push_quiet_start: Optional[int] = Field(default=None, ge=0, le=1439)
+    push_quiet_end: Optional[int] = Field(default=None, ge=0, le=1439)
+    push_timezone: Optional[str] = Field(default=None, max_length=64)
 
 class AvatarUpdateRequest(BaseModel):
     avatar_url: str
@@ -274,12 +345,13 @@ def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
 def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    user = db.query(User).filter(User.password_reset_hash == _token_hash(body.token)).first()
+    user = db.query(User).filter(User.password_reset_hash == _token_hash(body.token)).with_for_update().first()
     if not user or not user.password_reset_expires_at or user.password_reset_expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Reset link is invalid or expired")
     user.password_hash = hash_password(body.new_password)
     user.password_reset_hash = None
     user.password_reset_expires_at = None
+    revoke_all(db, user)
     db.commit()
     return {"message": "Password updated"}
 
@@ -287,6 +359,7 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
 def get_current_user_profile(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     name = "User"
     code = ""
+    staff_role = None
     if user.role == "student":
         student = db.query(Student).filter(Student.user_id == str(user.id)).first()
         if student:
@@ -297,6 +370,7 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         if lecturer:
             name = lecturer.name
             code = lecturer.staff_id
+            staff_role = lecturer.role
     elif user.role == "admin":
         name = user.profile_name or "System Admin"
         code = user.profile_code or "ADMIN-001"
@@ -306,11 +380,16 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "email": user.email,
         "role": user.role,
         "name": name,
+        "staff_role": staff_role,
         "code": code,
         "avatar_url": user.avatar_url,
         "status": user.status or "Active",
         "last_login_at": iso_utc(user.last_login_at or utcnow()),
         "two_factor_enabled": user.two_factor_enabled,
+        "push_quiet_enabled": user.push_quiet_enabled,
+        "push_quiet_start": user.push_quiet_start,
+        "push_quiet_end": user.push_quiet_end,
+        "push_timezone": user.push_timezone,
         "theme_preference": user.theme_preference or "light",
         "font_size_preference": user.font_size_preference or "medium",
         "language_preference": user.language_preference or "en",
@@ -320,10 +399,23 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "in_app_notifications": user.in_app_notifications,
         "recovery_email": user.recovery_email,
         "recovery_email_verified": user.recovery_email_verified,
+        "recovery_prompt_dismissed": bool(user.recovery_prompt_dismissed),
     }
 
 @router.put("/me/settings")
 def update_user_settings(body: UserSettingsUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if body.two_factor_enabled is not None and body.two_factor_enabled != user.two_factor_enabled:
+        raise HTTPException(400, 'Use verified authenticator setup or disable verification to change 2FA.')
+    if body.push_timezone is not None:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(body.push_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(400, 'Select a valid notification timezone.')
+    if body.recovery_prompt_dismissed is not None:
+        if user.role != "student":
+            raise HTTPException(status_code=403, detail="Student account required")
+        user.recovery_prompt_dismissed = body.recovery_prompt_dismissed
     if body.theme_preference is not None:
         user.theme_preference = body.theme_preference
     if body.font_size_preference is not None:
@@ -338,8 +430,10 @@ def update_user_settings(body: UserSettingsUpdate, user: User = Depends(get_curr
         user.push_notifications = body.push_notifications
     if body.in_app_notifications is not None:
         user.in_app_notifications = body.in_app_notifications
-    if body.two_factor_enabled is not None:
-        user.two_factor_enabled = body.two_factor_enabled
+    for field in ('push_quiet_enabled', 'push_quiet_start', 'push_quiet_end', 'push_timezone'):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(user, field, value)
     
     db.commit()
     return {"message": "Settings updated successfully"}
@@ -350,6 +444,7 @@ def change_password(body: ChangePasswordRequest, user: User = Depends(get_curren
         raise HTTPException(status_code=400, detail="Incorrect current password")
     
     user.password_hash = hash_password(body.new_password)
+    revoke_all(db, user)
     db.commit()
     return {"message": "Password changed successfully"}
 

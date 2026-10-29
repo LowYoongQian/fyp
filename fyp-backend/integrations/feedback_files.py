@@ -3,6 +3,8 @@ import os
 
 import httpx
 
+from integrations.private_storage import ensure_private_bucket
+
 MAX_SIZE = 5 * 1024 * 1024
 ALLOWED_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 
@@ -18,23 +20,7 @@ def _config():
 def upload(path, data, mime):
     url, headers = _config()
     with httpx.Client(timeout=30, headers=headers) as client:
-        bucket = client.get(f"{url}/storage/v1/bucket/student-feedback")
-        # Older Storage versions wrap missing-bucket errors in HTTP 400.
-        missing = bucket.status_code == 404
-        if bucket.status_code == 400:
-            error = bucket.json()
-            missing = error.get("code") == "NoSuchBucket" or error.get("message") == "Bucket not found"
-        if missing:
-            created = client.post(f"{url}/storage/v1/bucket", json={
-                "id": "student-feedback", "name": "student-feedback", "public": False,
-                "file_size_limit": MAX_SIZE, "allowed_mime_types": sorted(ALLOWED_TYPES),
-            })
-            if created.status_code not in (200, 201, 409):
-                created.raise_for_status()
-            bucket = client.get(f"{url}/storage/v1/bucket/student-feedback")
-        bucket.raise_for_status()
-        if bucket.json().get("public") is not False:
-            raise RuntimeError("Feedback bucket must be private")
+        ensure_private_bucket(client, url, "student-feedback", MAX_SIZE, ALLOWED_TYPES)
         client.post(f"{url}/storage/v1/object/student-feedback/{path}",
                     content=data, headers={"Content-Type": mime}).raise_for_status()
 

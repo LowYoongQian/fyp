@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/user_service.dart';
+import '../../services/account_security.dart';
+import 'account_security_card.dart';
 import '../../widgets/shimmer_loading.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -342,10 +344,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             nav.pop();
                             messenger.showSnackBar(
                               const SnackBar(
-                                content: Text('Password updated successfully!'),
+                                content: Text('Password updated; sign in again on all devices.'),
                                 backgroundColor: Color(0xFF10B981),
                               ),
                             );
+                            AccountSecurity.endedToken.value = widget.authToken;
                           } catch (err) {
                             setModalState(() {
                               isSubmitting = false;
@@ -932,6 +935,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ],
                       ),
                     ),
+                    const SizedBox(height: 18),
+                    AccountSecurityCard(authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl),
                     const SizedBox(height: 18),
                     Container(
                       width: double.infinity,
