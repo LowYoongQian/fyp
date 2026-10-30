@@ -7,6 +7,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
 
+from utils.timeutil import utcnow
+
 Base = declarative_base()
 
 
@@ -413,8 +415,17 @@ class FaceEmbedding(Base):
     # face check-in into a 500.
     is_active     = Column(Boolean, default=True)
     updated_at    = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    # Private-storage key of the photo captured at the CURRENT registration; null for older ones.
+    photo_key     = Column(String(255), nullable=True)
 
     student       = relationship("Student", back_populates="face_embedding")
+
+class FacePhotoCleanup(Base):
+    """Stored photos whose object delete is still owed (reset, delete or failed registration)."""
+    __tablename__ = "face_photo_cleanups"
+    object_key = Column(String(255), primary_key=True)
+    # Python-side naive UTC (like the rest of the app) so the worker's grace-period comparison is exact.
+    created_at = Column(DateTime, default=utcnow, server_default=func.now(), nullable=False)
 
 class FaceEnrolmentRequest(Base):
     __tablename__ = "face_enrolment_requests"
@@ -535,7 +546,12 @@ class Alert(Base):
     # GET and POST /lecturers/me/alerts raise AttributeError/TypeError.
     email_body   = Column(Text, nullable=True)
     triggered_by = Column(String, default="system")
+    # sent_at is set ONLY when the email provider accepted the message; delivery_status is None for rows that predate real sending.
     sent_at      = Column(DateTime, nullable=True)
+    delivery_status    = Column(String(16), nullable=True)  # pending | accepted | failed
+    provider_message_id = Column(String(64), nullable=True)
+    failure_code       = Column(String(32), nullable=True)
+    attempted_at       = Column(DateTime, nullable=True)
 
     student      = relationship("Student")
     course       = relationship("Course")

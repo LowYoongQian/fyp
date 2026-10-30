@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, CheckCheck, ChevronLeft, ChevronRight, RefreshCw, X } from 'lucide-react';
 import { FloatingPanel } from './FloatingPanel';
-import { getNotificationInbox, type NotificationInbox } from '../services/notificationInbox';
+import { getNotificationInbox, type InboxNotice, type NotificationInbox } from '../services/notificationInbox';
 import type { useNotificationInbox } from '../hooks/useNotificationInbox';
 import { apiErrorMessage } from '../utils/apiError';
 
@@ -11,8 +11,8 @@ export function UnreadIndicator({ show, collapsed = false }: { show: boolean; co
   return show ? <span aria-hidden="true" data-unread-indicator className={`notification-nav-dot ${collapsed ? 'notification-nav-dot-collapsed' : ''}`} /> : null;
 }
 
-export function NotificationBell({ inbox, navigate, labels }: {
-  inbox: Inbox; navigate: (tab: string) => void; labels: Record<string, string>;
+export function NotificationBell({ inbox, openNotice, labels }: {
+  inbox: Inbox; navigate?: (tab: string) => void; openNotice: (item: InboxNotice) => Promise<void>; labels: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
   const [older, setOlder] = useState<NotificationInbox | null>(null);
@@ -63,7 +63,7 @@ export function NotificationBell({ inbox, navigate, labels }: {
       {unread > 0 && <span aria-hidden="true" data-notification-count className="notification-count">{unread > 99 ? '99+' : unread}</span>}
       {inbox.error && <span className="sr-only">Notification status needs attention</span>}
     </button>
-    {open && <FloatingPanel role="dialog" aria-label="Notifications" onDismiss={close} className="notification-panel right-0 w-[24rem]">
+    {open && <FloatingPanel clip role="dialog" aria-label="Notifications" onDismiss={close} className="notification-panel right-0 w-[24rem]">
       <header className="notification-panel-header">
         <div><h2 className="font-display text-sm font-bold">Notifications</h2>
           <p className="text-[11px] mt-1 opacity-70">{!inbox.data ? inbox.loading ? 'Loading updates…' : 'Notification status unavailable'
@@ -81,7 +81,7 @@ export function NotificationBell({ inbox, navigate, labels }: {
       {inbox.loading && !items ? <div role="status" aria-label="Loading notifications" className="p-4 space-y-4">
         {[0, 1, 2].map(index => <div key={index} className="space-y-2"><div className="shimmer-placeholder h-3 w-2/3 rounded" /><div className="shimmer-placeholder h-2.5 w-full rounded" /></div>)}
       </div> : items?.length ? <ul className="notification-list">
-        {items.map(item => <li key={item.id}><button type="button" className="notification-item" onClick={() => { if (labels[item.target_tab]) navigate(item.target_tab); close(); }}>
+        {items.map(item => <li key={item.id}><button type="button" className="notification-item" onClick={() => { const accepted = labels[item.target_tab] ? openNotice(item) : Promise.resolve(); close(); void accepted; }}>
           <span className="notification-item-icon"><Bell className="h-4 w-4" aria-hidden="true" /></span>
           <span className="min-w-0 flex-1"><span className="block text-xs font-semibold leading-relaxed break-words">{item.title}</span>
             <span className="block text-[11px] leading-relaxed opacity-75 break-words mt-1">{item.body}</span>

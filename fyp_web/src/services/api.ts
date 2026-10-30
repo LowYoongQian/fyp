@@ -2,8 +2,8 @@ import axios from 'axios';
 
 // Base URL is injected at build time via Vite env (VITE_API_BASE_URL).
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
-export type RecordPage<T> = { items: T[]; total: number; page: number; per_page: number; stats: Record<string, number> };
-export type RecordPageQuery = { page: number; per_page: number; search?: string; status?: string; category?: string; submitted_from?: string; submitted_to?: string };
+export type RecordPage<T> = { items: T[]; total: number; page: number; per_page: number; stats: Record<string, number>; focus?: { id: string; found: boolean } };
+export type RecordPageQuery = { page: number; per_page: number; search?: string; status?: string; category?: string; submitted_from?: string; submitted_to?: string; focus_id?: string };
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -144,6 +144,7 @@ export interface Course {
   lecturer_name?: string | null;
   programme_id?: number | string | null;
   programme_name?: string | null;
+  meeting_id?: string | null;
   schedule_day?: string | null;
   schedule_start?: string | null;
   schedule_end?: string | null;
@@ -228,7 +229,10 @@ export interface AlertLog {
   email_body: string;
   triggered_by: string;
   triggered_at: string;
-  sent_at?: string;
+  sent_at?: string | null;
+  /** pending | accepted | failed; null for rows from before real sending (recorded only, never emailed). */
+  delivery_status?: 'pending' | 'accepted' | 'failed' | null;
+  failure_code?: string | null;
 }
 
 export interface ActiveSession {
@@ -362,9 +366,31 @@ export interface AdminStaff {
   role?: string;
 }
 
+export interface StaffDetails {
+  identity: { lecturer_id: string; user_id: string | null; name: string; staff_id: string; email: string | null; staff_role: string | null; avatar_url: string | null };
+  account: {
+    account_role: string; status: string; created_at: string | null; last_login_at: string | null; two_factor_enabled: boolean;
+    recovery_email: string | null; recovery_email_verified: boolean;
+    preferences: { theme: string; font_size: string; language: string; notifications: boolean; email_notifications: boolean; push_notifications: boolean; in_app_notifications: boolean };
+  } | null;
+  courses: { code: string; name: string; roles: string[] }[];
+}
+
 export interface FaceRegistration {
   is_face_registered: boolean;
   registration_version: string | null;
+}
+
+export interface StudentDetails {
+  identity: { student_id: string; user_id: string | null; name: string; student_code: string; email: string | null; avatar_url: string | null };
+  account: {
+    status: string; created_at: string | null; last_login_at: string | null; two_factor_enabled: boolean;
+    recovery_email: string | null; recovery_email_verified: boolean;
+    preferences: { theme: string; font_size: string; language: string; notifications: boolean; email_notifications: boolean; push_notifications: boolean; in_app_notifications: boolean };
+  } | null;
+  programme: { code: string; name: string } | null;
+  courses: { code: string; name: string; credits: number | null; semester: string | null; class_group: string | null }[];
+  face: { is_registered: boolean; registration_version: string | null; sample_count: number | null; updated_at: string | null; photo_available: boolean };
 }
 
 export interface AdminSession {
@@ -441,6 +467,7 @@ export interface StudentEnrolmentDetail {
   credit_hours: number;
   semester: string;
   class_group: string;
+  meeting_id?: string | null;
   schedule_day: string | null;
   schedule_start: string | null;
   schedule_end: string | null;
@@ -681,11 +708,14 @@ export const apiService = {
     return cachedGet('/lecturers/me/alerts');
   },
 
-  triggerManualAlert: async (studentId: number | string, courseId: number | string) => {
+  /** alertId is the logical warning identifier: reuse it for a retry so the provider and server never send twice. */
+  triggerManualAlert: async (studentId: number | string, courseId: number | string, alertId: string, emailBody: string) => {
     const response = await api.post('/lecturers/me/alerts', {
       student_id: studentId,
-      course_id: courseId
-    });
+      course_id: courseId,
+      alert_id: alertId,
+      email_body: emailBody,
+    }, { timeout: 20000 });
     return response.data;
   },
 
@@ -704,6 +734,15 @@ export const apiService = {
   },
   adminGetFaceRegistration: async (studentId: number | string, signal?: AbortSignal): Promise<FaceRegistration> => {
     return (await api.get(`/admin/students/${studentId}/face`, { signal, timeout: 15000 })).data;
+  },
+  adminGetStaffDetails: async (lecturerId: number | string, signal?: AbortSignal): Promise<StaffDetails> => {
+    return (await api.get(`/admin/staff/${lecturerId}/details`, { signal, timeout: 15000 })).data;
+  },
+  adminGetStudentDetails: async (studentId: number | string, signal?: AbortSignal): Promise<StudentDetails> => {
+    return (await api.get(`/admin/students/${studentId}/details`, { signal, timeout: 15000 })).data;
+  },
+  adminGetFacePhoto: async (studentId: number | string, registrationVersion: string, signal?: AbortSignal): Promise<Blob> => {
+    return (await api.get(`/admin/students/${studentId}/face/photo`, { params: { registration_version: registrationVersion }, responseType: 'blob', signal, timeout: 15000 })).data;
   },
   adminResetFace: async (studentId: number | string, current_password: string, registration_version: string): Promise<FaceRegistration> => {
     return (await api.post(`/admin/students/${studentId}/face/reset`, { current_password, registration_version, confirm_reset: true }, { timeout: 15000 })).data;

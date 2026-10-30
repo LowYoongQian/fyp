@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { dashboardAttendance } from './dashboardAttendance';
 import { apiService } from '../../services/api';
 import { useLiveRefresh } from '../../hooks/useLiveRefresh';
+import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
 import type { Announcement, StudentProfile, StudentEnrolmentDetail, StudentActiveSession } from '../../services/api';
 import {
   Smartphone,
@@ -48,6 +49,7 @@ export const StudentDashboard: React.FC = () => {
   const [completedCourses, setCompletedCourses] = useState<string[]>([]);
   const [statistics, setStatistics] = useState(() => dashboardAttendance([]));
   const [loading, setLoading] = useState(true);
+  const [showAllNotices, setShowAllNotices] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [loadedUserId, setLoadedUserId] = useState<string | number | null>(null);
   const [recoveryEmailVerified, setRecoveryEmailVerified] = useState<boolean | null>(null);
@@ -61,6 +63,8 @@ export const StudentDashboard: React.FC = () => {
   }, ['attendance'], String(user?.user_id));
   useLiveRefresh(async () => setActiveSessions(await apiService.studentGetActiveSessions()), ['sessions'], String(user?.user_id));
   useLiveRefresh(async () => setAnnouncements(await apiService.studentGetAnnouncements()), ['notices'], String(user?.user_id));
+  useNotificationListRecord({ tab: 'student_dashboard', kinds: ['announcement'], ids: announcements.map(item => String(item.id)), ready: !loading,
+    dataVersion: [announcements, showAllNotices], prepare: id => { if (announcements.findIndex(item => String(item.id) === id) >= 6) setShowAllNotices(true); } });
   useLiveRefresh(async () => {
     const [profile, list] = await Promise.all([apiService.studentGetProfile(), apiService.studentGetEnrolments()]);
     setStudent(profile); setEnrolments(list);
@@ -323,9 +327,9 @@ export const StudentDashboard: React.FC = () => {
             <div><h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">Latest Notices</h3><p className="text-[10px] text-slate-500 dark:text-slate-400">General and course updates in one place.</p></div>
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
-            {announcements.slice(0, 6).map(notice => {
+            {announcements.slice(0, showAllNotices ? undefined : 6).map(notice => {
               const isCourse = notice.target_scope === 'course';
-              return <article key={notice.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+              return <article key={notice.id} data-notice-record={String(notice.id)} className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className={`rounded-full px-2.5 py-1 text-[9px] font-extrabold uppercase ${isCourse ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'}`}>{isCourse ? 'Course' : 'General'}</span>
                   {isCourse && <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400">{notice.target_course_code} · {notice.target_group?.toLowerCase() === 'all' ? 'All groups' : notice.target_group}</span>}

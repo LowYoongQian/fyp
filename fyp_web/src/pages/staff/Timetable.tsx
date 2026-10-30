@@ -10,6 +10,7 @@ import { swalConfirmDelete, swalError, swalSuccess } from '../../utils/swal';
 import type { AcademicCalendar, Course, Programme } from '../../services/api';
 import { formatDate, getMalaysiaDate, setCampusClock, semesterWeek, semesterWeeks, weekMonday } from '../../utils/campusCalendar';
 import { StudentCourseAttendance } from '../student/StudentCourseAttendance';
+import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
 import { MorphingInfinity } from '../../components/loading-ui/morphing-infinity';
 
 const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) => {
@@ -53,6 +54,8 @@ const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) =>
 interface TimetableEvent {
   id: number | string;
   meetingId?: number | string;
+  /** Opaque meeting id used only to open a timetable notice; unlike meetingId it enables no admin editing. */
+  noticeId?: string;
   courseCode: string;
   courseName: string;
   group: string;
@@ -376,6 +379,7 @@ export const Timetable: React.FC = () => {
           mappedEvents = adminTimetable.map((slot: any) => ({
             id: slot.id,
             meetingId: slot.meeting_id,
+            noticeId: slot.meeting_id ? String(slot.meeting_id) : undefined,
             courseCode: slot.course_code,
             courseName: slot.course_name,
             group: slot.role || 'Lecture',
@@ -395,6 +399,7 @@ export const Timetable: React.FC = () => {
           mappedEvents = adminTimetable.map((slot: any) => ({
             id: slot.id,
             meetingId: slot.meeting_id,
+            noticeId: slot.meeting_id ? String(slot.meeting_id) : undefined,
             courseCode: slot.course_code,
             courseName: slot.course_name,
             group: slot.role || 'Lecture',
@@ -415,6 +420,7 @@ export const Timetable: React.FC = () => {
         setStudentCourses(studentCoursesData);
         mappedEvents = studentCoursesData.map(course => ({
           id: course.id,
+          noticeId: course.meeting_id ? String(course.meeting_id) : undefined,
           courseCode: course.course_code,
           courseName: course.course_name,
           group: course.role || 'Lecture',
@@ -431,6 +437,7 @@ export const Timetable: React.FC = () => {
         const lecturerTimetable = await apiService.getLecturerTimetable();
         mappedEvents = lecturerTimetable.map(slot => ({
           id: slot.id,
+          noticeId: slot.meeting_id ? String(slot.meeting_id) : undefined,
           courseCode: slot.course_code,
           courseName: slot.course_name,
           group: slot.role || 'Lecture',
@@ -581,6 +588,23 @@ export const Timetable: React.FC = () => {
     const term = calendar?.courses.find(c => c.course_code === event.courseCode)?.semester;
     return !term || (day >= term.start_date && day <= term.end_date);
   };
+
+  // Notification target: a timetable notice carries its meeting id. The meeting repeats weekly, so show it in the current
+  // week (or the nearest week of its semester), clear filters that would hide it, then outline its card.
+  useNotificationListRecord({
+    tab: user?.role === 'admin' ? 'admin_timetable' : user?.role === 'student' ? 'student_timetable' : 'timetable',
+    kinds: ['meeting'], ids: events.flatMap(event => event.noticeId ? [event.noticeId] : []), ready: !loading,
+    dataVersion: [events, selectedProgramme, selectedCourseCode, selectedDateStr],
+    prepare: id => {
+      const event = events.find(item => item.noticeId === id);
+      if (!event) return;
+      if (user?.role === 'admin') { setSelectedProgramme('ALL'); setSelectedCourseCode(event.courseCode); }
+      setSearchQuery('');
+      const today = formatDate(getMalaysiaDate());
+      const term = calendar?.courses.find(course => course.course_code === event.courseCode)?.semester;
+      setSelectedDateStr(!term || (today >= term.start_date && today <= term.end_date) ? today : today < term.start_date ? term.start_date : term.end_date);
+    },
+  });
 
   // Derived selected labels for exact display
   const selectedProgrammeLabel = React.useMemo(() => {
@@ -1789,6 +1813,7 @@ export const Timetable: React.FC = () => {
                           return (
                             <div
                               key={ev.id}
+                              data-notice-record={ev.noticeId}
                               style={{
                                 top: `${topPx}px`,
                                 height: `${heightPx}px`,

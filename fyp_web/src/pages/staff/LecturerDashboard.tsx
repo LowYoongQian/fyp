@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { useLiveRefresh } from '../../hooks/useLiveRefresh';
+import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
 import { isLiveConnected, subscribeLive } from '../../services/liveUpdates';
 import { swalSuccess } from '../../utils/swal';
 import { ShimmerTableRows } from '../../components/Shimmer';
@@ -170,6 +171,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
     setCourses(list); setEnrolments(enrolled);
   }, ['timetable'], String(user?.user_id));
   useLiveRefresh(async () => setRealAnnouncements(await apiService.lecturerGetAnnouncements()), ['notices'], String(user?.user_id));
+  useNotificationListRecord({ tab: 'dashboard', kinds: ['announcement'], ids: realAnnouncements.map(item => String(item.id)), ready: !overviewLoading, dataVersion: realAnnouncements });
 
   const getCourseIdentifier = (c: Course): string => {
     if (!c) return '';
@@ -1311,7 +1313,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
 
             <div className="space-y-3">
               {announcements.map((notice) => (
-                <div key={notice.id} className="min-w-0 overflow-hidden p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                <div key={notice.id} data-notice-record={String(notice.id)} className="min-w-0 overflow-hidden p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
                   <div className="flex items-center justify-between gap-3 min-w-0">
                     <span className="text-[9px] font-extrabold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full uppercase tracking-wider truncate">
                       {notice.type}

@@ -7,7 +7,7 @@ import threading
 
 import psycopg
 
-from db.database import SessionLocal
+from db.database import PSYCOPG_CONNECT_ARGS, SessionLocal
 from db.models import Course, CourseStaffAssignment, Enrolment, Lecturer, Student, User
 from utils.security import decode_token
 from domain.account_security import validate_session
@@ -118,7 +118,7 @@ async def listen_for_commits(invalidate_cache=lambda: None):
         delay = 1
         while not stopped.is_set():
             try:
-                with psycopg.connect(url, autocommit=True, connect_timeout=10) as connection:
+                with psycopg.connect(url, autocommit=True, connect_timeout=10, **PSYCOPG_CONNECT_ARGS) as connection:
                     connection.execute("LISTEN sas_live_changes")
                     installed = connection.execute("SELECT to_regprocedure('public.sas_notify_change()') IS NOT NULL").fetchone()[0]
                     if not installed:

@@ -1,5 +1,5 @@
 import { FloatingPanel } from './FloatingPanel';
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { animateUiEntrance } from '../utils/uiMotion';
 import { useAuth } from '../context/AuthContext';
 import sasLogo from '../assets/saslogo.webp';
@@ -37,10 +37,15 @@ import { accountRoleLabel } from '../utils/accountRole';
 import { broadcastAccountLogout } from '../utils/accountLogout';
 import { useNotificationInbox } from '../hooks/useNotificationInbox';
 import { NotificationBell, UnreadIndicator } from './NotificationBell';
+import { NotificationTargetContext, type PendingTarget, type TargetStatus } from '../context/NotificationTargetContext';
+import { EXACT_TARGETS, destinationTab, notificationTarget, opensDetail, unsupportedReason } from '../utils/notificationTarget';
+import { NotificationDetailDialog } from './NotificationDetailDialog';
+import { AccountAvatar } from './AccountAvatar';
+import type { InboxNotice } from '../services/notificationInbox';
 
 interface MainLayoutProps {
   currentTab: string;
-  setCurrentTab: (tab: string) => void;
+  setCurrentTab: (tab: string) => void | Promise<boolean>;
   isLoading?: boolean;
   children: React.ReactNode;
 }
@@ -62,6 +67,42 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     if (tab === currentTab) inbox.readTab(tab);
     setCurrentTab(tab);
   };
+  // Notice -> destination. A target is only applied once navigation was actually accepted, only the latest click counts,
+  // and it is scoped to the signed-in account and to its own tab, so changing either simply makes it inert.
+  const owner = `${user?.user_id}:${token}`;
+  const ownerRef = useRef(owner);
+  useEffect(() => { ownerRef.current = owner; }, [owner]);
+  const [pendingRaw, setPending] = useState<(PendingTarget & { owner: string }) | null>(null);
+  const [noteRaw, setTargetNote] = useState<{ tab: string; status: TargetStatus; owner: string; detail?: string } | null>(null);
+  const pending = pendingRaw && pendingRaw.owner === owner && pendingRaw.tab === currentTab ? pendingRaw : null;
+  const targetNote = noteRaw && noteRaw.owner === owner && noteRaw.tab === currentTab ? noteRaw : null;
+  const [detailRaw, setDetail] = useState<{ noticeId: string; tab: string; owner: string } | null>(null);
+  const detail = detailRaw && detailRaw.owner === owner && detailRaw.tab === currentTab ? detailRaw : null;
+  const latestNotice = useRef(0);
+  const resolveTarget = useCallback((nonce: number, status: TargetStatus) => {
+    if (nonce !== latestNotice.current) return;
+    setPending(null); setTargetNote(note => note && { ...note, status });
+  }, []);
+  const openNotice = async (item: InboxNotice) => {
+    const nonce = ++latestNotice.current;
+    const started = owner;
+    document.querySelectorAll('.notification-target').forEach(element => element.classList.remove('notification-target'));
+    setPending(null); setTargetNote(null); setDetail(null);
+    const target = notificationTarget(item.kind, item.payload);
+    const tab = destinationTab(item.kind, item.target_tab, user?.role);
+    const accepted = tab === currentTab ? true : await setCurrentTab(tab);
+    if (accepted === false || nonce !== latestNotice.current || ownerRef.current !== started) return;
+    if (opensDetail(target, tab, user?.role)) return setDetail({ noticeId: item.id, tab, owner: started });
+    if (target.kind === 'none') return setTargetNote({ tab, status: target.reason === 'no-id' ? 'legacy' : 'unsupported', owner: started, detail: unsupportedReason(target) });
+    if (!EXACT_TARGETS[tab]?.includes(target.kind)) return setTargetNote({ tab, status: 'unsupported', owner: started, detail: unsupportedReason(target) });
+    setTargetNote({ tab, status: 'opened', owner: started });
+    setPending({ tab, target, nonce, owner: started });
+  };
+  useEffect(() => {
+    if (targetNote?.status !== 'opened' || pending) return;
+    const timer = window.setTimeout(() => setTargetNote(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [targetNote, pending]);
   const hasUnread = (tab: string) => tab === 'admin_reports'
     ? (inbox.data?.by_tab.admin_reports_feedback || 0) + (inbox.data?.by_tab.admin_reports_mc || 0) > 0
     : (inbox.data?.by_tab[tab] || 0) > 0;
@@ -391,9 +432,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider block px-2 pb-1.5">Active Account</span>
                 <div className="flex items-center gap-2.5 p-2 bg-slate-50 rounded-xl border border-slate-100">
                   <div className="relative shrink-0">
-                    <div className="p-2 bg-brand-blue-light rounded-xl text-brand-blue">
+                    <AccountAvatar userId={user?.user_id} size={32} className="rounded-xl" label="Your profile photo" fallback={<div className="p-2 bg-brand-blue-light rounded-xl text-brand-blue">
                       <User className="h-4 w-4" />
-                    </div>
+                    </div>} />
                     <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -421,7 +462,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                     : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-brand-blue'
                 }`}
               >
-                <User className="h-4.5 w-4.5" />
+                <AccountAvatar userId={user?.user_id} size={22} className="rounded-lg" label="Your profile photo" fallback={<User className="h-4.5 w-4.5" />} />
                 <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white" />
               </button>
 
@@ -446,9 +487,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
                 }`}
               >
                 <div className="relative shrink-0">
-                  <div className="p-2 bg-brand-blue-light rounded-lg text-brand-blue shadow-xs group-hover:scale-105 transition-transform">
+                  <AccountAvatar userId={user?.user_id} size={32} className="rounded-lg shadow-xs group-hover:scale-105 transition-transform" label="Your profile photo" fallback={<div className="p-2 bg-brand-blue-light rounded-lg text-brand-blue shadow-xs group-hover:scale-105 transition-transform">
                     <User className="h-4 w-4" />
-                  </div>
+                  </div>} />
                   <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -513,7 +554,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           </div>
 
           <div className="flex items-center gap-4">
-            <NotificationBell key={`${user?.user_id}:${token}`} inbox={inbox} navigate={navigate}
+            <NotificationBell key={`${user?.user_id}:${token}`} inbox={inbox} navigate={navigate} openNotice={openNotice}
               labels={{ ...Object.fromEntries(navItems.map(item => [item.id, item.label])), admin_reports_feedback: 'Feedback Reports', admin_reports_mc: 'Medical Leave' }} />
           </div>
         </header>
@@ -523,7 +564,18 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           ? 'flex min-h-0 w-full flex-1'
           : 'flex-grow p-6 lg:p-8 max-w-7xl w-full mx-auto'
         }>
-          {children}
+          <NotificationTargetContext.Provider value={{ pending, resolve: resolveTarget }}>
+            {targetNote && (targetNote.status !== 'opened' || !pending) ? <div role="status" aria-live="polite" data-notification-target-note className="mb-4 flex items-start justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-medium text-blue-800">
+              <p>{targetNote!.status === 'opened' ? 'Opened from notification.'
+                : targetNote!.status === 'missing' ? 'That item is no longer available, or you no longer have access to it.'
+                : targetNote!.status === 'error' ? 'Could not open that item right now. Please try again.'
+                : targetNote!.status === 'legacy' ? 'This older notification has no link to a specific item, so only the page was opened.'
+                : targetNote!.detail || 'This notification type opens the page but does not point to a specific item yet.'}</p>
+              <button type="button" aria-label="Dismiss notification note" onClick={() => setTargetNote(null)} className="shrink-0 rounded-lg px-2 py-0.5 font-semibold hover:bg-blue-100">Dismiss</button>
+            </div> : null}
+            {children}
+            {detail && token ? <NotificationDetailDialog key={detail.noticeId} token={token} noticeId={detail.noticeId} onClose={() => setDetail(null)} /> : null}
+          </NotificationTargetContext.Provider>
         </main>
       </div>
 

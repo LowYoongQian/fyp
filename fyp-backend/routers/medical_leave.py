@@ -129,7 +129,7 @@ def medical_leave_page(filters: RecordFilters = Depends(), db: Session = Depends
     query = filters.apply(query, AttendanceRequest.created_at, [Course.course_name, Course.course_code,
         AttendanceRequest.reason, AttendanceRequest.id])
     return filters.fetch(query, [AttendanceRequest.created_at.desc(), AttendanceRequest.id.desc()],
-                         lambda row: serialize(row[0], row[1], row[2] or ""), stats)
+                         lambda row: serialize(row[0], row[1], row[2] or ""), stats, id_column=AttendanceRequest.id)
 
 
 @router.get("/{request_id}/proof")

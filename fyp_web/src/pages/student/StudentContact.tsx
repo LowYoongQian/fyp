@@ -25,6 +25,7 @@ import { RecordPagination } from '../../components/RecordPagination';
 import { SubmissionTime, SubmissionTimeFilter } from '../../components/SubmissionTime';
 import { matchesSubmissionRange, submissionFilterParams, type SubmissionRange } from '../../utils/submissionTime';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
+import { useNotificationRecord } from '../../hooks/useNotificationRecord';
 
 interface ComplaintTicket {
   id: string;
@@ -75,6 +76,10 @@ export const StudentContact: React.FC = () => {
   }, [currentPage, search, filterStatus, submissionRange]);
   const { data, setData, loading, error, refresh } = useLiveResource(loadTickets, JSON.stringify([pageKey, currentPage]), ['feedback']);
   const tickets = data?.items || [];
+  useNotificationRecord({ tab: 'student_contact', kinds: ['feedback'], ready: !loading && data !== undefined, dataVersion: data,
+    locate: async (id, signal) => { const result = await apiService.studentFeedbackPage({ page: 1, per_page: 8, focus_id: id }, signal); return { found: !!result.focus?.found, page: result.page }; },
+    apply: page => { setFilterStatus('All'); setSearchQuery(''); setSubmissionRange({ from: '', to: '' });
+      setPageSelection({ key: JSON.stringify([user?.user_id, 'All', '', { from: '', to: '' }]), page }); } });
 
   const downloadAttachment = async (ticket: ComplaintTicket) => {
     try {
@@ -260,6 +265,7 @@ export const StudentContact: React.FC = () => {
           paginatedTickets.map(ticket => (
             <div
               key={ticket.id}
+              data-notice-record={ticket.id}
               className="uipro-card bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 rounded-2xl p-5 transition-all space-y-4 shadow-xs"
             >
               {/* Ticket Top Meta */}

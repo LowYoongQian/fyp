@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { apiService } from '../services/api';
 import { apiErrorMessage } from '../utils/apiError';
+import { setAccountAvatar } from '../utils/accountAvatar';
 
 export function useAccountProfile() {
   const { user } = useAuth();
@@ -34,5 +35,7 @@ export function useAccountProfile() {
     queueMicrotask(() => { if (active) void retry(); });
     return () => { active = false; invalidate(); };
   }, [retry, invalidate]);
+  // Keep the shared avatar in step with the loaded/updated profile (upload or URL change refreshes the sidebar and chat).
+  useEffect(() => { if (profile && String(profile.user_id) === String(userId)) setAccountAvatar(userId, profile.avatar_url); }, [profile, userId]);
   return { profile, setProfile, loading, error, retry };
 }

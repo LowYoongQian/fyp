@@ -3,6 +3,7 @@ import { TextInput, TextArea } from '../../components/LimitedTextField';
 import { ModalLayer } from '../../components/ModalLayer';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
+import { apiErrorMessage } from '../../utils/apiError';
 import type { RiskScore, AlertLog } from '../../services/api';
 import { swalSuccess, swalError, swalInfo } from '../../utils/swal';
 import {
@@ -141,6 +142,8 @@ export const AtRisk: React.FC = () => {
   const [selectedStudentForAlert, setSelectedStudentForAlert] = useState<RiskScore | null>(null);
   const [customDraft, setCustomDraft] = useState('');
   const [sendingAlert, setSendingAlert] = useState(false);
+  const [alertId, setAlertId] = useState('');
+  const [sendError, setSendError] = useState('');
 
   useEffect(() => {
     loadData();
@@ -179,21 +182,27 @@ export const AtRisk: React.FC = () => {
 
   const openAlertModal = (score: RiskScore) => {
     setSelectedStudentForAlert(score);
+    setAlertId(crypto.randomUUID());
+    setSendError('');
     const body = `DEAR ${score.student_name?.toUpperCase()},\n\nThis is an official warning regarding your attendance in ${score.course_code}. Your current attendance rate is ${Math.round(score.attendance_rate * 100)}%${score.risk_factors ? ` (${score.risk_factors})` : ''}, which puts you at risk of falling below the university's 80% minimum requirement.\n\nContinued absences may result in a bar from final examinations. Please contact your lecturer or academic office immediately to discuss your status.\n\nBest regards,\nDepartment of Computing\nAcademic Counseling Office`;
     setCustomDraft(body);
   };
 
   const handleSendManualAlert = async () => {
-    if (!selectedStudentForAlert) return;
+    if (!selectedStudentForAlert || sendingAlert || !customDraft.trim()) return;
     setSendingAlert(true);
+    setSendError('');
     try {
-      await apiService.triggerManualAlert(selectedStudentForAlert.student_id, selectedStudentForAlert.course_id);
-      loadData();
+      // The edited draft is sent exactly as shown; the server picks the recipient (the student's verified recovery email).
+      await apiService.triggerManualAlert(selectedStudentForAlert.student_id, selectedStudentForAlert.course_id, alertId, customDraft);
+      clearApiCache();
+      void loadData();
       setSelectedStudentForAlert(null);
-      await swalSuccess('Alert Dispatched', "Warning email sent to student and CC'd to academic advisor.");
+      await swalSuccess('Accepted for sending', "The email service accepted this warning for the student's verified recovery email. Inbox delivery is not confirmed.");
     } catch (err) {
-      console.error(err);
-      await swalError('Dispatch Failed', 'Failed to send alert. Please try again.');
+      // The modal stays open with the same identifier, so a retry can never send the warning twice.
+      setSendError(apiErrorMessage(err, 'The warning could not be sent. Please try again.'));
+      void loadData();
     } finally {
       setSendingAlert(false);
     }
@@ -687,10 +696,10 @@ export const AtRisk: React.FC = () => {
                       {log.email_body}
                     </p>
                     <div className="flex justify-between items-center text-[10px] text-slate-400 dark:text-slate-500 pt-1">
-                      <span>Sent: {new Date(log.triggered_at).toLocaleDateString()}</span>
-                      <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Delivered
+                      <span>{log.delivery_status === 'accepted' && log.sent_at ? `Accepted: ${new Date(log.sent_at).toLocaleDateString()}` : `Created: ${new Date(log.triggered_at).toLocaleDateString()}`}</span>
+                      <div className={`flex items-center gap-1 font-bold ${log.delivery_status === 'accepted' ? 'text-emerald-600 dark:text-emerald-400' : log.delivery_status === 'failed' ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                        {log.delivery_status === 'accepted' && <CheckCircle2 className="h-3 w-3" />}
+                        {log.delivery_status === 'accepted' ? 'Accepted by email service' : log.delivery_status === 'failed' ? 'Not sent - failed' : log.delivery_status === 'pending' ? 'Sending...' : 'Recorded only - no email was sent'}
                       </div>
                     </div>
                   </div>
@@ -742,6 +751,8 @@ export const AtRisk: React.FC = () => {
               />
             </div>
 
+            {sendError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">{sendError}</p>}
+            <p className="text-[10px] text-slate-400">Sent to the student&apos;s verified recovery email through the email service. Acceptance does not confirm inbox delivery or that it was read.</p>
             <div className="flex justify-end gap-3 pt-1">
               <button
                 type="button"
@@ -753,11 +764,11 @@ export const AtRisk: React.FC = () => {
               <button
                 type="button"
                 onClick={handleSendManualAlert}
-                disabled={sendingAlert}
+                disabled={sendingAlert || !customDraft.trim()}
                 className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer dark:bg-blue-600 dark:hover:bg-blue-500"
               >
                 {sendingAlert ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
-                Dispatch Warning
+                {sendError ? 'Retry sending' : 'Dispatch Warning'}
               </button>
             </div>
           </div>

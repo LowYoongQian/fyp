@@ -1,4 +1,5 @@
 from domain.medical_leave import review_attendance_request
+from domain.notification_detail import notification_detail
 from domain.notification_inbox import TAB_KINDS, DEFAULT_TABS, inbox_counts, public_notification, tab_expression, notify_administrators, enqueue_notification
 from domain.record_pages import RecordFilters
 import json
@@ -584,6 +585,13 @@ def notifications(db: Session = Depends(get_db), current_user: User = Depends(ge
         "payload": json.loads(row.payload or "{}"), "is_read": row.read_at is not None,
         "created_at": iso_utc(row.created_at),
     } for row in rows]
+
+
+@router.get("/notifications/{notification_id}/detail")
+def notification_target_detail(notification_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role not in DEFAULT_TABS:
+        raise HTTPException(403, "This account role cannot access the notification inbox.")
+    return notification_detail(db, current_user, str(notification_id))
 
 
 @router.patch("/notifications/{notification_id}/read")

@@ -31,6 +31,7 @@ import { apiErrorMessage } from '../../utils/apiError';
 import { SubmissionTime, SubmissionTimeFilter } from '../../components/SubmissionTime';
 import { matchesSubmissionRange, submissionFilterParams, type SubmissionRange } from '../../utils/submissionTime';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
+import { useNotificationRecord } from '../../hooks/useNotificationRecord';
 
 interface MCRecord {
   id: string;
@@ -98,6 +99,10 @@ export const StudentMC: React.FC = () => {
   const { data, setData, loading, error, refresh } = useLiveResource(loadRecords, JSON.stringify([pageKey, currentPage]), ['medical']);
   const enrolledCourses = data?.courses || [];
   const mcList = data?.records || [];
+  useNotificationRecord({ tab: 'student_mc', kinds: ['request'], ready: !loading && data !== undefined, dataVersion: data,
+    locate: async (id, signal) => { const result = await apiService.studentMedicalPage({ page: 1, per_page: 8, focus_id: id }, signal); return { found: !!result.focus?.found, page: result.page }; },
+    apply: page => { setFilterStatus('All'); setSearchQuery(''); setSubmissionRange({ from: '', to: '' });
+      setPageSelection({ key: JSON.stringify([user?.user_id, 'All', '', { from: '', to: '' }]), page }); } });
   const selectedCourse = enrolledCourses.some(course => course.id === courseSelection) ? courseSelection : enrolledCourses[0]?.id || '';
 
   useEffect(() => {
@@ -417,7 +422,7 @@ export const StudentMC: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 text-xs">
                 {paginatedRecords.map(rec => (
-                  <tr key={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                  <tr key={rec.id} data-notice-record={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                     <td className="py-3.5 px-4 font-mono font-medium text-blue-600 dark:text-blue-400">
                       <div>{rec.id}</div>
                       <div className="mt-2 font-sans"><span className="block mb-1 text-[10px] text-slate-400">Submitted</span><SubmissionTime value={rec.submittedAt} /></div>

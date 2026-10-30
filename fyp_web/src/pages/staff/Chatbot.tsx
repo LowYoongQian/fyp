@@ -8,6 +8,7 @@ import { InfinityLoop } from '../../components/loading-ui/infinity';
 import { ChatWorkspace, type ChatTab } from '../../components/ChatWorkspace';
 import { rankChatSuggestions } from '../../utils/chatSuggestions';
 import { useAuth } from '../../context/AuthContext';
+import { AccountAvatar } from '../../components/AccountAvatar';
 
 interface ChatMessage {
   id: string;
@@ -154,20 +155,43 @@ const AssistantMessageContent: React.FC<{ text: string; presentation: AssistantP
   );
 };
 
+const WELCOME_TEXT = "Hello! I can help with attendance, students, courses, sessions, timetables, analytics, and at-risk students.";
+const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** Short "assistant is typing" cue shown before a brand-new chat's greeting; a static status when motion is reduced. */
+const TypingIndicator: React.FC = () => (
+  <div className="flex items-center gap-3 mr-auto text-left" role="status" aria-label="Assistant is typing">
+    <div className="h-8 w-8 rounded-full shrink-0 flex items-center justify-center border border-brand-blue/10 bg-brand-blue-light text-brand-blue font-sans font-bold text-[10px]">AI</div>
+    <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-none border border-slate-100 bg-white px-4 py-3.5 shadow-sm" aria-hidden="true">
+      <span className="chat-typing-dot h-1.5 w-1.5 rounded-full bg-brand-blue" /><span className="chat-typing-dot h-1.5 w-1.5 rounded-full bg-brand-blue" /><span className="chat-typing-dot h-1.5 w-1.5 rounded-full bg-brand-blue" />
+    </div>
+  </div>
+);
+
+/** Progressive greeting. This is a display effect, not streaming: the full text is already known and is exposed to assistive technology once, not per character. */
+const GreetingText: React.FC<{ text: string; onDone: () => void }> = ({ text, onDone }) => {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setShown(count => Math.min(text.length, count + 3)), 28);
+    return () => window.clearInterval(timer);
+  }, [text]);
+  useEffect(() => { if (shown >= text.length) onDone(); }, [shown, text.length, onDone]);
+  return <><span aria-hidden="true">{text.slice(0, shown)}</span><span className="sr-only">{text}</span></>;
+};
+
 const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   update: (title: string, sessionId?: string, question?: string) => void }> = ({ tab, active, questions, update }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'welcome',
-      sender: 'system',
-      text: "Hello! I can help with attendance, students, courses, sessions, timetables, analytics, and at-risk students.",
-    }
-  ]);
+  const { user } = useAuth();
+  // A saved chat restores its own messages and never shows the greeting; only a genuinely new chat gets it, once.
+  const restoring = !tab.temporary && !!(tab.restoreLatest || tab.sessionId);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => restoring ? [] : [{ id: 'welcome', sender: 'system', text: WELCOME_TEXT }]);
+  const [greeting, setGreeting] = useState<'none' | 'typing' | 'writing' | 'done'>(() => restoring ? 'none' : prefersReducedMotion() ? 'done' : 'typing');
+  const finishGreeting = useCallback(() => setGreeting('done'), []);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState('Sending...');
   const [sessionId, setSessionId] = useState<string>(tab.sessionId || '');
-  const [historyLoading, setHistoryLoading] = useState(!tab.temporary && !!(tab.restoreLatest || tab.sessionId));
+  const [historyLoading, setHistoryLoading] = useState(restoring);
   const [historyError, setHistoryError] = useState(false);
   const [historyAttempt, setHistoryAttempt] = useState(0);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -194,6 +218,12 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   }, [newestMessageId, sending, historyLoading, active]);
 
   useEffect(() => {
+    if (greeting !== 'typing') return;
+    const timer = window.setTimeout(() => setGreeting('writing'), 900);
+    return () => window.clearTimeout(timer);
+  }, [greeting]);
+
+  useEffect(() => {
     let cancelled = false;
     if (tab.temporary || (!tab.restoreLatest && !tab.sessionId)) return;
     apiService.getNaturalHistory({ limit: 30, sessionId: tab.sessionId }).then((history) => {
@@ -210,9 +240,11 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
           sender: message.role === 'user' ? 'user' : 'system',
           text: message.content,
         }));
-        setMessages((current) => (
-          current.length === 1 && current[0].id === 'welcome' ? restored : current
-        ));
+        setMessages((current) => (current.length === 0 ? restored : current));
+      } else {
+        // An existing target with no saved messages is, in effect, a new chat: greet it once.
+        setMessages((current) => (current.length === 0 ? [{ id: 'welcome', sender: 'system', text: WELCOME_TEXT }] : current));
+        setGreeting(prefersReducedMotion() ? 'done' : 'typing');
       }
     }).catch((error) => {
       console.error('Chat history could not be loaded.', error);
@@ -276,6 +308,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   const handleSend = async (questionText: string) => {
     if (!questionText.trim() || sendingRef.current || historyLoading || historyError) return;
     sendingRef.current = true;
+    setGreeting('done');
     const controller = new AbortController();
     requestRef.current = controller;
     if (!messages.some(message => message.sender === 'user')) titleRef.current = questionText.trim();
@@ -361,21 +394,22 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
       </div>
 
       {/* Main Messages View */}
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         ref={messagePaneRef}
         onScroll={handleMessageScroll}
+        aria-busy={historyLoading}
         className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/20"
       >
         {historyError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           Saved messages could not be loaded; your history has not been deleted.
           <button className="ml-2 underline font-semibold" onClick={() => { setHistoryError(false); setHistoryLoading(true); setHistoryAttempt(attempt => attempt + 1); }}>Retry history</button>
         </div>}
-        {(historyLoading || loadingOlder) && (
-          <div className="flex justify-center py-3" aria-label={historyLoading ? 'Loading chat history' : 'Loading older messages'}>
-            <InfinityLoop className="h-10 w-10 text-brand-blue" />
-          </div>
+        {loadingOlder && !historyLoading && (
+          <p role="status" className="py-1 text-center text-[10px] font-semibold text-slate-400">Loading older messages…</p>
         )}
         {messages.map((msg) => {
+          if (msg.id === 'welcome' && greeting === 'typing') return null;
           const isSystem = msg.sender === 'system';
           const presentation = isSystem ? parseAssistantPresentation(msg.text) : null;
           return (
@@ -389,7 +423,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
                   ? 'bg-brand-blue-light border-brand-blue/10 text-brand-blue'
                   : 'bg-slate-100 border-slate-200 text-slate-500'
               }`}>
-                {isSystem ? 'AI' : 'ME'}
+                {isSystem ? 'AI' : <AccountAvatar userId={user?.user_id} size={32} className="rounded-full" label="Your profile photo" fallback="ME" />}
               </div>
 
               {/* Chat Bubble */}
@@ -399,12 +433,15 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
                     ? 'bg-white border-slate-100 text-slate-700 font-sans rounded-2xl rounded-tl-none'
                     : 'bg-brand-blue border-transparent text-white text-left font-sans rounded-2xl rounded-tr-none shadow-brand-blue/10'
                 }`}>
-                  <AssistantMessageContent text={msg.text} presentation={presentation} />
+                  {msg.id === 'welcome' && greeting === 'writing'
+                    ? <GreetingText text={msg.text} onDone={finishGreeting} />
+                    : <AssistantMessageContent text={msg.text} presentation={presentation} />}
                 </div>
               </div>
             </div>
           );
         })}
+        {greeting === 'typing' && !historyLoading && <TypingIndicator />}
         {sending && (
           <div className="flex items-center gap-3 mr-auto text-left max-w-[80%]" aria-live="polite">
             <div className="h-8 w-8 rounded-full shrink-0 flex items-center justify-center border border-brand-blue/10 bg-brand-blue-light text-brand-blue font-sans font-bold text-[10px] shadow-sm">
@@ -428,6 +465,21 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
           </div>
         )}
         <div ref={bottomRef} />
+      </div>
+      {/* Initial restore of a saved chat: only a centred loader over a soft breathing glow, clipped inside the chat. */}
+      <AnimatePresence>
+        {historyLoading && (
+          <motion.div key="restore" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.25 }}
+            data-chat-restore
+            className="absolute inset-0 z-10 grid place-items-center overflow-hidden bg-white/90 dark:bg-slate-900/90">
+            <span aria-hidden="true" className="chat-restore-glow pointer-events-none absolute h-44 w-44 rounded-full bg-brand-blue/30 blur-3xl" />
+            <div className="relative flex flex-col items-center gap-3 text-brand-blue">
+              <InfinityLoop className="h-12 w-12 text-brand-blue" />
+              <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Loading...</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       </div>
 
       {/* Chat Form */}

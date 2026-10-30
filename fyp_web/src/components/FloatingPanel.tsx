@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { animateUiEntrance } from '../utils/uiMotion';
 
 /** Keep anchored menus above cards/modals and inside the visible viewport. */
-export function FloatingPanel({ children, style, onDismiss, animateEntrance = true, ...props }: HTMLAttributes<HTMLDivElement> & { onDismiss?: () => void; animateEntrance?: boolean }) {
+/** `clip` makes the panel clip its own rounded edge and leaves scrolling to an inner element; the default stays scrollable. */
+export function FloatingPanel({ children, style, onDismiss, animateEntrance = true, clip = false, ...props }: HTMLAttributes<HTMLDivElement> & { onDismiss?: () => void; animateEntrance?: boolean; clip?: boolean }) {
   const marker = useRef<HTMLSpanElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const escapeAction = useRef<() => void>(() => {});
@@ -92,5 +93,5 @@ export function FloatingPanel({ children, style, onDismiss, animateEntrance = tr
     onMouseDown={event => { event.stopPropagation(); props.onMouseDown?.(event); }}
     onClick={event => { event.stopPropagation(); props.onClick?.(event); }}
     onKeyDown={event => { props.onKeyDown?.(event); if (event.key === 'Escape') { event.stopPropagation(); escapeAction.current(); } }}
-    style={{ ...style, position: 'fixed', zIndex: 30000, margin: 0, right: 'auto', bottom: 'auto', visibility: 'hidden', overflowY: 'auto' }}>{children}</div>, document.body)}</>;
+    style={{ ...style, position: 'fixed', zIndex: 30000, margin: 0, right: 'auto', bottom: 'auto', visibility: 'hidden', overflowY: clip ? 'hidden' : 'auto' }}>{children}</div>, document.body)}</>;
 }

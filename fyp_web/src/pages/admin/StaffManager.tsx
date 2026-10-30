@@ -24,6 +24,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
+import { StaffDetailsDialog } from '../../components/StaffDetailsDialog';
 
 const staffRoles = ['Lecturer', 'Tutor', 'Practical'];
 
@@ -93,6 +94,7 @@ export const StaffManager: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<AdminStaff | null>(null);
+  const [detailsStaff, setDetailsStaff] = useState<AdminStaff | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -237,6 +239,7 @@ export const StaffManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {detailsStaff && <StaffDetailsDialog key={detailsStaff.id} staff={detailsStaff} onClose={() => setDetailsStaff(null)} />}
       {formSubmitting && !isCreateOpen && !isEditOpen && <p role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-700">Saving changes… Pending server confirmation.</p>}
       {/* Top Header Card */}
       <div className="uipro-card bg-white/75 backdrop-blur-md relative overflow-hidden">
@@ -311,6 +314,15 @@ export const StaffManager: React.FC = () => {
                     <td className="py-3.5 px-4 text-slate-500 font-medium capitalize">{staff.role || 'Lecturer'}</td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="inline-flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDetailsStaff(staff)}
+                          aria-label={`View details for ${staff.name}`}
+                          title="View details"
+                          className="p-2 bg-slate-50 hover:bg-brand-blue-light hover:text-brand-blue rounded-lg border border-slate-100 transition-all text-slate-500 cursor-pointer"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
                         <button
                           onClick={() => handleOpenEdit(staff)}
                           title="Edit staff profile"

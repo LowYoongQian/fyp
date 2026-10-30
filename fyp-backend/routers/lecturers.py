@@ -5,8 +5,9 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -32,6 +33,7 @@ from domain.scheduler import (
     session_end_utc,
     slots_for_assignment,
 )
+from integrations import resend_mail
 from integrations.announcement_files import ALLOWED_TYPES
 from integrations.announcement_files import download as download_announcement_file
 from integrations.announcement_files import upload as upload_announcement_file
@@ -51,6 +53,10 @@ def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
 class AlertCreate(BaseModel):
     student_id: str
     course_id: str
+    # Chosen by the client once per warning and reused on retries/double clicks: it is the logical warning identifier
+    # and the base of the email provider's idempotency key.
+    alert_id: str | None = None
+    email_body: str | None = Field(default=None, max_length=5000)
 
 @router.get("/me/courses")
 def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
@@ -123,37 +129,92 @@ def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depe
             "email_body": a.email_body,
             "triggered_by": a.triggered_by,
             "triggered_at": iso_utc(a.triggered_at),
-            "sent_at": iso_utc(a.sent_at),
+            # Rows from before real sending carry a sent_at that never meant "emailed"; only provider acceptance counts now.
+            "sent_at": iso_utc(a.sent_at) if a.delivery_status == "accepted" else None,
+            "delivery_status": a.delivery_status,
+            "failure_code": a.failure_code,
         })
     return result
+
+_ALERT_FAILURES = {
+    "not_configured": "The email service is not configured.",
+    "timeout": "The email service did not answer in time. Nothing is confirmed; you can retry safely.",
+    "network": "The email service could not be reached. You can retry safely.",
+    "rate_limited": "The email service is busy. Please wait a moment and retry.",
+    "provider_error": "The email service had an error. You can retry safely.",
+    "rejected": "The email service rejected this message. Check the sender configuration or the recipient address.",
+    "no_acknowledgement": "The email service did not confirm the message. You can retry safely.",
+}
+
+
+def _warning_text(student: Student, course: Course) -> str:
+    return (
+        f"Dear {student.name},\n\n"
+        f"This is a warning about your attendance in {course.course_name} ({course.course_code}). "
+        f"Your attendance is below the 80% threshold. Please contact your lecturer or the academic office.\n\n"
+        f"Regards,\nLecturer / Academic Office"
+    )
+
+
+def _alert_result(alert: Alert) -> dict:
+    return {"status": alert.delivery_status, "alert_id": alert.id, "delivery_status": alert.delivery_status,
+            "sent_at": iso_utc(alert.sent_at) if alert.delivery_status == "accepted" else None}
+
 
 @router.post("/me/alerts")
 def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        
     student = get_or_404(db, Student, body.student_id, "Student")
     course = get_or_404(db, Course, body.course_id, "Course")
-        
-    email_body = (
-        f"DEAR {student.name.upper()},\n\n"
-        f"This is an automated warning regarding your low attendance in {course.course_name} ({course.course_code}). "
-        f"Your current attendance rate is below the 80% threshold. Please meet with your academic counselor immediately.\n\n"
-        f"Regards,\nLecturer / Academic Office"
-    )
-    
-    new_alert = Alert(
-        student_id=body.student_id,
-        course_id=body.course_id,
-        alert_type="manual_warning",
-        email_body=email_body,
-        triggered_by="lecturer",
-        triggered_at=utcnow(),
-        sent_at=utcnow()
-    )
-    db.add(new_alert)
+    # Server-side scope: the lecturer must teach this course and the student must be enrolled in it; no client recipient exists.
+    if course.id not in set(my_course_ids(db, lecturer.id)):
+        raise HTTPException(403, "You are not assigned to this course.")
+    if not db.query(Enrolment.id).filter(Enrolment.student_id == student.id, Enrolment.course_id == course.id).first():
+        raise HTTPException(404, "This student is not enrolled in the selected course.")
+    account = db.get(User, student.user_id) if student.user_id else None
+    address = (account.recovery_email or "").strip() if account else ""
+    if not address or not account.recovery_email_verified:
+        raise HTTPException(422, "This student has no verified recovery email, so no warning was sent. Ask them to verify one in their profile.")
+    if not resend_mail.configured():
+        raise HTTPException(503, _ALERT_FAILURES["not_configured"])
+    try:
+        alert_id = str(uuid.UUID(body.alert_id)) if body.alert_id else str(uuid.uuid4())
+    except ValueError:
+        raise HTTPException(422, "Invalid warning identifier.")
+    text = (body.email_body or "").strip() or _warning_text(student, course)
+
+    alert = db.query(Alert).filter(Alert.id == alert_id).with_for_update().first()
+    if alert is None:
+        alert = Alert(id=alert_id, student_id=student.id, course_id=course.id, alert_type="manual_warning", email_body=text,
+                      triggered_by="lecturer", triggered_at=utcnow(), delivery_status="pending")
+        db.add(alert)
+        try:
+            db.flush()
+        except IntegrityError:  # a concurrent double click created it first
+            db.rollback()
+            alert = db.query(Alert).filter(Alert.id == alert_id).with_for_update().first()
+    if alert is None or alert.student_id != student.id or alert.course_id != course.id or alert.triggered_by != "lecturer":
+        raise HTTPException(409, "This warning identifier belongs to a different warning.")
+    if alert.delivery_status == "accepted":
+        db.rollback()
+        return _alert_result(alert)
+    attempted = alert.attempted_at
+    if alert.delivery_status == "pending" and attempted and (utcnow() - attempted).total_seconds() < 30:
+        db.rollback()
+        raise HTTPException(409, "This warning is already being sent. Wait a moment before retrying.")
+    alert.delivery_status, alert.attempted_at, alert.failure_code = "pending", utcnow(), None
+    db.commit()  # the network call below runs without any database lock
+
+    try:
+        message_id = resend_mail.send(address, f"Attendance warning: {course.course_code}", alert.email_body,
+                                      f"attendance-warning-{alert.id}")
+    except resend_mail.EmailError as error:
+        alert.delivery_status, alert.failure_code = "failed", error.code
+        db.commit()
+        raise HTTPException(error.status, _ALERT_FAILURES.get(error.code, "The warning could not be sent."))
+    alert.delivery_status, alert.provider_message_id, alert.failure_code, alert.sent_at = "accepted", message_id, None, utcnow()
     db.commit()
-    db.refresh(new_alert)
-    return {"status": "success", "alert_id": new_alert.id}
+    return _alert_result(alert)
 
 
 @router.get("/me/timetable")
@@ -198,6 +259,7 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
                     "course_name": c.course_name,
                     "credit_hours": c.credit_hours,
                     "schedule_day": lect_slot["day"],
+                    "meeting_id": lect_slot.get("meeting_id"),
                     "schedule_start": lect_slot["start"],
                     "schedule_end": lect_slot["end"],
                     "schedule_room": lect_slot["room"],
@@ -223,6 +285,7 @@ def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = D
                     "credit_hours": c.credit_hours,
                     "class_group": slot["class_group"],
                     "schedule_day": slot["day"],
+                    "meeting_id": slot.get("meeting_id"),
                     "schedule_start": slot["start"],
                     "schedule_end": slot["end"],
                     "schedule_room": slot["room"],

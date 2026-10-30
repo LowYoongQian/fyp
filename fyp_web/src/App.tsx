@@ -176,15 +176,18 @@ const DashboardContent: React.FC = () => {
     }
   }, [currentTab, user]);
 
-  const handleTabChange = async (tab: string) => {
-    if (!user || !ROLE_TABS[user.role].has(tab) || tab === currentTab || navigating.current) return;
+  // Resolves true once `tab` is the current tab, false when navigation was refused or cancelled (e.g. unsaved-form guard).
+  const handleTabChange = async (tab: string): Promise<boolean> => {
+    if (!user || !ROLE_TABS[user.role].has(tab) || navigating.current) return false;
+    if (tab === currentTab) return true;
     navigating.current = true;
     const allowed = !leaveGuard.current || await leaveGuard.current();
     navigating.current = false;
-    if (!allowed) return;
+    if (!allowed) return false;
     setTabLoading(false);
     setCurrentTab(tab);
     if (tabFromLocation() !== tab) writeTabLocation(tab);
+    return true;
   };
 
   if (loading) {

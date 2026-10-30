@@ -2,6 +2,7 @@ import { FloatingPanel } from '../../components/FloatingPanel';
 import { TextInput, TextArea } from '../../components/LimitedTextField';
 import { ModalLayer } from '../../components/ModalLayer';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNotificationRecord } from '../../hooks/useNotificationRecord';
 import { apiService } from '../../services/api';
 import type { StudentFeedbackReport, MCReportItem } from '../../services/api';
 import {
@@ -168,6 +169,22 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
   const { data, setData, loading, error, refresh: loadData } = useLiveResource(loadReports, scope, [subTab === 'feedback' ? 'feedback' : 'medical']);
   const feedbackList = data?.feedback || [];
   const mcList = data?.mc || [];
+  const noReset: SubmissionRange = { from: '', to: '' };
+  useNotificationRecord({
+    tab: subTab === 'feedback' ? 'admin_reports_feedback' : 'admin_reports_mc',
+    kinds: subTab === 'feedback' ? ['feedback'] : ['request', 'attendance_record'],
+    ready: !loading && data !== undefined, dataVersion: data,
+    locate: async (id, signal) => {
+      const result = subTab === 'feedback' ? await apiService.adminFeedbackPage({ page: 1, per_page: rowsPerPage, focus_id: id }, signal)
+        : await apiService.adminMedicalPage({ page: 1, per_page: rowsPerPage, focus_id: id }, signal);
+      return { found: !!result.focus?.found, page: result.page };
+    },
+    apply: page => {
+      setFeedbackStatusFilter('All'); setFeedbackCategoryFilter('All'); setFeedbackSearch(''); setFeedbackRange(noReset);
+      setMcStatusFilter('All'); setMcSearch(''); setMcRange(noReset);
+      setPageSelection({ key: JSON.stringify([user?.user_id, subTab, 'All', 'All', 'All', '', noReset, noReset]), page });
+    },
+  });
   const setSelectedFeedback = (report: StudentFeedbackReport | null) => setFeedbackSnapshot(report ? { scope, report } : null);
   const setSelectedMc = (report: MCReportItem | null) => setMcSnapshot(report ? { scope, report } : null);
   const selectedFeedback = feedbackSnapshot?.scope === scope ? feedbackList.find(row => row.id === feedbackSnapshot.report.id) || feedbackSnapshot.report : null;
@@ -346,7 +363,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
                   {paginatedFeedback.map((f) => (
-                    <tr key={f.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                    <tr key={f.id} data-notice-record={f.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="py-4 px-4 font-medium text-slate-900 dark:text-white">
                         <div>{f.student_name}</div>
                         <div className="text-[11px] text-slate-400 font-mono">{f.student_code}</div>
@@ -410,7 +427,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
                   {paginatedMc.map((m) => (
-                    <tr key={`${m.source || 'attendance'}:${m.id}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                    <tr key={`${m.source || 'attendance'}:${m.id}`} data-notice-record={m.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="py-4 px-4 font-medium text-slate-900 dark:text-white">
                         <div>{m.student_name}</div>
                         <div className="text-[11px] text-slate-400 font-mono">{m.student_code}</div>

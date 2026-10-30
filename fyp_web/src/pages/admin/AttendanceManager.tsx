@@ -2,7 +2,9 @@ import { FloatingPanel } from '../../components/FloatingPanel';
 import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { apiService } from '../../services/api';
+import { api, apiService } from '../../services/api';
+import { useNotificationTarget } from '../../context/NotificationTargetContext';
+import { revealNotificationTarget } from '../../utils/notificationTarget';
 import { attendanceDateTime, attendanceSource } from '../../utils/attendanceTime';
 import type { AdminSession, AdminAttendanceRecord } from '../../services/api';
 import { swalSuccess, swalError } from '../../utils/swal';
@@ -134,6 +136,31 @@ export const AttendanceManager: React.FC = () => {
     fetchSessions();
   }, []);
 
+  // Notification target: find the exact class among ALL loaded sessions (refetching once if it is newer than the cache),
+  // clear filters, jump to its page, then outline it. Nothing else is ever highlighted.
+  const { pending, resolve } = useNotificationTarget('admin_attendance');
+  const [focusSession, setFocusSession] = useState<{ id: string; nonce: number } | null>(null);
+  useEffect(() => {
+    if (!pending || pending.target.kind !== 'class' || loading) return;
+    const { classId } = pending.target, { nonce } = pending;
+    let cancelled = false;
+    void (async () => {
+      let list = sessions;
+      if (!list.some(item => String(item.id) === classId)) {
+        try { list = (await api.get<AdminSession[]>('/admin/sessions', { timeout: 15000 })).data; } catch { list = []; }
+        if (cancelled) return;
+        if (list.some(item => String(item.id) === classId)) setSessions(list);
+      }
+      const index = list.findIndex(item => String(item.id) === classId);
+      if (index < 0) return resolve?.(nonce, 'missing');
+      setSearchQuery(''); setStatusFilter('all'); setSelectedCourse('all'); setSelectedGroup('all'); setSelectedStaff('all');
+      setPage(Math.floor(index / limit) + 1);
+      setFocusSession({ id: classId, nonce });
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending?.nonce, loading]);
+
   const fetchSessions = async () => {
     setLoading(true);
     setError(null);
@@ -230,6 +257,15 @@ export const AttendanceManager: React.FC = () => {
   const paginatedSessions = useMemo(() => {
     return filteredSessions.slice(startIndex, endIndex);
   }, [filteredSessions, startIndex, endIndex]);
+
+  useEffect(() => {
+    if (!focusSession) return;
+    const row = document.querySelector<HTMLElement>(`[data-session-id="${focusSession.id}"]`);
+    if (!row) return;
+    revealNotificationTarget(row);
+    resolve?.(focusSession.nonce, 'opened');
+    setFocusSession(null);
+  }, [focusSession, paginatedSessions, resolve]);
 
   const handlePageChange = (newPage: number) => {
     if (newPage === page || newPage < 1 || newPage > totalPages) return;
@@ -606,7 +642,7 @@ export const AttendanceManager: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100/50">
                   {paginatedSessions.map((session) => (
-                    <tr key={session.id} className="hover:bg-slate-50/50 transition-colors group">
+                    <tr key={session.id} data-session-id={String(session.id)} className="hover:bg-slate-50/50 transition-colors group">
                       <td className="py-3.5 px-4 font-semibold text-slate-800">
                         <div className="flex items-center gap-2">
                           <BookOpen className="h-3.5 w-3.5 text-slate-400 shrink-0" />

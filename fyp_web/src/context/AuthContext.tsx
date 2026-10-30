@@ -1,5 +1,6 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { api, apiService, clearApiCache } from '../services/api';
+import { clearAccountAvatars } from '../utils/accountAvatar';
 import { verifySecondFactor } from '../utils/secondFactor';
 import { applyThemePreference, getAccountThemePreference, isThemePreference, resetThemeOnLogout, saveThemePreference } from '../theme/themePreference';
 import { setActiveLanguage } from '../i18n/i18n';
@@ -48,6 +49,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     sessionStorage.removeItem('auth_user');
     sessionStorage.removeItem('auth_session_expires_at');
     clearApiCache();
+    clearAccountAvatars();
     setToken(null);
     setUser(null);
     resetThemeOnLogout();

@@ -8,7 +8,8 @@ import { ShimmerText } from './Shimmer';
 
 type Setup = { secret: string; qr_data_url: string };
 type Session = { id: string; device_label: string; created_at: string; current: boolean };
-const button = 'rounded-xl px-4 py-2.5 text-xs font-semibold bg-blue-600 text-white disabled:opacity-50';
+const button = 'uipro-button uipro-button-primary';
+const secondaryButton = 'uipro-button uipro-button-secondary';
 const input = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm';
 
 export function AccountSecurityPanel({ enabled: initialEnabled }: { enabled: boolean }) {
@@ -55,11 +56,11 @@ export function AccountSecurityPanel({ enabled: initialEnabled }: { enabled: boo
     <p className="text-xs text-slate-500">Use an authenticator code as well as your password when signing in.</p>
     <div className="flex flex-wrap gap-2">{!enabled ? <button type="button" className={button} onClick={() => open('setup')}>Set up 2FA</button> : <>
       <button type="button" className={button} onClick={() => open('recovery-codes')}>Replace recovery codes</button>
-      <button type="button" className="rounded-xl border px-4 py-2 text-xs" onClick={() => open('disable')}>Disable 2FA</button></>}</div>
+      <button type="button" className={secondaryButton} onClick={() => open('disable')}>Disable 2FA</button></>}</div>
     <div className="border-t border-slate-200 pt-4 space-y-3"><h5 className="text-xs font-bold flex gap-2"><Monitor size={16} />Signed-in devices</h5>
       {sessionError ? <p role="alert" className="text-xs text-red-600">{sessionError}</p> : sessions === null ? <div role="status" aria-label="Checking your devices" aria-busy="true" className="space-y-2"><ShimmerText height="h-8" /><ShimmerText height="h-8" /></div> : sessions.map(session => <div key={session.id} className="flex justify-between gap-3 rounded-xl border bg-white p-3 text-xs">
         <span>{session.device_label}<span className="block mt-1 text-slate-500">{new Date(session.created_at).toLocaleString()}</span></span>{session.current && <span className="text-blue-600">This device</span>}</div>)}
-      <button type="button" className="text-xs font-semibold text-blue-600" onClick={() => open('logout-all')}>Sign out all devices</button></div>
+      <button type="button" className={secondaryButton} onClick={() => open('logout-all')}>Sign out all devices</button></div>
     {!action && error && <p role="alert" className="text-xs text-red-600">{error}</p>}
     {action && <ModalLayer className="fixed inset-0 flex items-center justify-center bg-slate-900/50 p-4">
       <form role="dialog" aria-modal="true" aria-labelledby="security-title" onSubmit={submit} onKeyDown={event => {
@@ -74,13 +75,13 @@ export function AccountSecurityPanel({ enabled: initialEnabled }: { enabled: boo
           {!codes.length && <button type="button" aria-label="Close security dialog" disabled={busy} onClick={close}><X size={18} /></button>}</div>
         {codes.length ? <><p className="text-sm text-slate-500">Shown only once; each code works once in place of an authenticator code; keep them somewhere safe outside this browser.</p>
           <div className="grid gap-2 rounded-xl bg-slate-50 p-4 font-mono text-xs select-all">{codes.map(item => <span key={item}>{item}</span>)}</div>
-          <button type="button" className="flex gap-2 text-blue-600 text-sm" onClick={async () => { try { await navigator.clipboard.writeText(codes.join('\n')); setCopied(true); } catch { setError('Select and copy the codes manually.'); } }}><Copy size={16} />{copied ? 'Copied' : 'Copy codes'}</button>
+          <button type="button" className={`${secondaryButton} gap-2`} onClick={async () => { try { await navigator.clipboard.writeText(codes.join('\n')); setCopied(true); } catch { setError('Select and copy the codes manually.'); } }}><Copy size={16} />{copied ? 'Copied' : 'Copy codes'}</button>
           <button type="button" className={button} onClick={close}>I have saved my codes</button></> : <>
           <p className="text-sm text-slate-500">{action === 'logout-all' || action === 'disable' ? 'This will end all sessions, including this one.' : 'Security changes are saved only after verification.'}</p>
           {setup ? <><img className="mx-auto w-44 h-44 bg-white" src={setup.qr_data_url} alt="Scan with your authenticator app" />
             <p className="text-xs text-slate-500">Scan this QR code or enter this setup key in your authenticator app:</p><code className="block break-all bg-slate-50 rounded-xl p-3 text-xs select-all">{setup.secret}</code></> : <label className="block text-xs font-semibold">Current password<TextInput autoFocus disabled={busy} showCounter={false} className={`${input} mt-2`} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required /></label>}
           {(setup || action === 'disable' || action === 'recovery-codes') && <label className="block text-xs font-semibold">{setup ? '6-digit authenticator code' : 'Authenticator or recovery code'}<TextInput autoFocus={!!setup} disabled={busy} showCounter={false} className={`${input} mt-2`} maxLength={32} autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} required /></label>}
-          <div className="flex gap-3 pt-2"><button type="button" disabled={busy} onClick={close} className="rounded-xl border px-4 py-2 text-sm">Cancel</button><button disabled={busy} className={`${button} flex-1`}>{busy ? 'Verifying…' : setup ? 'Verify & enable' : 'Continue'}</button></div></>}
+          <div className="flex gap-3 pt-2"><button type="button" disabled={busy} onClick={close} className={secondaryButton}>Cancel</button><button disabled={busy} className={`${button} flex-1`}>{busy ? 'Verifying…' : setup ? 'Verify & enable' : 'Continue'}</button></div></>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       </form>
     </ModalLayer>}

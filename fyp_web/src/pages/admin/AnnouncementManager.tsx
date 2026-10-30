@@ -1,4 +1,5 @@
 import { FloatingPanel } from '../../components/FloatingPanel';
+import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
 import { TextInput, TextArea } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -537,6 +538,7 @@ export const AnnouncementManager: React.FC = () => {
   };
 
   const sortedAnnouncements = getSortedAnnouncements();
+  useNotificationListRecord({ tab: 'admin_announcements', kinds: ['announcement'], ids: announcements.map(item => String(item.id)), ready: !loading, dataVersion: announcements });
 
   return (
     <div className="space-y-6">
@@ -584,6 +586,7 @@ export const AnnouncementManager: React.FC = () => {
             {sortedAnnouncements.map((ann) => (
               <div
                 key={ann.id}
+                data-notice-record={String(ann.id)}
                 className={`uipro-card relative group flex flex-col justify-between hover:shadow-lg hover:scale-[1.01] transition-all duration-300 overflow-hidden !p-0 ${
                   ann.is_draft ? 'border border-dashed border-amber-400/60 bg-amber-50/10' : ''
                 }`}

@@ -1,5 +1,7 @@
 import { AccountSecurityPanel } from './AccountSecurityPanel';
 import { PushQuietHours } from './PushQuietHours';
+import { minutesOf, timeOf, quietHoursError } from '../utils/quietHours';
+import { CustomSwitch } from './CustomSwitch';
 import { FloatingPanel } from './FloatingPanel';
 import { TextInput } from './LimitedTextField';
 import { ModalLayer } from './ModalLayer';
@@ -23,38 +25,6 @@ interface UserSettingsPageProps {
   onClose: () => void;
   registerLeaveGuard: (guard: (() => Promise<boolean>) | null) => void;
 }
-
-// ─── Custom Animated Switch Widget (100% Controlled, Bulletproof Alignment) ─────────────
-const CustomSwitch: React.FC<{
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  disabled?: boolean;
-  id?: string;
-  ariaLabel?: string;
-}> = ({ checked, onChange, disabled, id, ariaLabel }) => {
-  return (
-    <button
-      type="button"
-      id={id}
-      role="switch"
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-7 w-12 shrink-0 items-center p-0.5 rounded-full border transition-colors duration-200 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb] shadow-inner ${
-        checked
-          ? 'bg-[#2563eb] border-[#1d4ed8]'
-          : 'bg-slate-200 border-slate-300'
-      }`}
-    >
-      <span
-        className={`inline-block h-5 w-5 rounded-full bg-white shadow-md transition-transform duration-200 ease-in-out ${
-          checked ? 'translate-x-5' : 'translate-x-0'
-        }`}
-      />
-    </button>
-  );
-};
 
 // ─── Custom Segmented Control Widget for Theme (Blue Accent) ────────────────
 const CustomSegmentedThemeControl: React.FC<{
@@ -265,6 +235,13 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
 
   const [recoveryPromptDismissed, setRecoveryPromptDismissed] = useState(false);
 
+  // Quiet hours live in the same draft as every other preference and are saved only by Save Preferences.
+  const [quietEnabled, setQuietEnabled] = useState(false);
+  const [quietStart, setQuietStart] = useState('22:00');
+  const [quietEnd, setQuietEnd] = useState('07:00');
+  const quietTimezone = profile?.push_timezone || 'Asia/Kuala_Lumpur';
+  const quietError = quietHoursError(quietEnabled, quietStart, quietEnd);
+
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const pendingLeave = useRef<((allowed: boolean) => void) | null>(null);
 
@@ -314,6 +291,10 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
         emailNotifications: profile.email_notifications ?? true,
         pushNotifications: profile.push_notifications ?? true,
         inAppNotifications: profile.in_app_notifications ?? true,
+        quietEnabled: profile.push_quiet_enabled ?? false,
+        quietStart: timeOf(profile.push_quiet_start ?? 1320),
+        quietEnd: timeOf(profile.push_quiet_end ?? 420),
+        quietTimezone: profile.push_timezone || 'Asia/Kuala_Lumpur',
 
         recoveryPromptDismissed: recoveryReminderPreference(userId).pending
           ? recoveryReminderPreference(userId).dismissed : profile.recovery_prompt_dismissed ?? false,
@@ -332,6 +313,9 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
       setEmailNotifications(snapshot.emailNotifications);
       setPushNotifications(snapshot.pushNotifications);
       setInAppNotifications(snapshot.inAppNotifications);
+      setQuietEnabled(snapshot.quietEnabled);
+      setQuietStart(snapshot.quietStart);
+      setQuietEnd(snapshot.quietEnd);
 
       setRecoveryPromptDismissed(snapshot.recoveryPromptDismissed);
     }
@@ -347,6 +331,9 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
     initialState.emailNotifications !== emailNotifications ||
     initialState.pushNotifications !== pushNotifications ||
     initialState.inAppNotifications !== inAppNotifications ||
+    initialState.quietEnabled !== quietEnabled ||
+    initialState.quietStart !== quietStart ||
+    initialState.quietEnd !== quietEnd ||
 
     initialState.recoveryPromptDismissed !== recoveryPromptDismissed
   ) : false;
@@ -409,7 +396,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
   };
 
   const handleSaveAll = async () => {
-    if (!initialState || loading || error || saving) return;
+    if (!initialState || loading || error || saving || quietError) return;
     setSaving(true);
     try {
       const userId = user?.user_id;
@@ -421,6 +408,10 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
         email_notifications: emailNotifications,
         push_notifications: pushNotifications,
         in_app_notifications: inAppNotifications,
+        push_quiet_enabled: quietEnabled,
+        push_quiet_start: minutesOf(quietStart),
+        push_quiet_end: minutesOf(quietEnd),
+        push_timezone: quietTimezone,
 
         ...(user?.role === 'student' ? { recovery_prompt_dismissed: recoveryPromptDismissed } : {}),
       });
@@ -439,6 +430,10 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
         emailNotifications,
         pushNotifications,
         inAppNotifications,
+        quietEnabled,
+        quietStart,
+        quietEnd,
+        quietTimezone,
 
         recoveryPromptDismissed,
       });
@@ -507,7 +502,8 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
                 </label>
               )}
               <AccountSecurityPanel enabled={profile?.two_factor_enabled ?? false} />
-              <PushQuietHours profile={profile} />
+              <PushQuietHours enabled={quietEnabled} start={quietStart} end={quietEnd} timezone={quietTimezone} disabled={saving}
+                error={quietError} onEnabledChange={setQuietEnabled} onStartChange={setQuietStart} onEndChange={setQuietEnd} />
 
               {/* SECTION B: APPEARANCE & THEME */}
               <div className="p-5 border border-slate-200 bg-slate-50/80 rounded-2xl space-y-4">
@@ -607,7 +603,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
           </button>
           <button
             type="button"
-            disabled={saving || loading || !!error || !initialState || !isDirty}
+            disabled={saving || loading || !!error || !initialState || !isDirty || !!quietError}
             onClick={handleSaveAll}
             className="min-h-[44px] px-6 rounded-xl text-xs font-semibold bg-[#2563eb] text-white hover:bg-[#1d4ed8] shadow-md shadow-blue-500/20 disabled:opacity-50 flex items-center gap-2 cursor-pointer transition-all"
           >

@@ -182,7 +182,8 @@ def feedback_page(db, filters, student_id=None, category="All"):
     query = filters.apply(query, StudentFeedback.created_at, [StudentFeedback.id, StudentFeedback.student_name,
         StudentFeedback.student_code, StudentFeedback.subject, StudentFeedback.message, StudentFeedback.category])
     return filters.fetch(query, [StudentFeedback.created_at.desc(), StudentFeedback.id.desc()],
-        lambda row: StudentFeedbackResponse.model_validate(row).model_dump(exclude={"admin_notes"} if student_id else set()), stats)
+        lambda row: StudentFeedbackResponse.model_validate(row).model_dump(exclude={"admin_notes"} if student_id else set()), stats,
+        id_column=StudentFeedback.id)
 
 
 @student_router.get("/page")
@@ -228,7 +229,7 @@ def admin_mc_page(filters: RecordFilters = Depends(), db: Session = Depends(get_
     query = filters.apply(query, reports.c.timestamp, [reports.c.student_name, reports.c.student_code,
         reports.c.course_name, reports.c.course_code])
     return filters.fetch(query, [reports.c.timestamp.desc(), reports.c.source, reports.c.id.desc()],
-                         lambda row: dict(row._mapping))
+                         lambda row: dict(row._mapping), id_column=reports.c.id)
 
 
 @student_router.get("/{feedback_id}/attachment")

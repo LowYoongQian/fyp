@@ -9,6 +9,7 @@ from db.models import (
     AttendanceRecord,
     ClassSession,
     Course,
+    CourseStaffAssignment,
     Enrolment,
     Lecturer,
     RiskScore,
@@ -18,6 +19,7 @@ from domain.audit import log_admin_action
 from schemas import AdminStaffCreate, AdminStaffUpdate, MessageResponse
 from utils.db_helpers import ensure_unique, get_or_404, require_email_domain
 from utils.security import hash_password, require_admin
+from utils.timeutil import iso_utc
 
 router = APIRouter(prefix="/admin", tags=["Admin Staff"])
 
@@ -55,6 +57,46 @@ def get_staff(
             "role": l.role
         })
     return {"items": result, "total": total}
+
+@router.get("/staff/{lecturer_id}/details")
+def get_staff_details(
+    lecturer_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    # Explicit allowlist: the User row also holds password, recovery, reset and session secrets.
+    lecturer = get_or_404(db, Lecturer, lecturer_id, "Staff profile")
+    user = lecturer.user
+    # One entry per course: the course's own lecturer and any assignment rows, without inventing either.
+    courses = {}
+    for course in db.query(Course).filter(Course.lecturer_id == lecturer.id).all():
+        courses[course.id] = {"code": course.course_code, "name": course.course_name, "roles": ["Primary lecturer"]}
+    for assignment in (db.query(CourseStaffAssignment).options(joinedload(CourseStaffAssignment.course))
+                       .filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()):
+        if not assignment.course:
+            continue
+        entry = courses.setdefault(assignment.course.id, {"code": assignment.course.course_code,
+                                                           "name": assignment.course.course_name, "roles": []})
+        if assignment.role not in entry["roles"]:
+            entry["roles"].append(assignment.role)
+    return {
+        "identity": {
+            "lecturer_id": lecturer.id, "user_id": lecturer.user_id, "name": lecturer.name,
+            "staff_id": lecturer.staff_id, "email": user.email if user else None,
+            "staff_role": lecturer.role, "avatar_url": user.avatar_url if user else None,
+        },
+        "account": {
+            "account_role": user.role, "status": user.status, "created_at": iso_utc(user.created_at),
+            "last_login_at": iso_utc(user.last_login_at), "two_factor_enabled": user.two_factor_enabled,
+            "recovery_email": user.recovery_email, "recovery_email_verified": user.recovery_email_verified,
+            "preferences": {
+                "theme": user.theme_preference, "font_size": user.font_size_preference, "language": user.language_preference,
+                "notifications": user.notifications_enabled, "email_notifications": user.email_notifications,
+                "push_notifications": user.push_notifications, "in_app_notifications": user.in_app_notifications,
+            },
+        } if user else None,
+        "courses": sorted(courses.values(), key=lambda c: c["code"]),
+    }
 
 @router.post("/staff", response_model=MessageResponse, status_code=201)
 def create_staff(

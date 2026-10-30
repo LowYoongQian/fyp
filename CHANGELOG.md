@@ -1,5 +1,231 @@
 # Changelog
 
+## Prepared-statement source follow-up (DB-01) — 2026-10-30 14:40 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; no code, deployment or restart.
+
+- The producer of the Supavisor 42P05 errors is **unknown**. The local backend (direct host, port 5432, running the patched code since uvicorn's automatic reload at 14:27:08) is unlikely to be it. Circumstantial lead: a hosted or other instance of this backend through the Supabase pooler, since committed code has no preparation policy and runs 60-second loops that match the error timing, and the ignored deployment notes recommend pooler port 6543. Not confirmed.
+- The fix touches only `db/database.py` and `domain/live_updates.py` (+9/-2), so it can be committed and deployed alone. A rollout plan and the evidence needed to close the issue (hosted `DATABASE_URL` host/port and deployed commit, then a bounded clean Supabase log window) are in the review report. Nothing was deployed; the push is the user's.
+- **Not verified:** Supabase log correlation (no Supabase tools in my session), hosted environment and revision, the dashboard error breakdown, and any post-rollout logs.
+
+## Prepared-statement runtime review — 2026-10-30 14:38 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Source review confirms prepare_threshold=None on the owned SQLAlchemy/Psycopg engine and raw LISTEN connection; independent focused configuration tests: 4 passed, 3 PostgreSQL tests skipped. No new confirmed defect in those changed connection settings.
+- New screenshot shows SQLSTATE 42P05 (prepared statement already exists), distinct from the earlier 26000 missing-statement error. Read-only Supabase logs for 14:30-14:36 MYT confirm three 42P05 PARSE failures at 14:32:57, 14:33:57 and 14:35:58 with application_name Supavisor. Local configured URL is direct 5432; the specific upstream client/hosted process remains unidentified. Pooler server-session age does not identify the client process age.
+- The dashboard's 22 errors/57.7% success are aggregate window counts, not proof every error is this statement failure or that all occurred after the fix. Claude reports no restart/deploy; local source correctness is not runtime resolution. Updated the current FIX.md with targeted client/deployment attribution and fresh-connection verification. No database mutation, restart, deployment or source change performed by this reviewer.
+
+## Prepared-statement fix (DB-01) — 2026-10-30 14:30 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; backend only.
+
+- The SQLAlchemy engine (and therefore Alembic) and the live-updates LISTEN connection now pass `prepare_threshold=None` to Psycopg 3, which turns off automatic server-side prepared statements. SQL parameter binding, transactions, pool settings and the dedicated autocommit LISTEN connection are unchanged. No migration, retry or `DEALLOCATE` workaround.
+- Reproduced the reported SQLSTATE 26000 on a local throwaway PostgreSQL by resetting a session after repeated queries; with the setting the same sequence passes. Added 7 tests (4 fail without the fix). Full backend suite: 341 passed with the local PostgreSQL, 335 passed and 6 skipped without it.
+- **Not verified:** which client produced the user's screenshot (the configured backend URL is a direct Supabase connection on port 5432, not a pooler; no Supabase tools were available to correlate logs), the hosted runtime, and fresh connections to the real database. Running processes must be restarted to pick the change up; nothing was restarted. EMAIL-02 startup, `/health` and Resend checks remain pending.
+
+## Database investigation — 2026-10-30 14:21 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- User screenshot shows SQLSTATE 26000, named prepared statement missing from its session. Backend Psycopg connections currently permit automatic preparation; local configuration is direct Supabase port 5432, so transaction pooling is not confirmed as the local cause. Hosted/source-client settings remain unverified.
+- Added DB-01 to the current FIX.md: verify the originating connection, apply Psycopg prepare_threshold=None to owned connection factories, preserve transaction/parameter-binding/LISTEN behavior and verify on fresh isolated connections. Read-only filtered Supabase log lookup returned no matching rows through the queried field; no runtime resolution is claimed.
+- Documentation only: no application code, database, migration, deployment or service restart performed by this reviewer.
+
+## Warning-email schema recovery (EMAIL-02) — 2026-10-30 02:08 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; no code changed.
+
+- The startup failure (`alerts.delivery_status does not exist`) was a code/database version mismatch: migration `f2b8d4e6a731` (four nullable `alerts` columns) had not been applied, and plain `uvicorn` skips Alembic. The startup check correctly refused to run; it was left in place.
+- With the user's approval for this specific migration I ran `alembic upgrade head` against the backend's configured shared Supabase database (project ref `iekqyzdevnzeohmiddjc`). It reported nothing to apply, and `alembic current` is `f2b8d4e6a731 (head)`, so the database was already at head. All five startup schema checks, including the alert delivery columns, now pass against it.
+- **Not verified:** the backend lifespan and `/health` (I did not start the server against the shared database; restart with `run_backend.bat`), the lecturer alert list and other flows on real data, and the Resend sender domain (Resend MCP not yet authorised in Claude). No email was sent.
+
+## Startup review — 2026-10-30 02:01 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- New user traceback confirms missing alerts.delivery_status stops lifespan in the alert-delivery schema check. Migration f2b8d4e6a731 is present and both implementation reports disclose it remains unapplied. Direct uvicorn skips the launcher's migration step; the Google Python support warning is unrelated.
+- Independent focused warning-email/notification-detail/locator/photo/staff suites: 52 passed, 3 PostgreSQL tests skipped, 5 warnings with isolated SQLite/fake services. Full reported 334 suite and browser/real-service checks were not rerun.
+- Updated the existing FIX.md with EMAIL-02: verify target/schema/revision, use the existing Alembic migration under valid authorization, then restart and verify actual startup/health. No migration, real email, database/application edit or deployment performed by this reviewer.
+
+## Avatars, warning email, notification details, chat loader — 2026-10-30 01:55 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; local and uncommitted; not independently reviewed.
+
+- **Profile images:** the signed-in account's `avatar_url` now shows in the sidebar account chip (expanded, collapsed and menu) and in the chat "ME" circles, from one cached, account-scoped value that refreshes after a photo change and clears on logout. A neutral fallback appears only when there is no image or it fails to load.
+- **At-risk warning email (real sending, not yet applied):** the warning now goes through Resend to the student's verified recovery email, chosen on the server. The lecturer must teach the course and the student must be enrolled; the edited text is sent exactly; retries and double clicks are idempotent; the status is pending, accepted or failed and "sent" is recorded only after the provider accepts the message. The unsupported advisor-CC and "Delivered" claims were removed, and old rows show "Recorded only - no email was sent". Acceptance does not prove inbox delivery. **Needs migration `f2b8d4e6a731` (`alembic upgrade head`) before the backend can start, and a verified Resend sender; neither was done or checked, and no real email was sent.**
+- **Notification details:** attendance requests, correction decisions, and cancelled or replacement classes now open a read-only detail dialog (new `GET /notifications/{id}/detail`, owner-scoped and rechecked against current access). Lecturers get the assigned class instead of the "administrator Attendance page" message (cause: the lecturer tab map had no entry for class-review notices); students see their own content; admin exact-row targets are unchanged. Missing or no-longer-permitted targets say so.
+- **Chat:** restoring a saved chat shows only a centred "Loading..." loader over a soft blue glow (static under reduced motion); saved messages appear without a greeting; failures show Retry; older messages load with a small separate indicator. A genuinely new chat shows a short typing indicator then the greeting once.
+- **Locator hardening (LOCATE-01):** `focus_id` must now be a complete UUID (normalised); anything else is ignored, never a database error. Verified on a local throwaway PostgreSQL, including that unvalidated malformed text does raise there.
+- **Checks:** backend 334 passed with a local PostgreSQL (331 passed, 3 skipped without); `tsc` and build pass; real Chrome runs with intercepted APIs for every item above. Not tested: account switch without logout, touch, dark theme, real Resend/Storage, Flutter.
+
+## Requested — 2026-10-30 01:35 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Added screenshot-based avatar, role-correct staff/student notification and chat typing/history-loader requirements to existing FIX.md. User confirmed at-risk warnings must be sent through Resend to the student's verified recovery email. Current Alert endpoint only records warnings; real sending, truthful status and duplicate prevention are requested.
+- Documentation only; implementation/tests and provider setup verification remain pending. No real email, application/database change or push performed.
+
+## Independent review — 2026-10-30 01:20 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Notification destination coverage is substantially expanded and scoped page locators pass isolated ownership/filter tests. Attendance requests/corrections and cancelled/replacement classes still have no exact-content view; these remain pending requirements, not user-approved exclusions.
+- Found malformed focus_id values accepted by the new regex (hex-only/hyphen-only strings that are not UUIDs) before typed UUID comparisons. Validation flaw confirmed locally; its PostgreSQL error behavior was not exercised. Added LOCATE-01 to the current FIX.md alongside remaining NOTIFY-01 scope.
+- Independent focused run: 36 passed, 2 PostgreSQL tests skipped, 5 warnings across locator/photo/staff suites with isolated fixtures. Full reported 315 suite, browser and real-service checks were not rerun. Updated current review report; no application/database changes performed.
+
+## NOTIFY-01 notification destinations — 2026-10-30 01:17 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; local and uncommitted; not independently reviewed. This supersedes the earlier "partial" note for notification destinations.
+
+- **What now opens the exact content (scrolled to, focused, outlined, announced):** admin class reviews, feedback, medical leave, announcements and timetable meetings; student feedback responses, medical-leave decisions, announcements (even beyond the first six) and timetable meetings including class reminders; lecturer announcements and timetable meetings.
+- **How:** the four paged record endpoints accept an optional `focus_id` and return the page that contains that record within the same account scoping and filters (one windowed query, no scanning); student courses and the lecturer timetable now include `meeting_id`. No migration, no backfill; existing notice payloads already carried the IDs, and legacy notices without one show an explicit note.
+- **Still not openable, by design of the website:** attendance requests and correction decisions (the website has no view of them) and cancelled or replacement classes (the weekly timetable does not show them). These open the right page with a clear note instead of highlighting something unrelated.
+- **Checks:** backend `pytest tests` 315 passed, 2 PostgreSQL tests skipped (not re-run); `tsc` and the web build pass; real Chrome runs with intercepted APIs for each supported kind and role, off-page records, already-open destination, rapid clicks, canceled leave guard and missing records. Not tested: logout and account switch, touch, dark theme, the lecturer Course notices tab, real backend data.
+
+## Independent review — 2026-10-30 01:02 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Panel clipping/list scrolling, security button styles and the single combined quiet-hours preference save are present in inspected source. Claude's latest browser evidence was not independently repeated; account-switch/discard/reload and related interaction checks remain open.
+- Exact notification navigation is incomplete: only admin class-review targets are implemented; valid request/feedback/medical/timetable/announcement and lecturer/student notices remain page-only. Added NOTIFY-01 to current FIX.md; the original user requirement is not complete.
+- Independently ran focused photo/staff suites: 32 passed, 2 PostgreSQL tests skipped, 5 dependency warnings. The new late-upload recovery handling and isolated regressions pass; full reported 311 suite, browser and real-service tests were not rerun. Updated the existing review report; no application or database changes performed.
+
+## PHOTO-04, notification panel and navigation, settings — 2026-10-30 00:59 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; local and uncommitted; not independently reviewed.
+
+- **PHOTO-04 (registration photo lifecycle):** a late upload that completes after the cleanup worker already claimed, deleted and forgot its intent is now detected right after the upload and deleted via a committed tombstone instead of being left unreferenced; registration still succeeds without a photo and a claimed photo is never attached. Upload timeouts also tombstone the key. Documented bounds: normal uploads finish in seconds versus a 10-minute grace period; a remote write that lands after the request has given up and deleted would need periodic bucket reconciliation (not implemented). Backend tests: 311 passed, 2 PostgreSQL tests skipped (not re-run in this pass).
+- **Notification panel:** the outer scrollbar no longer sits on the rounded edge. The panel clips its own corners, header/toolbar/footer stay pinned and only the list scrolls. `FloatingPanel` has a new opt-in `clip` prop; all other callers behave as before.
+- **Notification destinations (partial):** clicking a notice now navigates through a typed internal target. Exact opening and outlining is implemented only for admin Attendance class notices (`class_needs_attention`, `class_attention_escalated`, by class id, including a different page of the list); other notice types open the right page and show a note that they do not yet point to a specific item, and notices without an id show a legacy note. Missing or inaccessible items show an honest unavailable note. Attendance requests, feedback, medical leave, timetable, announcements and the lecturer/student destinations still need by-id loading before they can be opened exactly.
+- **Settings:** Security & Authentication actions use the application button styles (behaviour and verification unchanged). Quiet hours use the shared switch and website input styling, are part of the one settings draft (dirty tracking, validation, single Save Preferences request) and the separate "Save quiet hours" button was removed. Overnight ranges stay valid; equal times are rejected inline.
+- **Checks:** `tsc --noEmit` and `npm run build` pass; browser checks in real Chrome with intercepted APIs for panel clipping (desktop, narrow, short), class navigation cases and the quiet-hours save/validation/failure flow. Not tested: touch, dark theme, canceled leave guard, account switch, reload after save, and the other notice types' exact destinations.
+
+## Requested — 2026-10-30 00:44 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Prepared the current Claude handoff for notification panel scrolling inside its boundary; notification activation must open the exact authorized content and identify it with accessible focus/highlight, including missing/legacy-target handling.
+- Requested consistent security-action button styling and website-style quiet-hours switch/time controls. Quiet hours must join the main settings draft and single Save Preferences action; remove the duplicate child save without losing persistence or dirty/discard handling.
+- Planning only; no application changes/tests performed. Existing PHOTO-04 remains unresolved; reused the same three ignored workflow files.
+
+## Independent review — 2026-10-30 00:38 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Students Manager now confines horizontal scrolling to the minimum-width table, with pagination outside it and nonwrapping actions; source matches UI-01. Claude reports Chrome checks at three widths; those browser checks were not independently rerun here.
+- Independently ran focused photo/staff suites using isolated SQLite and fake Storage: 28 passed, 2 PostgreSQL tests skipped, 5 dependency warnings. The tombstone protocol addresses the previously identified deletion/rollback path in inspected source and focused tests; real PostgreSQL results remain implementer-reported.
+- A new in-memory reviewer test failed: after an upload exceeded the cleanup grace period, cleanup removed its intent/tombstone before the upload completed; the late write then remained in Storage with photo_saved=false, no photo reference and zero cleanup rows. Added PHOTO-04 to existing FIX.md. No actual private image/database service was used, and no persistent test or application source was changed.
+
+## UI-01 table layout and PHOTO-03 tombstone protocol — 2026-10-30 00:36 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; local and uncommitted; not independently reviewed.
+
+- **UI-01 (Students Manager):** horizontal scrolling is now confined to the table. The record count and pagination sit inside the card but outside the scroller and wrap when narrow, the table has a minimum width instead of compressing columns, and the action buttons no longer shrink, wrap or clip (Reset face stays on one line). The scroller also has horizontal scroll padding so keyboard focus fully reveals the last action. Verified in real Chrome at 1280, 718 and 390 px with intercepted APIs (no page overflow, all actions reachable by scroll and by keyboard); touch/trackpad gestures were not tested.
+- **PHOTO-03 correction:** the previous protocol could still leave a usable cleanup intent after the object was deleted, if the cleanup's database commit failed and rolled back. Cleanup is now claim, delete, forget: it first commits a `claimed:` tombstone in place of the intent (a deleted object can then never be attached by registration), then deletes the object (idempotent), then removes the tombstone. Any failure or crash leaves only the tombstone, which every worker retries and nothing can attach. Duplicate workers are harmless. This supersedes the earlier statements that the worker race was fully closed by the row lock alone. No schema change; the tombstone is encoded in the cleanup key.
+- **Checks:** backend `pytest tests`: 309 passed with a local throwaway PostgreSQL (two real-PostgreSQL concurrency tests included), 307 passed and 2 skipped without it; web `tsc --noEmit` and `npm run build` pass. Not run: real Supabase storage and the shared database.
+
+## Fix requested — 2026-10-30 00:26 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Added the Students Manager narrow-layout scrollbar issue to the existing local FIX.md: table-only horizontal scrolling, independently visible pagination, reachable action buttons and single-line Reset face. Screenshot symptoms are recorded; CSS diagnosis and implementation remain pending. Existing photo-cleanup finding is preserved. No application change performed.
+
+## Independent review — 2026-10-29 22:59 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Independently ran focused student-photo and staff-detail suites with isolated fixtures: 25 passed, 1 PostgreSQL row-lock test skipped, 5 dependency warnings. Full reported 304-test suite, web build and browser/live Storage checks were not rerun.
+- Staff Eye action, admin-only allowlisted details, current uploaded profile image and deduplicated course assignments match the handoff in inspected code and endpoint tests. No confirmed staff defect found in that scope; browser behavior remains unverified.
+- Shared cleanup-row locking addresses the ordinary PHOTO-03 stale-selection race, but one failure gap remains: successful Storage deletion followed by rolled-back DB commit restores an intent that registration may attach to a missing photo. Returning 404 does not restore object/reference consistency. Updated the existing FIX.md with the residual case and regression requirements; no application/database changes made by the reviewer.
+
+## PHOTO-03 and staff details — 2026-10-29 22:55 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; local and uncommitted; not independently reviewed.
+
+- **Correction:** the earlier "worker cannot delete a photo that is being attached" claim rested on a 10-minute grace period and a withdrawn-intent check, which was not enough: a worker could select an aged key, registration could attach it and withdraw the intent, and the worker would still delete the object.
+- **Final protocol (PHOTO-03):** the `face_photo_cleanups` row is the ownership token. The cleanup worker locks the row (`FOR UPDATE SKIP LOCKED`), confirms no face row references the key, deletes the object, then deletes the row. Registration finalization locks the same row last, deletes it in the same commit that attaches the photo, and attaches nothing if the row is already gone (registration still succeeds with `photo_saved: false`). Stale worker selections, two workers and repeated retries are therefore harmless. Reset and student deletion still remove the old photo and keep durable retry. One residual double-failure window (object deleted but the row commit fails while registration waits) is documented in the review report; a missing object now shows "Photo unavailable" (404) instead of a 502.
+- **Staff details:** Staff Manager has an Eye button before Edit/Delete on every row that opens a read-only dialog with the staff member's current profile image (`User.avatar_url`, loaded by the browser, no proxy or upload change), identity, assigned staff role versus account role, account status/dates/2FA/recovery/preferences, and assigned courses merged from the course's lecturer and assignment rows. New admin-only `GET /admin/staff/{lecturer_id}/details` returns an explicit allowlist; non-admins are denied and secrets are excluded.
+- **Checks:** backend `pytest tests`: 304 passed, 1 skipped; web `tsc --noEmit` and `npm run build` pass. NOT RUN: the PostgreSQL row-lock test (no PostgreSQL or Docker available here), browser tests (Playwright 1.15 only), real storage and live admin requests. PostgreSQL lock behaviour and the dialogs in a real browser are therefore unverified.
+
+## Planned — 2026-10-29 22:47 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Updated the current Claude fix request to carefully resolve PHOTO-03 using coordinated cleanup/registration ownership and deterministic concurrency regressions, preserving optional-photo failure recovery and intentional Reset face/Delete student cleanup.
+- Prepared the current implementation handoff for Staff Manager: Eye action before Edit/Delete, admin-only account-details dialog matching the student dialog, and the staff account's existing uploaded profile image from avatar_url. Missing/broken images must not prevent details from loading.
+- Reused the same three ignored workflow files. These are planned changes, not implemented or tested. Per user preference, recorded history takes priority and minor timestamp differences are not an open defect.
+
+## Independent review — 2026-10-29 22:34 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Focused student-details/photo backend suite independently executed with dummy loopback database configuration and isolated SQLite/fake Storage fixtures: 17 passed, 5 dependency warnings. Full reported 296-test suite, browser checks and web builds were not rerun.
+- Local /health now returns 200. Claude reports the photo migration applied; exact live schema/revision/grants and authenticated dialog/storage behavior were not independently inspected. The earlier missing-column startup failure should not be presented as a current confirmed outage.
+- PHOTO-03 remains open: cleanup worker selection and registration attachment are still unsynchronized. Current passing tests do not cover the previously demonstrated stale-selection race.
+- Replaced the current local review report to remove contradictory fixed/pending/failed statuses and updated FIX.md. Changelog entries labelled 22:40, 22:50 and 23:05 were already present ahead of this machine's observed 22:34 MYT clock; their event times remain unverified and require provenance correction. No application/database changes, commit or push performed.
+
+## UI fix — 2026-10-29 23:05 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Student details dialog: the scrollbar sat on the dialog's rounded outer edge. The dialog is now a fixed-height flex column: header and Close footer stay pinned and only the middle content scrolls inside the dialog padding. Self-reported: `tsc`, ESLint and `npm run build` pass; the visual result and the browser test were NOT run (no compatible Playwright), so please re-check it in your browser.
+
+## Migration applied — 2026-10-29 22:50 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported, at the user's request ("you help me do it").
+
+- Ran `venv\Scripts\python.exe -m alembic upgrade head` from `fyp-backend` against the database configured for the backend (Supabase project ref `iekqyzdevnzeohmiddjc`). Alembic reported `d8569cd9629c -> f1a7c3d9e520`, and `alembic current` now shows `f1a7c3d9e520 (head)`. The migration only adds nullable `face_embeddings.photo_key` and the `face_photo_cleanups` table (RLS on, client roles revoked); no rows were read or changed.
+- `_check_face_photo_schema()` now passes against that database. The backend was not running afterwards (`/health` not reachable locally), so startup, `/health`, the admin details dialog and the "Photo unavailable" display for older registrations are NOT VERIFIED; the user will restart with `run_backend.bat` and check. No Supabase MCP inspection or storage-bucket check was done.
+- Because the database is shared, the hosted backend now sees the extra column and table too; this is additive and does not affect the previously deployed code.
+
+## Diagnosis — 2026-10-29 22:40 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported; no database or application change was made.
+
+- The user's startup traceback (`UndefinedColumn: face_embeddings.photo_key`) confirms the photo migration `f1a7c3d9e520` is not applied to the database that backend used; the new startup check stopped the server as intended. Starting with plain `uvicorn` does not run Alembic; `run_backend.bat` does.
+- The backend's configured database host corresponds to Supabase project ref `iekqyzdevnzeohmiddjc` (read from local config, credentials not shown). This is shared data, so applying the migration needs the owner's approval. Offline SQL for the migration is additive only: nullable `face_embeddings.photo_key` and a new `face_photo_cleanups` table with row-level security and client roles revoked.
+- Not done: running the migration, any Supabase MCP inspection (no Supabase MCP server is configured in this Claude session) and a live revision check (blocked by the permission classifier). Python was not upgraded; the Python 3.11 FutureWarning is unrelated.
+- Next, once approved: from `fyp-backend` run `venv\Scripts\python.exe -m alembic upgrade head`, restart with `run_backend.bat`, then verify `/health`, the admin details dialog and that older registrations show "Photo unavailable".
+
+## Independent review — 2026-10-29 22:14 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Rechecked Claude's 18:55 fix claims: cleanup intent is now committed before upload and registration failure no longer requires a second bookkeeping commit before attempting deletion. This addresses the originally identified paths by source inspection; the reported 296-test suite was not independently rerun.
+- Confirmed a remaining cleanup-worker race with an isolated replay of the actual worker/deletion functions: a worker can retain a selected key while registration attaches the photo and removes its intent, then delete that active photo. A ten-minute grace period delays selection but does not synchronize transactions. Added PHOTO-03 to the existing local FIX.md; the changelog's unconditional worker-safety claim is not established.
+- Startup schema recovery remains incomplete in the available evidence: the supplied traceback proves missing photo_key, and the documents contain no subsequent verified Supabase schema/revision result, successful migration or restored admin-details request. No database change, application fix or deployment performed by this review.
+
+## Startup analysis — 2026-10-29 22:12 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- User traceback confirms missing face_embeddings.photo_key prevents application startup under the new schema check. Direct uvicorn invocation skips the launcher migration step; existing Alembic migration f1a7c3d9e520 defines the needed schema. Actual database revision remains unverified. The Google Python support warning is unrelated to the fatal error.
+- Updated the three existing local workflow documents to require Claude's Supabase MCP/plugin for project identification and read-only schema/revision/log checks before an Alembic-consistent remedy. Supabase connection in this chat lists FYP_project; Claude's connection is separate. No database migration, application fix or deployment performed.
+- Tooling review: compatible Playwright plus browser binaries would unblock reported browser-test gaps; Azure CLI/account access is useful for App Service runtime logs. Neither is a prerequisite for resolving this confirmed missing-column error. No extra plugin or package installed.
+
+## Fix pass — 2026-10-29 18:55 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Self-reported by the implementer; not independently re-reviewed. Local and uncommitted.
+
+- **PHOTO-01 (fixed):** the registration photo's delete intent is now committed before the upload, so an upload that times out after the object was stored can no longer lose it. An upload exception triggers an immediate delete; if that also fails the intent stays queued for the worker. Registration continues without a photo (`photo_saved: false`).
+- **PHOTO-02 (fixed):** after a failed registration the handler no longer needs a second commit before deleting the object; the intent already exists, and a failure while cleaning up cannot mask the original error.
+- **Worker safety:** a successful registration removes its intent in the same transaction that attaches the photo, and the worker only touches intents older than 10 minutes, so it cannot delete a photo that is being attached. Consequently, retries of failed reset/delete cleanups also wait about 10 minutes. This corrects the earlier statement that the worker retries "every minute": it runs every minute but only acts on rows past the grace period.
+- **Startup check:** the backend now refuses to start, naming migration `f1a7c3d9e520`, if `face_embeddings.photo_key` or `face_photo_cleanups` is missing.
+- **Student details error (not confirmed):** the local "Student details could not be loaded" alert is unexplained. Its status/traceback were not captured and the configured database's revision was not checked (an automated read-only check was blocked). The leading hypothesis is an unapplied migration `f1a7c3d9e520`; if so, restart with `run_backend.bat` (runs `alembic upgrade head`) or run `python -m alembic upgrade head` from `fyp-backend`. The same gap would also break face check-in and registration, which is why the startup check was added.
+- **Checks:** backend `pytest tests` 296 passed (isolated SQLite and fake object store; 6 new regression tests for the above). Not run: browser test, real storage, migration on a real database, deployment.
+
+## Analysis — 2026-10-29 18:19 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Investigated the local student-details error: API health returns 200 and the running server exposes the new details/photo routes. The screenshot's alert comes from the details request, before the photo request.
+- Missing application of the new photo-schema migration is a hypothesis: the details query selects photo_key, while startup validation does not check the new photo schema. The authenticated response status/traceback and actual database revision remain unverified; no database query, migration, source fix or test suite was run. Recorded the diagnostic steps in the existing local workflow files.
+
+## Review and workflow update — 2026-10-29 18:14 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Standardized the ignored review-workflow folder to three reusable current-task files: FIX.md, IMPLEMENTATION_HANDOFF.md and REVIEW_REPORT.md. Replace their task content instead of adding separate files; preserve history here and unresolved findings until resolved or explicitly superseded.
+- Claude must update this changelog and the current review report after each implementation/fix, with local timezone timestamps, actual changes, verification and limitations; distinguish implementer-reported checks from independent review.
+- Static review of student-details/photo changes found two cleanup gaps: upload success followed by response timeout can lose the object key, and a second database-commit failure can bypass photo deletion. These are recorded for correction; no application source changed or tests rerun in this review. Earlier cleanup guarantees are not established for these failure cases.
+
+## Implemented locally — 2026-10-29 18:10 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+Student details dialog and private registration photo (uncommitted, not deployed, not pushed).
+
+- **Web:** Students Manager has an Eye button directly right of Reset face (also on unregistered rows) that opens a read-only dialog: identity, account (status, dates, 2FA, recovery email, saved preferences), programme and enrolled courses, face-registration status and the current registration photo. Loading, error/retry, "Not registered" and "Photo unavailable" states are separate; requests are aborted on close or student switch and photo object URLs are revoked.
+- **Backend:** new admin-only `GET /admin/students/{id}/details` (explicit allowlist; no password/recovery/reset hashes, TOTP, sessions, embeddings or storage credentials) and `GET /admin/students/{id}/face/photo` (admin-only, `no-store`; the object key is read from the database for the active registration, and an optional `registration_version` rejects stale tabs). The shared student list response is unchanged.
+- **Photo storage:** new registrations save a re-encoded, size-bounded JPEG (metadata stripped) of the same capture that passed liveness and matching, in a dedicated private Supabase bucket `face-registration-photos`, created on first upload. If storage fails, registration still succeeds and reports `photo_saved: false`; rejected scans are never stored.
+- **Consistency:** a photo uploaded for a registration that then loses a race or fails to commit is deleted. Reset and student deletion clear the reference in the same database transaction (access is revoked immediately) and delete the object afterwards; a failed delete stays queued in the new `face_photo_cleanups` table, is reported as `photo_cleanup_pending` on reset, and is retried every minute by the existing face-expiry worker. Each registration uses a new object key, so a reset followed by re-registration never shows the old photo.
+- **Migration `f1a7c3d9e520`** (new head after `d8569cd9629c`): adds nullable `face_embeddings.photo_key` and the `face_photo_cleanups` table (RLS enabled, client roles revoked). No backfill. Run `alembic upgrade head` before deploying this backend.
+- **Existing registrations remain "Photo unavailable"** until a student registers again in a future authorised registration; no resets were initiated, and original photos cannot be reconstructed from embeddings.
+- **Verified locally:** backend `pytest tests` (isolated SQLite, fake object store): 290 passed, including 11 new photo/details tests; `alembic heads` shows one head; web `tsc --noEmit`, ESLint on the new dialog, and `npm run build` pass.
+- **NOT RUN / NOT VERIFIED:** the new browser test `fyp_web/tests/studentDetails.browser.test.mjs` could not run (only Playwright 1.15 is installed locally, which lacks the APIs used); keyboard focus, mobile layout and image-failure behaviour are therefore unverified in a real browser. The migration, bucket creation, real Supabase upload/download/delete and the hosted deployment were not exercised. The bucket is created on first upload only if the backend's storage key has permission to create buckets.
+
+## Planned — 2026-10-29 17:52 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- Prepared a local Claude handoff for an admin-only student-details dialog opened by an Eye button immediately after Reset face; planned sections cover available non-secret profile, account, academic and face-registration details.
+- User approved private storage of future registration photos. Current registration stores embeddings rather than original images, so older registrations will show “Photo unavailable”. Photo access, reset/deletion cleanup and existing registration behavior must be verified during implementation.
+- Planning only: no application/schema/storage changes or tests performed, and nothing committed or pushed.
+
+## Update — 2026-10-29 17:44 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- The user reported that the hosted page loaded and cancelled the proposed login fix. The local handoff is marked cancelled; no application fix was applied. Recovery was user-reported, not independently retested.
+
+## Investigation — 2026-10-29 17:41 MYT (Asia/Kuala_Lumpur, UTC+08:00)
+
+- After commit `cce8759`, the website returned HTTP 200, but API `/health` and unauthenticated `/auth/me` each returned no response within a 25-second read-only probe. Backend recovery is not verified.
+- Frontend and backend workflows for that commit completed successfully; this does not establish active container health.
+- Code inspection found that initial login has no request timeout and keeps the global authentication skeleton visible while pending; the screenshot is consistent with this path, but browser network evidence was not captured. A scoped local Claude handoff was prepared; no application fix, deployment or runtime test was performed.
+- The older snapshot below describes the pre-commit working tree; its untracked/uncommitted labels are historical after `cce8759`, not current Git status. This investigation entry is a new local documentation change awaiting a future authorized commit/push.
+
 ## Unreleased — snapshot 2026-10-29
 
 - Baseline revision: `main` @ `aa47e226be86e66bbfeb779ea949b8bf6c1437fd` ("handle offline attendance and lecturer review").

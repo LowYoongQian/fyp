@@ -14,7 +14,7 @@ from sqlalchemy.exc import DBAPIError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from db.database import SessionLocal, engine
-from db.models import FaceEnrolmentRequest, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course
+from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course
 from domain.account_security import validate_session
 from integrations.mobile_push import push_loop
 from utils.security import decode_token
@@ -260,6 +260,10 @@ async def _face_enrolment_expiry_loop():
             await asyncio.to_thread(face_enrolment.expire_requests)
         except Exception as error:
             logger.warning("Face enrolment expiry cleanup failed (%s)", type(error).__name__)
+        try:
+            await asyncio.to_thread(face_enrolment.retry_photo_cleanups)
+        except Exception as error:
+            logger.warning("Face photo cleanup retry failed (%s)", type(error).__name__)
         await asyncio.sleep(60)
 
 
@@ -289,6 +293,25 @@ def _check_face_enrolment_schema():
             ) from error
 
 
+def _check_face_photo_schema(bind=None):
+    # Face check-in, registration and the student details page all select face_embeddings.photo_key.
+    try:
+        with (bind or engine).connect() as connection:
+            connection.execute(select(FaceEmbedding.photo_key).where(false()))
+            connection.execute(select(FacePhotoCleanup.__table__).where(false()))
+    except DBAPIError as error:
+        raise RuntimeError('Face photo database schema/access is not ready (migration f1a7c3d9e520); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+
+
+def _check_alert_delivery_schema(bind=None):
+    # Lecturer warning emails record their real delivery state in these columns (migration f2b8d4e6a731).
+    try:
+        with (bind or engine).connect() as connection:
+            connection.execute(select(Alert.delivery_status, Alert.provider_message_id, Alert.failure_code, Alert.attempted_at).where(false()))
+    except DBAPIError as error:
+        raise RuntimeError('Alert delivery database schema is not ready (migration f2b8d4e6a731); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+
+
 def _check_account_security_schema():
     try:
         with engine.connect() as connection:
@@ -311,6 +334,8 @@ def _check_semester_schema():
 async def lifespan(app: FastAPI):
     trusted_proxy_ranges()  # Fail startup on unsafe proxy wildcard configuration.
     await asyncio.to_thread(_check_face_enrolment_schema)
+    await asyncio.to_thread(_check_face_photo_schema)
+    await asyncio.to_thread(_check_alert_delivery_schema)
     await asyncio.to_thread(_check_account_security_schema)
     await asyncio.to_thread(_check_semester_schema)
     tasks = [

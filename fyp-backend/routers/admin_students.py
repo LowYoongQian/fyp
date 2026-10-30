@@ -3,7 +3,9 @@ from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
 from db.database import get_db
-from db.models import User, Student, Enrolment, FaceEmbedding, AttendanceRecord, RiskScore, Alert
+from db.models import Course, User, Student, Enrolment, FaceEmbedding, AttendanceRecord, RiskScore, Alert
+from routers.face_enrolment import face_version, owe_photo, settle_photo
+from utils.timeutil import iso_utc
 from utils.security import require_admin, require_lecturer, hash_password
 from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
 from domain.audit import log_admin_action
@@ -49,6 +51,49 @@ def get_students(
             "programme_id": s.programme_id
         })
     return {"items": result, "total": total}
+
+@router.get("/students/{student_id}/details")
+def get_student_details(
+    student_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    # Explicit allowlist: the User row also holds password, recovery, reset and session secrets.
+    student = get_or_404(db, Student, student_id, "Student")
+    user = student.user
+    programme = student.programme
+    enrolments = (db.query(Enrolment).options(joinedload(Enrolment.course).joinedload(Course.semester))
+                  .filter(Enrolment.student_id == student.id).all())
+    face = db.query(FaceEmbedding).filter_by(student_id=student.id).first()
+    registered = bool(face and face.is_active)
+    return {
+        "identity": {
+            "student_id": student.id, "user_id": student.user_id, "name": student.name,
+            "student_code": student.student_code, "email": user.email if user else None,
+            "avatar_url": user.avatar_url if user else None,
+        },
+        "account": {
+            "status": user.status, "created_at": iso_utc(user.created_at), "last_login_at": iso_utc(user.last_login_at),
+            "two_factor_enabled": user.two_factor_enabled, "recovery_email": user.recovery_email,
+            "recovery_email_verified": user.recovery_email_verified,
+            "preferences": {
+                "theme": user.theme_preference, "font_size": user.font_size_preference, "language": user.language_preference,
+                "notifications": user.notifications_enabled, "email_notifications": user.email_notifications,
+                "push_notifications": user.push_notifications, "in_app_notifications": user.in_app_notifications,
+            },
+        } if user else None,
+        "programme": {"code": programme.code, "name": programme.name} if programme else None,
+        "courses": sorted((
+            {"code": e.course.course_code, "name": e.course.course_name, "credits": e.course.credit_hours,
+             "semester": e.course.semester.name if e.course.semester else e.semester, "class_group": e.class_group}
+            for e in enrolments if e.course), key=lambda c: c["code"]),
+        "face": {
+            "is_registered": registered, "registration_version": face_version(face) if registered else None,
+            "sample_count": face.sample_count if registered else None,
+            "updated_at": iso_utc(face.updated_at) if registered else None,
+            "photo_available": registered and bool(face.photo_key),
+        },
+    }
 
 @router.put("/students/{student_id}/programme", response_model=MessageResponse)
 def assign_student_programme(
@@ -156,7 +201,10 @@ def delete_student(
 
     # 1. Delete enrolments
     db.query(Enrolment).filter(Enrolment.student_id == student.id).delete()
-    # 2. Delete face embedding
+    # 2. Delete face embedding (and owe the stored registration photo's delete in the same transaction)
+    face = db.query(FaceEmbedding).filter(FaceEmbedding.student_id == student.id).first()
+    photo_key = face.photo_key if face else None
+    owe_photo(db, photo_key)
     db.query(FaceEmbedding).filter(FaceEmbedding.student_id == student.id).delete()
     # 3. Delete attendance records
     db.query(AttendanceRecord).filter(AttendanceRecord.student_id == student.id).delete()
@@ -175,6 +223,7 @@ def delete_student(
             db.delete(user)
         
     db.commit()
+    settle_photo(db, photo_key)
 
     log_admin_action(db, current_user, "DELETE_STUDENT",
                      f"Deleted student {deleted_desc} and all related records")

@@ -9,6 +9,7 @@ import {
   Search,
   Plus,
   Edit2,
+  Eye,
   Trash2,
   CheckCircle,
   XCircle,
@@ -22,10 +23,12 @@ import {
 } from 'lucide-react';
 import { ShimmerTableSkeleton } from '../../components/Shimmer';
 import { FaceResetDialog } from '../../components/FaceResetDialog';
+import { StudentDetailsDialog } from '../../components/StudentDetailsDialog';
 
 export const StudentsManager: React.FC = () => {
   const [students, setStudents] = useState<AdminStudent[]>([]);
   const [faceStudent, setFaceStudent] = useState<AdminStudent | null>(null);
+  const [detailsStudent, setDetailsStudent] = useState<AdminStudent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -179,6 +182,7 @@ export const StudentsManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {detailsStudent && <StudentDetailsDialog student={detailsStudent} onClose={() => setDetailsStudent(null)} />}
       {faceStudent && <FaceResetDialog student={faceStudent} onClose={() => setFaceStudent(null)} onSaved={() => {
         requestVersion.current++;
         setStudents(previous => previous.map(student => student.id === faceStudent.id ? { ...student, is_face_registered: false } : student));
@@ -238,8 +242,9 @@ export const StudentsManager: React.FC = () => {
             No matching students found.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse font-sans text-xs">
+          <div className="min-w-0">
+            <div className="overflow-x-auto [scroll-padding-inline:1.5rem]">
+            <table className="w-full min-w-[860px] text-left border-collapse font-sans text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider">
                   <th className="py-3 px-4">Student Name</th>
@@ -266,9 +271,10 @@ export const StudentsManager: React.FC = () => {
                         </span>
                       )}
                     </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <div className="inline-flex gap-2">
+                    <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                      <div className="inline-flex flex-nowrap gap-2 [&>button]:shrink-0 [&>button]:whitespace-nowrap">
                         {student.is_face_registered && <button type="button" onClick={() => setFaceStudent(student)} aria-label={`Reset face for ${student.name}`} className="px-3 py-2 bg-blue-50 text-brand-blue border border-blue-100 rounded-lg text-xs font-semibold hover:bg-blue-100">Reset face</button>}
+                        <button type="button" onClick={() => setDetailsStudent(student)} aria-label={`View details for ${student.name}`} title="View details" className="p-2 bg-slate-50 hover:bg-brand-blue-light hover:text-brand-blue rounded-lg border border-slate-100 transition-all text-slate-500 cursor-pointer"><Eye className="h-3.5 w-3.5" /></button>
                         <button
                           onClick={() => handleOpenEdit(student)}
                           title="Edit profile"
@@ -289,14 +295,15 @@ export const StudentsManager: React.FC = () => {
                 ))}
               </tbody>
             </table>
-            {/* Pagination Controls */}
+            </div>
+            {/* Pagination Controls: outside the horizontally scrolling table area */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100 text-xs font-semibold text-slate-500 mt-4">
               <div>
                 Showing <span className="font-bold text-slate-700">{totalCount > 0 ? (page - 1) * limit + 1 : 0}</span> to{' '}
                 <span className="font-bold text-slate-700">{Math.min(page * limit, totalCount)}</span> of{' '}
                 <span className="font-bold text-slate-700">{totalCount}</span> registered students
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center justify-center gap-3">
                 <button
                   type="button"
                   disabled={page === 1}
