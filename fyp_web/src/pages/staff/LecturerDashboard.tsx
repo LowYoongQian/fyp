@@ -7,7 +7,6 @@ import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
 import { isLiveConnected, subscribeLive } from '../../services/liveUpdates';
 import { swalSuccess } from '../../utils/swal';
 import { ShimmerTableRows } from '../../components/Shimmer';
-import { Pet } from '../../components/Pet';
 import { readRecentStaffPages, STAFF_PAGE_LINKS, type StaffPageId } from '../../utils/staffRecentPages';
 import type {
   Course,
@@ -1333,7 +1332,6 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
 
       </div>
 
-      <Pet />
     </div>
   );
 };

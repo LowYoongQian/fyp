@@ -2,17 +2,20 @@
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from db.database import get_db
 from db.models import AcademicSemester, ClassSession, Course, Enrolment, Lecturer, Programme, Student, User
+from domain import semester_rollover, timetable_access
 from domain.audit import log_audit_event
 from domain.semesters import campus_date, lock_programme, semester_dict, validate_credit_loads
 from utils.db_helpers import my_course_ids, require_own_profile
 from utils.security import get_current_user, require_admin
-from utils.timeutil import iso_utc, utcnow
+from utils.timeutil import campus_now, iso_utc, utcnow
 
 router = APIRouter(tags=["Academic Calendar"])
 
@@ -47,8 +50,49 @@ def read_calendar(db: Session = Depends(get_db), current_user: User = Depends(ge
     elif current_user.role != "admin":
         raise HTTPException(403, "Not authorized to view academic calendar")
     return {"server_time": iso_utc(utcnow()), "timezone": "Asia/Kuala_Lumpur", "courses": [
-        {"course_id": c.id, "course_code": c.course_code, "semester": semester_dict(c.semester) if c.semester_id else None}
-        for c in query.all()]}
+        {"course_id": c.id, "course_code": c.course_code, "semester": semester_dict(c.semester) if c.semester_id else None,
+         "programme": {"code": c.programme.code, "name": c.programme.name} if c.programme else None}
+        for c in query.options(joinedload(Course.semester), joinedload(Course.programme)).all()]}
+
+
+@router.get("/timetable/semesters")
+def list_timetable_semesters(programme_id: Optional[UUID] = Query(None), course_id: Optional[UUID] = Query(None),
+                             db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """The caller's own upcoming, current and previous semesters, each with whether its timetable may be opened and why not.
+
+    An admin must choose a programme and one of its courses first and gets only that course's semester; students and staff send no filter."""
+    return timetable_access.list_semesters(db, current_user, timetable_access.scope_course(db, current_user, programme_id, course_id))
+
+
+@router.get("/timetable/semesters/{semester_id}")
+def open_timetable_semester(semester_id: UUID, programme_id: Optional[UUID] = Query(None), course_id: Optional[UUID] = Query(None),
+                            db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Re-validates one semester: 404 outside the caller's scope (or, for an admin, not the chosen course's), 403 with the reason unless it is current."""
+    course = timetable_access.scope_course(db, current_user, programme_id, course_id)
+    semester = timetable_access.require_viewable_semester(db, current_user, str(semester_id), course)
+    return timetable_access.semester_summary(db, current_user, semester, course)
+
+
+@router.get("/timetable/meetings/{meeting_id}/semester")
+def semester_of_meeting(meeting_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Which semester a class belongs to (for notices), only for classes in the caller's own scope; its state says whether it may be opened."""
+    row = timetable_access.meeting_semester(db, current_user, str(meeting_id))
+    if row is None:
+        raise HTTPException(404, "That class is not available to you.")
+    return row
+
+
+class RolloverPreview(BaseModel):
+    source_semester_id: UUID
+    target_semester_id: UUID
+    course_ids: Optional[list[UUID]] = Field(default=None, max_length=500)
+
+
+@router.post("/admin/semesters/rollover-preview")
+def preview_rollover(body: RolloverPreview, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """Read-only: what carrying the source semester's courses into the target would retain, copy and leave out, and what is missing. Writes nothing."""
+    return semester_rollover.build_preview(db, str(body.source_semester_id), str(body.target_semester_id),
+                                           None if body.course_ids is None else [str(value) for value in body.course_ids])
 
 
 @router.get("/admin/semesters")
@@ -68,6 +112,12 @@ def save_semester(db, user, body, semester_id=None):
         raise HTTPException(404, "Semester not found")
     if row.programme_id != programme.id:
         raise HTTPException(400, "A saved semester cannot be moved to another programme")
+    # Scheduling is forward-looking: a newly chosen date may not be in the past (Malaysia time). A saved past date that
+    # is left unchanged stays valid, so an unrelated edit of an active or past semester is never blocked.
+    today = campus_now().date()
+    for label, chosen, stored in (("start", body.start_date, row.start_date), ("end", body.end_date, row.end_date)):
+        if chosen < today and chosen != stored:
+            raise HTTPException(400, f"The semester {label} date cannot be before today ({today}, Malaysia time).")
     if db.query(AcademicSemester).filter(AcademicSemester.programme_id == programme.id,
             AcademicSemester.name == body.name, AcademicSemester.id != row.id).first():
         raise HTTPException(409, "This programme already has a semester with this name")

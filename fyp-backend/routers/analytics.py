@@ -40,7 +40,9 @@ from db.models import (
     AttendanceRecord, RiskScore, User, Lecturer, CourseStaffAssignment,
 )
 from utils.security import require_lecturer
-from utils.db_helpers import my_course_ids, require_own_profile
+from utils.db_helpers import require_own_profile
+from domain.semesters import campus_date
+from domain.timetable_access import teaching_course_ids
 from domain.attendance import effective_planned_hours, session_hours, build_attendance_sequence
 
 # --- At-risk decision policy ----------------------------------------------
@@ -150,13 +152,32 @@ def _assess(sequence: list[int], hours: list[float],
             "rate": rate, "factors": _reasons(feats, rate, label)}
 
 
+def _still_enrolled(db: Session):
+    """A saved score is current only while its student is still enrolled in that course: one moved or removed by an admin keeps the stored row as history, but drops out of current lists and counts."""
+    return db.query(Enrolment.id).filter(Enrolment.student_id == RiskScore.student_id, Enrolment.course_id == RiskScore.course_id).exists()
+
+
+def _semester_sessions(sessions, course) -> list:
+    """Only the classes held inside the course's own semester (Malaysia dates), so classes from before a course joined its semester never count."""
+    semester = course.semester if course and course.semester_id else None
+    if semester is None:
+        return []
+    return [s for s in sessions if (when := s.scheduled_start or s.opened_at) and semester.start_date <= campus_date(when) <= semester.end_date]
+
+
 @router.post("/recompute", status_code=200)
 def recompute_risk_scores(
     db: Session = Depends(get_db),
-    _: object = Depends(require_lecturer),
+    current_user: User = Depends(require_lecturer),
 ):
-    """Recompute risk scores for all enrolled (student, course) pairs."""
-    enrolments = db.query(Enrolment).all()
+    """Recompute risk scores for enrolments in current-semester courses: a lecturer's own, or every course for an admin.
+
+    An ended semester's scores stay as they were; they are history, not current teaching data."""
+    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first() if current_user.role == "lecturer" else None
+    if current_user.role == "lecturer" and lecturer is None:
+        raise HTTPException(status_code=404, detail="Lecturer profile not found")
+    course_ids = teaching_course_ids(db, lecturer.id if lecturer else None)
+    enrolments = db.query(Enrolment).filter(Enrolment.course_id.in_(course_ids)).all() if course_ids else []
     if not enrolments:
         return {"recomputed": 0}
 
@@ -183,17 +204,20 @@ def recompute_risk_scores(
     # Batch: all closed sessions per course, ordered by time (oldest first).
     # Each entry carries its contact hours = (closed_at - opened_at), default 2h.
     closed_sessions = (
-        db.query(ClassSession.id, ClassSession.course_id, ClassSession.class_group,
-                 ClassSession.opened_at, ClassSession.closed_at,
-                 ClassSession.scheduled_start, ClassSession.scheduled_end)
+        db.query(ClassSession)
         .filter(ClassSession.status == "completed", ClassSession.course_id.in_(all_course_ids))
         .order_by(ClassSession.course_id, ClassSession.scheduled_start.asc().nullslast(), ClassSession.id.asc())
         .all()
     )
+    courses_by_id = {c.id: c for c in db.query(Course).filter(Course.id.in_(all_course_ids)).all()}
     sessions_by_course: dict = {}
-    for sid, cid, group, opened, closed, scheduled_start, scheduled_end in closed_sessions:
-        hrs = session_hours(opened, closed, scheduled_start=scheduled_start, scheduled_end=scheduled_end)
-        sessions_by_course.setdefault(cid, []).append((sid, group, hrs))
+    for lesson in closed_sessions:
+        sessions_by_course.setdefault(lesson.course_id, []).append(lesson)
+    sessions_by_course = {
+        cid: [(s.id, s.class_group, session_hours(s.opened_at, s.closed_at, scheduled_start=s.scheduled_start, scheduled_end=s.scheduled_end))
+              for s in _semester_sessions(lessons, courses_by_id.get(cid))]
+        for cid, lessons in sessions_by_course.items()
+    }
 
     # Batch: set of (student_id, session_id) counted as attended.
     # Policy: "present" (face check-in) AND "leave" (approved medical leave)
@@ -269,12 +293,13 @@ def get_risk_scores(
     allowed_course_ids = None
     if current_user.role == "lecturer":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        allowed_course_ids = my_course_ids(db, lecturer.id)
+        allowed_course_ids = teaching_course_ids(db, lecturer.id)
 
     q = (
         db.query(RiskScore, Student, Course)
         .join(Student, Student.id == RiskScore.student_id)
         .join(Course, Course.id == RiskScore.course_id)
+        .filter(_still_enrolled(db))
     )
     
     if allowed_course_ids is not None:
@@ -315,7 +340,7 @@ def get_analytics_overview(
     """Role-scoped, real-data analytics for one course at a time."""
     if current_user.role == "lecturer":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        allowed_ids = my_course_ids(db, lecturer.id)
+        allowed_ids = teaching_course_ids(db, lecturer.id)
     else:
         allowed_ids = [row[0] for row in db.query(Course.id).all()]
 
@@ -332,6 +357,8 @@ def get_analytics_overview(
     sessions = db.query(ClassSession).filter(ClassSession.course_id == selected_id).order_by(
         ClassSession.scheduled_start.asc().nullslast(), ClassSession.opened_at.asc().nullslast()
     ).all()
+    if current_user.role == "lecturer":
+        sessions = _semester_sessions(sessions, next(c for c in courses if c.id == selected_id))
     completed = [s for s in sessions if s.status == "completed"]
     tracked = [s for s in sessions if s.status != "cancelled"]
     session_ids = [s.id for s in completed]
@@ -391,6 +418,7 @@ def get_analytics_overview(
         row.student_id for row in db.query(RiskScore).filter(
             RiskScore.course_id == selected_id,
             RiskScore.risk_label.in_(["medium", "high"]),
+            _still_enrolled(db),
         ).all()
     }
     group_rows = []

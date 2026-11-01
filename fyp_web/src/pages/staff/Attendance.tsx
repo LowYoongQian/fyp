@@ -1,7 +1,7 @@
 import { FloatingPanel } from '../../components/FloatingPanel';
 import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
-import { apiService } from '../../services/api';
+import { apiService, clearApiCache } from '../../services/api';
 import type { Course, ActiveSession } from '../../services/api';
 import { Search, Calendar, ChevronDown, Check, AlertTriangle, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { swalError } from '../../utils/swal';
@@ -106,7 +106,8 @@ export const Attendance: React.FC = () => {
         const [coursesList, studentsList, enrolmentsList] = await Promise.all([
           apiService.getCourses(),
           apiService.getStudents(),
-          apiService.getEnrolments()
+          // The lecturer's own current-semester enrolments, not every enrolment in the system.
+          apiService.getLecturerEnrolments()
         ]);
         setCourses(coursesList);
         setStudents(studentsList);
@@ -132,6 +133,13 @@ export const Attendance: React.FC = () => {
         setSessions(data);
       } catch (err) {
         console.error("Failed to load sessions:", err);
+        setSessions([]);
+        // The course left the current semester while this page was open: refresh the list so it is not offered again.
+        if ((err as { response?: { status?: number } })?.response?.status === 403) {
+          clearApiCache();
+          setSelectedCourseId('');
+          apiService.getCourses().then(setCourses).catch(() => undefined);
+        }
       } finally {
         setLoadingSessions(false);
       }
@@ -505,7 +513,7 @@ export const Attendance: React.FC = () => {
             Daily Attendance Management
           </h2>
           <p className="text-xs text-slate-500">
-            View real student check-in records and perform manual verification overrides directly in the database.
+            Review check-ins and correct attendance records.
           </p>
         </div>
 
@@ -584,6 +592,9 @@ export const Attendance: React.FC = () => {
                     >
                       <span className="font-semibold group-hover:text-white/90">---Select Subject Course---</span>
                     </button>
+                    {courses.length === 0 && (
+                      <p className="px-4 py-3 text-xs text-slate-500">You have no courses in the current semester.</p>
+                    )}
                     {courses.map((c) => {
                       const isSelected = String(selectedCourseId) === String(c.id) || selectedCourseId === c.course_code;
                       return (
@@ -962,11 +973,12 @@ export const Attendance: React.FC = () => {
                       const openedDateStr = currentSession?.opened_at
                         ? new Date(currentSession.opened_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
                         : '';
-                      const day = selectedCourse?.schedule_day || 'N/A';
+                      // The schedule is hidden for a course outside a current semester; the session's own date is then all there is to show.
+                      const day = selectedCourse?.schedule_day || '';
                       const start = selectedCourse?.schedule_start ? selectedCourse.schedule_start.substring(0, 5) : '';
                       const end = selectedCourse?.schedule_end ? selectedCourse.schedule_end.substring(0, 5) : '';
                       const scheduleStr = start && end ? `${day} ${start}-${end}` : day;
-                      const sessionDateTimeStr = openedDateStr ? `${openedDateStr} (${scheduleStr})` : scheduleStr;
+                      const sessionDateTimeStr = openedDateStr ? (scheduleStr ? `${openedDateStr} (${scheduleStr})` : openedDateStr) : scheduleStr || 'No date';
 
                       let statusBadgeClass = '';
                       let statusText = '';

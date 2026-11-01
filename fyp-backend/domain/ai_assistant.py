@@ -124,7 +124,7 @@ def deterministic_plan(question: str) -> AIPlan | None:
         return AIPlan(intent="enrolment_list", course_hint=course_match.group(1).strip() if course_match else None, course_code=course_code, group=group)
     if re.search(r"\b(high|at)[ -]?risk\b|\b(?:who|students?)\b.*\b(?:below|under)\s+\d+\s*%?", question, re.I):
         threshold = re.search(r"\bbelow\s+(\d+(?:\.\d+)?)", question, re.I)
-        return AIPlan(intent="risk_list", threshold=float(threshold.group(1)) if threshold else 80, group=group)
+        return AIPlan(intent="risk_list", threshold=float(threshold.group(1)) if threshold else 80, course_code=course_code, group=group)
     if re.search(r"\baverage\b.*\battendance\b|\battendance\b.*\baverage\b", question, re.I):
         return AIPlan(intent="course_average", course_code=course_code, group=group)
     if re.search(r"\battendance\b.*\b(all|every)\s+students?\b", question, re.I) or re.search(

@@ -1,8 +1,11 @@
 """Semester dates are campus calendar dates; academic credits are not contact hours."""
+import random
+import time
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy.exc import DBAPIError
 from db.models import AcademicSemester, Course, Enrolment, Programme
 from utils.timeutil import CAMPUS_TZ, campus_now
 
@@ -70,3 +73,35 @@ def require_enrolment_credit_limit(db, student_id, course):
 def lock_programme(db, programme_id):
     if programme_id:
         db.query(Programme).filter(Programme.id == programme_id).with_for_update().one()
+
+
+def lock_programmes(db, *programme_ids):
+    """Lock programme rows in id order. Any writer that needs programme AND student rows takes the programmes first,
+    the student second, the semester last (PostgreSQL ends a lock cycle by killing one transaction: docs 13.3.4)."""
+    for programme_id in sorted({str(value) for value in programme_ids if value}):
+        if not db.query(Programme).filter(Programme.id == programme_id).with_for_update().first():
+            raise HTTPException(400, "Selected programme does not exist")
+
+
+TRANSIENT_SQLSTATES = {"40P01", "40001"}   # deadlock detected, serialization failure: the same safe transaction may simply be run again
+
+
+def run_transaction(db, work, attempts=3):
+    """Run `work()` and commit as ONE transaction. Only a recognised transient failure re-runs the whole of it (nothing of the
+    failed run survives the rollback, audit line included); any other error rolls back and propagates unchanged."""
+    for attempt in range(attempts):
+        try:
+            result = work()
+            db.commit()
+            return result
+        except DBAPIError as error:
+            db.rollback()
+            state = getattr(error.orig, "sqlstate", None) or getattr(error.orig, "pgcode", None)
+            if state not in TRANSIENT_SQLSTATES:
+                raise
+            if attempt == attempts - 1:
+                raise HTTPException(409, "Another change was in progress, so nothing was saved. Please try again.") from error
+            time.sleep(0.05 * (attempt + 1) + random.random() * 0.05)
+        except BaseException:
+            db.rollback()
+            raise

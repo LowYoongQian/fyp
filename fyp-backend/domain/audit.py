@@ -15,12 +15,13 @@ def reset_audit_client_ip(token) -> None:
     _request_client_ip.reset(token)
 
 
-def log_admin_action(db: Session, current_user: User, action: str, details: str) -> Optional[AuditLog]:
+def log_admin_action(db: Session, current_user: User, action: str, details: str, commit: bool = True) -> Optional[AuditLog]:
     """Record an admin action, deriving the actor fields from `current_user`.
 
     Every admin endpoint passed the same four values (id, profile_name or email,
     "admin", "admin") to log_audit_event, so they are stated once here instead of
-    at each call site.
+    at each call site. `commit=False` writes it inside the caller's transaction, so
+    a rolled-back or retried change leaves no audit line behind.
     """
     return log_audit_event(
         db,
@@ -30,6 +31,7 @@ def log_admin_action(db: Session, current_user: User, action: str, details: str)
         category="admin",
         action=action,
         details=details,
+        commit=commit,
     )
 
 

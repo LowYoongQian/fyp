@@ -2,7 +2,7 @@ import { FloatingPanel } from '../../components/FloatingPanel';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AlertTriangle, BarChart3, BookOpen, CalendarCheck, ChevronDown, ShieldCheck, TrendingUp, Users } from 'lucide-react';
-import { apiService } from '../../services/api';
+import { apiService, clearApiCache } from '../../services/api';
 import type { AnalyticsOverview } from '../../services/api';
 import { ShimmerAnalytics } from '../../components/Shimmer';
 
@@ -25,7 +25,12 @@ export const Analytics: React.FC = () => {
       setData(result);
       setError('');
       if (!courseId && result.selected_course_id) setCourseId(String(result.selected_course_id));
-    }).catch(() => active && setError('Unable to load analytics right now.')).finally(() => active && setLoading(false));
+    }).catch(err => {
+      if (!active) return;
+      // The chosen course left the current semester while this page was open: go back to the current list.
+      if (courseId && err?.response?.status === 403) { clearApiCache(); setCourseId(''); setData(null); return; }
+      setError('Unable to load analytics right now.');
+    }).finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [courseId]);
 
@@ -48,16 +53,16 @@ export const Analytics: React.FC = () => {
   return <div className="space-y-6">
     <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div><h2 className="text-2xl font-display font-bold text-slate-900">Attendance Analytics</h2><p className="mt-1 text-xs text-slate-500">Live course performance for classes assigned to your account.</p></div>
-      <div className="relative"><button type="button" onClick={() => setOpen(value => !value)} className="inline-flex min-w-64 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-xs font-bold text-slate-700 shadow-sm"><span className="truncate">{selected ? `${selected.code} · ${selected.name}` : 'No assigned courses'}</span><ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`}/></button>
+      <div className="relative"><button type="button" onClick={() => setOpen(value => !value)} className="inline-flex min-w-64 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-xs font-bold text-slate-700 shadow-sm"><span className="truncate">{selected ? `${selected.code} · ${selected.name}` : 'No current courses'}</span><ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`}/></button>
         {open && <FloatingPanel className="absolute right-0 z-50 mt-2 w-full min-w-72 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">{data?.courses.map(course => <button key={course.id} type="button" onClick={() => { setCourseId(String(course.id)); setOpen(false); }} className={`w-full rounded-lg px-3 py-2.5 text-left text-xs hover:bg-blue-50 ${String(course.id) === courseId ? 'bg-blue-50 text-brand-blue' : 'text-slate-700'}`}><strong className="block">{course.code}</strong><span className="mt-0.5 block text-[10px] text-slate-500">{course.name}</span></button>)}</FloatingPanel>}
       </div>
     </header>
 
-    {!data?.courses.length ? <div className="uipro-card py-16 text-center text-sm text-slate-500">No courses are assigned to this account.</div> : <>
+    {!data?.courses.length ? <div className="uipro-card py-16 text-center text-sm text-slate-500">You have no courses in the current semester.</div> : <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards.map(item => <div key={item.label} className="uipro-card flex items-center gap-4 bg-white/80"><div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${item.tone}`}><item.icon className="h-5 w-5"/></div><div><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{item.label}</p><p className="mt-1 text-xl font-black text-slate-900">{item.value}</p><p className="text-[10px] text-slate-500">{item.note}</p></div></div>)}</div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <section className="uipro-card xl:col-span-2"><Title icon={BarChart3} text="Weekly attendance trend" note={`${weekly.length} calendar weeks · through today`}/><div className="mt-4 h-72">{weekly.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={weekly} margin={{ top: 8, right: 12, left: -20 }}><defs><linearGradient id="rateFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563eb" stopOpacity={0.22}/><stop offset="95%" stopColor="#2563eb" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/><XAxis dataKey="label" tick={{ fontSize: 10 }}/><YAxis domain={[0, 100]} tick={{ fontSize: 10 }}/><Tooltip formatter={(value, name) => name === 'rate' ? [`${value}%`, 'Attendance'] : [value, name === 'classes' ? 'Completed classes' : 'Tracked classes']}/><Area type="monotone" dataKey="rate" stroke="#2563eb" strokeWidth={2.5} fill="url(#rateFill)" connectNulls={false}/><Area type="monotone" dataKey="tracked_classes" stroke="transparent" fill="transparent"/><Area type="monotone" dataKey="classes" stroke="transparent" fill="transparent"/></AreaChart></ResponsiveContainer> : <Empty text="Complete a class to begin the weekly trend."/>}</div><p className="mt-2 text-[10px] text-slate-500">Weeks without a line have no completed attendance yet; unresolved classes are not treated as 0%.</p></section>
+        <section className="uipro-card xl:col-span-2"><Title icon={BarChart3} text="Weekly attendance trend" note={`${weekly.length} calendar weeks · through today`}/><div className="mt-4 h-72">{weekly.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={weekly} margin={{ top: 8, right: 12, left: -20 }}><defs><linearGradient id="rateFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563eb" stopOpacity={0.22}/><stop offset="95%" stopColor="#2563eb" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/><XAxis dataKey="label" tick={{ fontSize: 10 }}/><YAxis domain={[0, 100]} tick={{ fontSize: 10 }}/><Tooltip formatter={(value, name) => name === 'rate' ? [`${value}%`, 'Attendance'] : [value, name === 'classes' ? 'Completed classes' : 'Tracked classes']}/><Area type="monotone" dataKey="rate" stroke="#2563eb" strokeWidth={2.5} fill="url(#rateFill)" connectNulls={false}/><Area type="monotone" dataKey="tracked_classes" stroke="transparent" fill="transparent"/><Area type="monotone" dataKey="classes" stroke="transparent" fill="transparent"/></AreaChart></ResponsiveContainer> : <Empty text="Complete a class to begin the weekly trend."/>}</div><p className="mt-2 text-[10px] text-slate-500">Weeks without a line have no completed attendance yet.</p></section>
         <section className="uipro-card"><Title text="Check-in verification"/><div className="relative mt-3 h-44"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.verification} dataKey="count" innerRadius={53} outerRadius={70} paddingAngle={verificationTotal ? 3 : 0}>{data.verification.map((_, index) => <Cell key={index} fill={COLORS[index]}/>)}</Pie><Tooltip/></PieChart></ResponsiveContainer><div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center"><strong className="text-xl">{verificationTotal ? Math.round(verified * 100 / verificationTotal) : 0}%</strong><span className="text-[9px] font-bold uppercase text-slate-400">verified</span></div></div><div className="space-y-2">{data.verification.map((item, index) => <div key={item.name} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs"><span className="flex items-center gap-2 font-semibold text-slate-600"><i className="h-2 w-2 rounded-full" style={{ backgroundColor: COLORS[index] }}/>{item.name}</span><strong>{item.count}</strong></div>)}</div></section>
       </div>
 

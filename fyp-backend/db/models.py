@@ -50,6 +50,12 @@ class User(Base):
     recovery_email        = Column(String, nullable=True, unique=True)
     recovery_email_verified = Column(Boolean, default=False, nullable=False)
     recovery_prompt_dismissed = Column(Boolean, default=False, server_default="false", nullable=False)
+    # NULL means the account never chose: the pet shows and the default pet is used.
+    pet_visible           = Column(Boolean, nullable=True)
+    pet_choice            = Column(String(32), nullable=True)
+    # Where the pet was last dropped, as the distance from the top-left of the allowed area; NULL = default corner. Saved with the account so it follows the user to every browser and to the live site.
+    pet_offset_x          = Column(Integer, nullable=True)
+    pet_offset_y          = Column(Integer, nullable=True)
     recovery_code_hash    = Column(String, nullable=True)
     recovery_code_expires_at = Column(DateTime, nullable=True)
     password_reset_hash   = Column(String, nullable=True, index=True)
@@ -250,6 +256,9 @@ class ClassMeeting(Base):
     end           = Column(String, nullable=False)
     room          = Column(String, nullable=False)
     lecturer_id   = Column(UUID(as_uuid=False), ForeignKey("lecturers.id", ondelete="SET NULL"), nullable=True, index=True)
+    # When this slot started to exist (set on creation and whenever its day or time changes). Occurrences that began earlier were never owed,
+    # so the missed-class recovery must not invent review rows for them. NULL = a slot from before this column: its old recovery stays.
+    effective_from = Column(DateTime, nullable=True, default=utcnow)
 
     course        = relationship("Course")
     lecturer      = relationship("Lecturer")

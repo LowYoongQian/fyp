@@ -134,7 +134,7 @@ export const StudentContact: React.FC = () => {
       setSubject(''); setMessage(''); setAttachment(null); setIsModalOpen(false);
       swalSuccess('Complaint Ticket Created', `Ticket ID ${created.id} submitted to Admin Helpdesk. Response will be posted here.`);
     } catch (error) {
-      swalError('Submission Failed', apiErrorMessage(error, 'Your ticket could not be confirmed. Your form has been kept; check your connection and try again.'));
+      swalError('Submission Failed', apiErrorMessage(error, 'Your ticket was not sent. Your form is kept, so please try again.'));
     } finally { setSubmitting(false); }
   };
   const filteredTickets = tickets;
@@ -158,7 +158,7 @@ export const StudentContact: React.FC = () => {
             Contact Admin & Inquiries
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 max-w-2xl">
-            Lodge attendance discrepancies, face scanner technical issues, or general complaints directly to system administrators and academic coordinators.
+            Report an attendance or face scan problem, or send a complaint.
           </p>
         </div>
 

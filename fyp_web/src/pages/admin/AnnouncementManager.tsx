@@ -259,7 +259,7 @@ export const AnnouncementManager: React.FC = () => {
       setProgrammes(progData);
       setCourses(courseData);
     } catch (err: any) {
-      setError('Failed to fetch announcements or programmes. Please ensure backend is running.');
+      setError('Could not load notices. Please try again.');
       console.error(err);
     } finally {
       setLoading(false);

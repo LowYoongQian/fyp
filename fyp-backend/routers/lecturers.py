@@ -2,8 +2,9 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -25,6 +26,7 @@ from db.models import (
     User,
     UserNotification,
 )
+from domain import timetable_access
 from domain.announcements import announcement_dict, visible_announcements
 from domain.scheduler import (
     calculate_schedule,
@@ -33,6 +35,7 @@ from domain.scheduler import (
     session_end_utc,
     slots_for_assignment,
 )
+from domain import personal_email
 from integrations import resend_mail
 from integrations.announcement_files import ALLOWED_TYPES
 from integrations.announcement_files import download as download_announcement_file
@@ -64,8 +67,8 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
     # Find the lecturer profile
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
-    # Get courses assigned directly or via assignments
-    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
+    # Assigned courses in the current semester only: an ended or upcoming one is not current teaching work.
+    courses = db.query(Course).filter(Course.id.in_(timetable_access.teaching_course_ids(db, lecturer.id))).all()
 
     # Batch enrolled counts — single GROUP BY instead of one COUNT per course
     course_ids = [c.id for c in courses]
@@ -88,10 +91,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
             "course_name": c.course_name,
             "credit_hours": c.credit_hours,
             "semester": semester_dict(c.semester) if c.semester_id else None,
-            "schedule_day": m.day if m else None,
-            "schedule_start": m.start if m else None,
-            "schedule_end": m.end if m else None,
-            "schedule_room": m.room if m else None,
+            **timetable_access.lecture_slot(c, m),
             "enrolled_students_count": enrol_counts.get(c.id, 0),
             "lecturer_id": c.lecturer_id,
             "lecturer_name": lecturer.name
@@ -102,7 +102,7 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
 def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
-    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
+    courses = db.query(Course).filter(Course.id.in_(timetable_access.teaching_course_ids(db, lecturer.id))).all()
     course_ids = [c.id for c in courses]
     
     alerts = db.query(Alert).filter(Alert.course_id.in_(course_ids)).order_by(Alert.triggered_at.desc()).all()
@@ -169,11 +169,13 @@ def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), curre
     # Server-side scope: the lecturer must teach this course and the student must be enrolled in it; no client recipient exists.
     if course.id not in set(my_course_ids(db, lecturer.id)):
         raise HTTPException(403, "You are not assigned to this course.")
+    if course.id not in set(timetable_access.teaching_course_ids(db, lecturer.id)):
+        raise HTTPException(403, timetable_access.NOT_CURRENT)
     if not db.query(Enrolment.id).filter(Enrolment.student_id == student.id, Enrolment.course_id == course.id).first():
         raise HTTPException(404, "This student is not enrolled in the selected course.")
     account = db.get(User, student.user_id) if student.user_id else None
-    address = (account.recovery_email or "").strip() if account else ""
-    if not address or not account.recovery_email_verified:
+    address = personal_email.deliverable_address(account)   # verified personal email only: never a school alias, never the login address
+    if not address:
         raise HTTPException(422, "This student has no verified recovery email, so no warning was sent. Ask them to verify one in their profile.")
     if not resend_mail.configured():
         raise HTTPException(503, _ALERT_FAILURES["not_configured"])
@@ -218,13 +220,18 @@ def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), curre
 
 
 @router.get("/me/timetable")
-def get_lecturer_timetable(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+def get_lecturer_timetable(semester_id: Optional[UUID] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
     # Find the lecturer profile
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
     # Get all courses where this lecturer is primary OR has staff assignments
     assigned_assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.lecturer_id == lecturer.id).all()
-    courses = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id))).all()
+    course_query = db.query(Course).filter(Course.id.in_(my_course_ids(db, lecturer.id)))
+    if semester_id:
+        # The web timetable asks for one semester: it must be in this lecturer's scope and current, or nothing is returned.
+        course_query = course_query.filter(Course.semester_id == timetable_access.require_viewable_semester(db, current_user, str(semester_id)).id)
+    # With no semester requested (the mobile app) only current-semester schedules come back; an upcoming or ended one never does.
+    courses = [c for c in course_query.all() if timetable_access.schedule_viewable(c)]
 
     # Batch enrolled counts — single GROUP BY instead of one COUNT per course
     timetable_course_ids = [c.id for c in courses]
@@ -394,9 +401,9 @@ def get_lecturer_enrolments(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer),
 ):
-    """Return only enrolments for courses assigned to the current lecturer."""
+    """Return only enrolments for the current lecturer's assigned courses in the current semester."""
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-    course_ids = my_course_ids(db, lecturer.id)
+    course_ids = timetable_access.teaching_course_ids(db, lecturer.id)
     rows = (
         db.query(Enrolment, Student, Course)
         .join(Student, Student.id == Enrolment.student_id)
@@ -427,7 +434,7 @@ def get_lecturer_dashboard_summary(
 ):
     """Database-backed profile and counters for the authenticated lecturer dashboard."""
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-    course_ids = my_course_ids(db, lecturer.id)
+    course_ids = timetable_access.teaching_course_ids(db, lecturer.id)
 
     total_enrolled = (
         db.query(func.count(func.distinct(Enrolment.student_id)))
@@ -479,6 +486,7 @@ def get_lecturer_dashboard_summary(
     roster_classes = (
         db.query(func.count(func.distinct(ClassMeeting.id)))
         .filter(
+            ClassMeeting.course_id.in_(course_ids),
             (ClassMeeting.lecturer_id == lecturer.id)
             | (ClassMeeting.assignment_id.in_(assignment_ids))
             | (

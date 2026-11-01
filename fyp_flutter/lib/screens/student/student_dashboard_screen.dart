@@ -15,6 +15,7 @@ import '../system/profile_screen.dart';
 import '../system/notifications_screen.dart';
 import '../../services/live_updates.dart';
 import '../../services/academic_calendar.dart';
+import '../../services/attendance_parity.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 2: Student Main Dashboard Shell (Tab Layout)
@@ -2467,6 +2468,7 @@ class _MainScreenState extends State<MainScreen> {
                       itemBuilder: (context, index) {
                         final log = filteredLogs[index];
                         final isVerified = log['status'] == 'Verified';
+                        final isExcused = log['status'] == 'Excused';
                         final courseCode = log['courseCode']
                             .toString()
                             .toUpperCase();
@@ -2486,6 +2488,8 @@ class _MainScreenState extends State<MainScreen> {
 
                         final footerLabel = isVerified
                             ? "Registered at $timePart"
+                            : isExcused
+                            ? "Excused (approved leave)"
                             : "Absent";
 
                         String lecturerName = "DR. WONG KANG SHIANG";
@@ -2577,6 +2581,8 @@ class _MainScreenState extends State<MainScreen> {
                                       fontWeight: FontWeight.bold,
                                       color: isVerified
                                           ? const Color(0xFF10B981)
+                                          : isExcused
+                                          ? const Color(0xFF64748B)
                                           : const Color(0xFFEF4444),
                                     ),
                                   ),
@@ -2595,60 +2601,22 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  List<Map<String, dynamic>> _getOverallCourseStats() {
-    final List<Map<String, dynamic>> result = [];
-    final Set<String> seenCodes = {};
+  List<Map<String, dynamic>> _getOverallCourseStats() => currentCourseStats(widget.studentSchedule, ApiConfig.now);
 
-    // 1. Gather all enrolled courses the student has in their timetable schedule.
-    for (final course in widget.studentSchedule) {
-      final code = course['courseCode'].toString().toUpperCase();
-      final name = course['courseName'].toString().toUpperCase();
-      final rate = (course['attendanceRate'] is num)
-          ? (course['attendanceRate'] as num).toDouble()
-          : (double.tryParse(course['attendanceRate']?.toString() ?? '') ??
-                100.0);
-
-      if (!seenCodes.contains(code)) {
-        seenCodes.add(code);
-        result.add({
-          'courseCode': code,
-          'courseName': name,
-          'percentage': rate,
-        });
-      }
+  Widget _buildCircularPercentage(double? percentage) {
+    if (percentage == null) {
+      return SizedBox(
+        height: 48,
+        width: 48,
+        child: Center(
+          child: Text(
+            'No data',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF94A3B8)),
+          ),
+        ),
+      );
     }
-
-    // 2. Also incorporate any course from attendanceHistory that isn't in studentSchedule.
-    final Map<String, List<Map<String, dynamic>>> groupedLogs = {};
-    for (final log in widget.attendanceHistory) {
-      final code = log['courseCode'].toString().toUpperCase();
-      groupedLogs.putIfAbsent(code, () => []).add(log);
-    }
-
-    for (final entry in groupedLogs.entries) {
-      final code = entry.key;
-      if (seenCodes.contains(code)) continue;
-
-      final logs = entry.value;
-      final name = logs.first['courseName'].toString().toUpperCase();
-      final total = logs.length;
-      final attended = logs
-          .where((l) => l['status'].toString().toLowerCase() == 'verified')
-          .length;
-      final percentage = total > 0 ? (attended / total) * 100.0 : 0.0;
-
-      seenCodes.add(code);
-      result.add({
-        'courseCode': code,
-        'courseName': name,
-        'percentage': percentage,
-      });
-    }
-
-    return result;
-  }
-
-  Widget _buildCircularPercentage(double percentage) {
     final Color color;
     if (percentage < 80.0) {
       color = const Color(0xFFEF4444);
@@ -2692,7 +2660,7 @@ class _MainScreenState extends State<MainScreen> {
           padding: const EdgeInsets.symmetric(vertical: 24.0),
           child: Center(
             child: Text(
-              "No enrolled courses available.",
+              "No current courses assigned.",
               style: GoogleFonts.inter(
                 fontSize: 11,
                 color: const Color(0xFF94A3B8),
@@ -2712,10 +2680,7 @@ class _MainScreenState extends State<MainScreen> {
         final course = overallStats[index];
         final courseCode = course['courseCode'].toString().toUpperCase();
         final courseName = course['courseName'].toString().toUpperCase();
-        final percentage = (course['percentage'] is num)
-            ? (course['percentage'] as num).toDouble()
-            : (double.tryParse(course['percentage']?.toString() ?? '') ??
-                  100.0);
+        final percentage = courseRate(course, course['percentage']);
 
         return InkWell(
           borderRadius: BorderRadius.circular(20),

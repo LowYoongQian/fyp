@@ -289,7 +289,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 font-sans">
             {subTab === 'mc'
-              ? "Review and verify official Medical Certificate (MC) leave requests submitted by students."
+              ? "Review medical leave requests from students."
               : "Review student issue submissions, application feedback, and inquiries."}
           </p>
         </div>

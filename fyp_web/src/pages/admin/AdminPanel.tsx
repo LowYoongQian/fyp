@@ -60,7 +60,7 @@ export const AdminPanel: React.FC = () => {
       setStudentName('');
       setStudentCode('');
       await loadData();
-      await swalSuccess('Student Created', 'Student profile registered in the registry database.');
+      await swalSuccess('Student Created', 'Student added.');
     } catch (err: any) {
       await swalError('Error', err.message);
     }
@@ -108,7 +108,7 @@ export const AdminPanel: React.FC = () => {
             Admin Registry Console
           </h2>
           <p className="text-sm text-slate-500 leading-relaxed font-sans">
-            Register new student identities, provision academic course modules, and allocate class groupings within the system.
+            Add students, courses and class groups.
           </p>
         </div>
       </div>

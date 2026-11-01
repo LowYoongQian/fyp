@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -12,13 +15,15 @@ from db.models import (
 )
 from utils.security import require_student
 from utils.db_helpers import require_own_profile
-from domain.attendance import session_hours, attendance_rate_percent
+from domain.attendance import session_hours, attendance_rate_percent, completed_class_count
 from integrations.face import (
     _extract_face_embedding, _embedding_to_floats,
     _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
+from domain import student_next_action, timetable_access
 from domain.scheduler import calculate_schedule, get_course_group_slots, meeting_key_for, session_end_utc
 from domain.session_sync import sync_class_sessions
+from routers.attendance_features import _next_meeting
 from routers.face_enrolment import FaceCaptureSubmit, submit_capture
 
 router = APIRouter(prefix="/students", tags=["Students"])
@@ -77,17 +82,21 @@ def verify_face_only(body: FaceRegisterSubmit, db: Session = Depends(get_db), cu
 
 
 @router.get("/me/courses")
-def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    """Courses this student is enrolled in, with timetable info for the app."""
+def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    """Courses this student is enrolled in, with timetable info for the app. The web timetable passes one semester_id."""
     sync_class_sessions()
     student = require_own_profile(db, Student, current_user.id, "Student")
-    rows = (
+    query = (
         db.query(Course, Enrolment.class_group)
         .join(Enrolment, Enrolment.course_id == Course.id)
         .filter(Enrolment.student_id == student.id)
-        .all()
     )
-    
+    if semester_id:
+        # Must be in this student's scope and current; otherwise the request is refused and no schedule is returned.
+        query = query.filter(Course.semester_id == timetable_access.require_viewable_semester(db, current_user, str(semester_id)).id)
+    # With no semester requested (the mobile app) only current-semester schedules come back; an upcoming or ended one never does.
+    rows = [(c, group) for c, group in query.all() if timetable_access.schedule_viewable(c)]
+
     # Calculate deterministic clash-free schedules
     schedule_map = calculate_schedule(db)
 
@@ -129,6 +138,7 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
         course_sessions = sessions_by_course.get(c.id, [])
         attendance_rate = attendance_rate_percent(
             course_sessions, attended, student.id, group)
+        completed = completed_class_count(course_sessions, attended, student.id, group)
 
         # 1. Primary Lecture Slot
         # "id" is the meeting_key ("Lecture-<uuid>") — the same key that indexes
@@ -154,52 +164,32 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
                 "lecturer_name": lecturer_name,
                 "role": "Lecture",
                 "attendance_rate": attendance_rate,
+                "completed_classes": completed,
             })
         
-        # 2. Tutor Slot (if assigned) — this student's group only.
-        tutor_assign = next((a for a in assignments if a.role == 'Tutor'), None)
-        if tutor_assign:
-            tutor_slot = schedule_map.get(
-                meeting_key_for("Tutor", c.id, tutor_assign.id, group))
-            if tutor_slot:
-                tutor_name = tutor_assign.lecturer.name if tutor_assign.lecturer else "TBA"
+        # 2 & 3. Tutor / Practical — this student's group only, one row per staff assignment. A course may have several
+        # assignments in the same role and each owns its meeting; keeping only the first hid the rest from the student.
+        for role in ("Tutor", "Practical"):
+            for assign in (a for a in assignments if a.role == role):
+                key = meeting_key_for(role, c.id, assign.id, group)
+                slot = schedule_map.get(key)
+                if not slot:
+                    continue
                 result.append({
-                    "id": meeting_key_for("Tutor", c.id, tutor_assign.id, group),
+                    "id": key,
                     "course_id": c.id,
                     "course_code": c.course_code,
                     "course_name": c.course_name,
                     "class_group": group,
-                    "schedule_day": tutor_slot["day"],
-                    "meeting_id": tutor_slot.get("meeting_id"),
-                    "schedule_start": tutor_slot["start"],
-                    "schedule_end": tutor_slot["end"],
-                    "schedule_room": tutor_slot["room"],
-                    "lecturer_name": tutor_name,
-                    "role": "Tutor",
+                    "schedule_day": slot["day"],
+                    "meeting_id": slot.get("meeting_id"),
+                    "schedule_start": slot["start"],
+                    "schedule_end": slot["end"],
+                    "schedule_room": slot["room"],
+                    "lecturer_name": assign.lecturer.name if assign.lecturer else "TBA",
+                    "role": role,
                     "attendance_rate": attendance_rate,
-                })
-            
-        # 3. Practical Slot (if assigned)
-        practical_assign = next((a for a in assignments if a.role == 'Practical'), None)
-        if practical_assign:
-            prac_slot = schedule_map.get(
-                meeting_key_for("Practical", c.id, practical_assign.id, group))
-            if prac_slot:
-                practical_name = practical_assign.lecturer.name if practical_assign.lecturer else "TBA"
-                result.append({
-                    "id": meeting_key_for("Practical", c.id, practical_assign.id, group),
-                    "course_id": c.id,
-                    "course_code": c.course_code,
-                    "course_name": c.course_name,
-                    "class_group": group,
-                    "schedule_day": prac_slot["day"],
-                    "meeting_id": prac_slot.get("meeting_id"),
-                    "schedule_start": prac_slot["start"],
-                    "schedule_end": prac_slot["end"],
-                    "schedule_room": prac_slot["room"],
-                    "lecturer_name": practical_name,
-                    "role": "Practical",
-                    "attendance_rate": attendance_rate,
+                    "completed_classes": completed,
                 })
     from domain.semesters import semester_dict
     terms = {str(c.id): semester_dict(c.semester) if c.semester_id else None for c, _ in rows}
@@ -208,11 +198,8 @@ def get_my_courses(db: Session = Depends(get_db), current_user: User = Depends(r
     return result
 
 
-@router.get("/me/active-sessions")
-def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    """Open sessions matching this student's enrolments (course + group)."""
-    sync_class_sessions()
-    student = require_own_profile(db, Student, current_user.id, "Student")
+def _open_sessions(db: Session, student: Student) -> list:
+    """Open classes this student is enrolled for (course and group), still inside their window and their semester."""
     rows = (
         db.query(ClassSession, Course, Enrolment.class_group)
         .join(Enrolment, Enrolment.course_id == ClassSession.course_id)
@@ -267,6 +254,23 @@ def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = D
         }
         for s, c, _ in rows
     ]
+
+
+@router.get("/me/active-sessions")
+def get_my_active_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    """Open sessions matching this student's enrolments (course + group)."""
+    sync_class_sessions()
+    return _open_sessions(db, require_own_profile(db, Student, current_user.id, "Student"))
+
+
+@router.get("/me/next-action")
+def get_my_next_action(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    """The one thing this student should do next (check in, register a face, verify an email, or see the next class).
+
+    One server decision for the web dashboard and the mobile app. Read-only: nothing is created, opened or sent."""
+    sync_class_sessions()
+    student = require_own_profile(db, Student, current_user.id, "Student")
+    return student_next_action.decide(db, current_user, student, _open_sessions(db, student), _next_meeting(db, student, current_only=True))
 
 
 @router.get("/me/attendance")

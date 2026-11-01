@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import ipaddress
 import os
 import time
@@ -68,14 +68,34 @@ def get_audit_map_config(current_user: User = Depends(require_admin)):
         return AuditMapConfigResponse(api_key="")
     return AuditMapConfigResponse(api_key=api_key)
 
+def _utc_bound(value: Optional[datetime], label: str) -> Optional[datetime]:
+    """Stored audit times are naive UTC; a bound must say which instant it means, so a bare local time is refused."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        raise HTTPException(422, f"{label} must include a timezone offset, for example +08:00.")
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @router.get("/logs", response_model=List[AuditLogResponse])
 def get_audit_logs(
     category: Optional[str] = Query(None), # 'admin' | 'staff' | 'all'
     search: Optional[str] = Query(None),
+    # Half-open range: created_from is inclusive, created_to is EXCLUSIVE, so a whole local day is [00:00, next 00:00)
+    # and an inclusive end minute is sent as the following minute. Both are applied before ordering.
+    created_from: Optional[datetime] = Query(None),
+    created_to: Optional[datetime] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
+    start, end = _utc_bound(created_from, "created_from"), _utc_bound(created_to, "created_to")
+    if start and end and end <= start:
+        raise HTTPException(422, "The end of the range must be after its start.")
     query = db.query(AuditLog)
+    if start:
+        query = query.filter(AuditLog.created_at >= start)
+    if end:
+        query = query.filter(AuditLog.created_at < end)
     if category and category.lower() != "all":
         query = query.filter(AuditLog.category == category.lower())
     if search:

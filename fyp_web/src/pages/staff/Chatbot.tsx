@@ -1,12 +1,12 @@
 import { TextInput } from '../../components/LimitedTextField';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiService } from '../../services/api';
 import { BookOpen, MessageSquareCode, Send, Sparkles, UserRound, UsersRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { TextShimmer } from '../../components/loading-ui/text-shimmer';
 import { InfinityLoop } from '../../components/loading-ui/infinity';
 import { ChatWorkspace, type ChatTab } from '../../components/ChatWorkspace';
-import { rankChatSuggestions } from '../../utils/chatSuggestions';
+import { CHAT_STARTERS, rankChatSuggestions } from '../../utils/chatSuggestions';
 import { useAuth } from '../../context/AuthContext';
 import { AccountAvatar } from '../../components/AccountAvatar';
 
@@ -179,8 +179,8 @@ const GreetingText: React.FC<{ text: string; onDone: () => void }> = ({ text, on
   return <><span aria-hidden="true">{text.slice(0, shown)}</span><span className="sr-only">{text}</span></>;
 };
 
-const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
-  update: (title: string, sessionId?: string, question?: string) => void }> = ({ tab, active, questions, update }) => {
+const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
+  update: (title: string, sessionId?: string) => void }> = ({ tab, active, update }) => {
   const { user } = useAuth();
   // A saved chat restores its own messages and never shows the greeting; only a genuinely new chat gets it, once.
   const restoring = !tab.temporary && !!(tab.restoreLatest || tab.sessionId);
@@ -194,7 +194,9 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   const [historyLoading, setHistoryLoading] = useState(restoring);
   const [historyError, setHistoryError] = useState(false);
   const [historyAttempt, setHistoryAttempt] = useState(0);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  // null: no follow-up state yet (a new chat, or an older saved chat), which shows the starters. A list, even an empty one, is what the
+  // last answer showed, so an intentionally empty state is never replaced by the starters.
+  const [followUps, setFollowUps] = useState<string[] | null>(null);
   const contextRef = useRef<Record<string, string | null>>({});
   const requestRef = useRef<AbortController | null>(null);
   const sendingRef = useRef(false);
@@ -204,18 +206,60 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [historyCursor, setHistoryCursor] = useState<string>();
   const messagePaneRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Scroll model: this pane scrolls itself (never the page around it). `stick` means the reader is at the bottom, so new content is followed;
+  // a reader who moved up, by wheel, touch or scrollbar, is never pulled back, and only such a reader can start loading older messages.
+  const stickRef = useRef(true);
+  const readerMovedRef = useRef(false);
+  const lastFollowedIdRef = useRef<string | undefined>(undefined);
+  const prependRef = useRef<{ height: number; top: number } | null>(null);
   const loadingOlderRef = useRef(false);
   const statusTimersRef = useRef<number[]>([]);
   const messageIdRef = useRef(0);
 
-  const lastQuestion = messages.filter(message => message.sender === 'user').at(-1)?.text || '';
-  const quickPrompts = useMemo(() => rankChatSuggestions(suggestions, questions, lastQuestion), [suggestions, questions, lastQuestion]);
+  // Only this thread's own questions steer its chips, so no other chat, tab or temporary conversation can influence them.
+  const questions = useMemo(() => messages.filter(message => message.sender === 'user').map(message => message.text), [messages]);
+  const quickPrompts = useMemo(() => followUps ? rankChatSuggestions(followUps, questions) : [], [followUps, questions]);
+  const starters = useMemo(() => followUps === null ? rankChatSuggestions(CHAT_STARTERS, questions) : [], [followUps, questions]);
+  const chips = followUps === null ? starters : quickPrompts;
   const newestMessageId = messages[messages.length - 1]?.id;
 
+  const toBottom = useCallback(() => {
+    const pane = messagePaneRef.current;
+    if (!pane || !pane.clientHeight) return;   // a hidden tab has no height and must not scroll anything
+    stickRef.current = true;
+    readerMovedRef.current = false;
+    pane.scrollTop = pane.scrollHeight;
+  }, []);
+
+  // After the restored or new content is laid out: follow it at the bottom, and always show what the reader just sent.
+  useLayoutEffect(() => {
+    if (!active || historyLoading) return;
+    const appended = lastFollowedIdRef.current !== newestMessageId;
+    lastFollowedIdRef.current = newestMessageId;
+    const sentByReader = appended && messages[messages.length - 1]?.sender === 'user';
+    if (stickRef.current || sentByReader) toBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newestMessageId, sending, historyLoading, active, toBottom]);
+
+  // Content that grows after layout (rich cards, late images) or a pane that resizes keeps a bottom-reader at the bottom.
   useEffect(() => {
-    if (active) bottomRef.current?.scrollIntoView({ behavior: historyLoading || window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-  }, [newestMessageId, sending, historyLoading, active]);
+    const pane = messagePaneRef.current, content = contentRef.current;
+    if (!pane || !content) return;
+    const follow = () => { if (stickRef.current && pane.clientHeight) pane.scrollTop = pane.scrollHeight; };
+    const observer = new ResizeObserver(follow);
+    observer.observe(pane);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  // Older messages arrive above the reader: keep the message they were looking at where it was.
+  useLayoutEffect(() => {
+    const pane = messagePaneRef.current, anchor = prependRef.current;
+    if (!pane || !anchor) return;
+    prependRef.current = null;
+    pane.scrollTop = anchor.top + pane.scrollHeight - anchor.height;
+  }, [messages]);
 
   useEffect(() => {
     if (greeting !== 'typing') return;
@@ -232,6 +276,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
         if (tab.restoreLatest) titleRef.current = history.messages.find(message => message.role === 'user')?.content || tab.title;
         setSessionId(history.session_id); update(titleRef.current, history.session_id);
       }
+      if (Array.isArray(history.suggestions)) setFollowUps(history.suggestions);
       setHasOlderMessages(history.has_more);
       setHistoryCursor(history.next_cursor || undefined);
       if (history.messages.length) {
@@ -262,8 +307,6 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   const loadOlderMessages = useCallback(async () => {
     if (loadingOlderRef.current || !hasOlderMessages || !historyCursor || !sessionId) return;
     const pane = messagePaneRef.current;
-    const previousHeight = pane?.scrollHeight ?? 0;
-    const previousTop = pane?.scrollTop ?? 0;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
@@ -278,16 +321,14 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
         sender: message.role === 'user' ? 'user' : 'system',
         text: message.content,
       }));
+      stickRef.current = false;
+      if (pane) prependRef.current = { height: pane.scrollHeight, top: pane.scrollTop };
       setMessages((current) => {
         const knownIds = new Set(current.map((message) => message.id));
         return [...older.filter((message) => !knownIds.has(message.id)), ...current];
       });
       setHasOlderMessages(history.has_more);
       setHistoryCursor(history.next_cursor || undefined);
-      window.requestAnimationFrame(() => {
-        if (!pane) return;
-        pane.scrollTop = previousTop + pane.scrollHeight - previousHeight;
-      });
     } catch (error) {
       console.error('Older chat messages could not be loaded.', error);
     } finally {
@@ -297,8 +338,14 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
   }, [hasOlderMessages, historyCursor, sessionId]);
 
   const handleMessageScroll = () => {
-    if ((messagePaneRef.current?.scrollTop ?? 1) <= 80) void loadOlderMessages();
+    const pane = messagePaneRef.current;
+    if (!pane || !pane.clientHeight) return;
+    if (pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 48) stickRef.current = true;
+    else if (readerMovedRef.current) stickRef.current = false;
+    // Only a reader who scrolled up there asks for older messages; the app's own scrolling never does.
+    if (readerMovedRef.current && !stickRef.current && pane.scrollTop <= 80) void loadOlderMessages();
   };
+  const markReaderMoved = () => { readerMovedRef.current = true; };
 
   useEffect(() => {
     mountedRef.current = true;
@@ -312,7 +359,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
     const controller = new AbortController();
     requestRef.current = controller;
     if (!messages.some(message => message.sender === 'user')) titleRef.current = questionText.trim();
-    update(titleRef.current, sessionId || undefined, questionText);
+    update(titleRef.current, sessionId || undefined);
     statusTimersRef.current.forEach(window.clearTimeout);
     setLoadingStatus('Sending...');
     setSending(true);
@@ -342,7 +389,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
       if (!mountedRef.current || controller.signal.aborted) return;
       if (response.session_id) { setSessionId(response.session_id); update(titleRef.current, response.session_id); }
       contextRef.current = response.context_state || {};
-      setSuggestions(response.suggestions || []);
+      setFollowUps(response.suggestions || []);
       messageIdRef.current += 1;
       const systemMsg: ChatMessage = {
         id: `message-${messageIdRef.current}`,
@@ -394,13 +441,17 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
       </div>
 
       {/* Main Messages View */}
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div data-chat-body className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         ref={messagePaneRef}
         onScroll={handleMessageScroll}
+        onWheel={markReaderMoved}
+        onTouchMove={markReaderMoved}
+        onPointerDown={markReaderMoved}
         aria-busy={historyLoading}
-        className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/20"
+        className="flex-1 overflow-y-auto p-6 bg-slate-50/20"
       >
+      <div ref={contentRef} className="space-y-4">
         {historyError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           Saved messages could not be loaded; your history has not been deleted.
           <button className="ml-2 underline font-semibold" onClick={() => { setHistoryError(false); setHistoryLoading(true); setHistoryAttempt(attempt => attempt + 1); }}>Retry history</button>
@@ -464,7 +515,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
             </div>
           </div>
         )}
-        <div ref={bottomRef} />
+      </div>
       </div>
       {/* Initial restore of a saved chat: only a centred loader over a soft breathing glow, clipped inside the chat. */}
       <AnimatePresence>
@@ -485,9 +536,11 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
       {/* Chat Form */}
       <div className="p-4 border-t border-slate-100 bg-slate-50/50 shrink-0 space-y-3">
         {/* Quick prompts tags */}
-        <p className="text-[10px] text-slate-400">Suggested next questions · Based on this visit and current results</p>
-        <div aria-label="Suggested questions" className="flex gap-2 overflow-x-auto pb-1 text-[10px] no-scrollbar">
-          {quickPrompts.map((p, idx) => (
+        <p className="text-[10px] text-slate-400">{quickPrompts.length ? 'Suggested next questions · Based on your last question and its results'
+          : starters.length ? 'Ways to start · Or ask in your own words below'
+          : 'No follow-up suggestions for this answer. Ask your own question below.'}</p>
+        {chips.length > 0 && <div aria-label="Suggested questions" className="flex gap-2 overflow-x-auto pb-1 text-[10px] no-scrollbar">
+          {chips.map((p, idx) => (
             <button
               key={idx}
               disabled={sending || historyLoading || historyError}
@@ -497,7 +550,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
               {p}
             </button>
           ))}
-        </div>
+        </div>}
 
         {/* Input area */}
         <form
@@ -535,8 +588,8 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean; questions: string[];
 
 export const Chatbot: React.FC = () => {
   const { user } = useAuth();
-  return <ChatWorkspace key={user?.user_id} renderThread={(tab, active, questions, update) =>
-    <ChatThread tab={tab} active={active} questions={questions} update={update} />} />;
+  return <ChatWorkspace key={user?.user_id} renderThread={(tab, active, update) =>
+    <ChatThread tab={tab} active={active} update={update} />} />;
 };
 
 

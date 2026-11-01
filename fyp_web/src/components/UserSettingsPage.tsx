@@ -498,7 +498,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
                   <input type="checkbox" checked={recoveryPromptDismissed} onChange={event => setRecoveryPromptDismissed(event.target.checked)}
                     className="mt-0.5 h-4 w-4 shrink-0 accent-[#2563eb]" />
                   <span><span className="block text-xs font-bold text-slate-900">Do not show recovery setup reminders</span>
-                    <span className="block mt-1 text-[11px] leading-relaxed text-slate-500">Uncheck and save to show reminders at sign-in again. Recovery email setup remains available in your profile.</span></span>
+                    <span className="block mt-1 text-[11px] leading-relaxed text-slate-500">Uncheck and save to see these reminders again.</span></span>
                 </label>
               )}
               <AccountSecurityPanel enabled={profile?.two_factor_enabled ?? false} />
@@ -637,7 +637,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
               <h4 className="font-bold text-sm">Discard unsaved changes?</h4>
             </div>
             <p style={{ color: THEME_TOKENS.textSecondary }} className="text-xs leading-relaxed">
-              You have modified settings that have not been saved yet. If you close now, your unsaved preference changes will be lost.
+              Your unsaved changes will be lost.
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <button

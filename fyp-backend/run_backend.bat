@@ -80,7 +80,7 @@ if errorlevel 1 (
 
 echo.
 echo Starting backend on http://127.0.0.1:!BACKEND_PORT!
-if defined RELOAD (echo Reload mode enabled.) else (echo Reload mode disabled.)
+if defined RELOAD (echo Reload mode enabled. It restarts on code edits but does NOT migrate: after a new migration appears, press Ctrl+C and run this script again.) else (echo Reload mode disabled.)
 echo Press Ctrl+C to stop. If the port stays busy afterwards, run stop_backend.bat.
 echo.
 

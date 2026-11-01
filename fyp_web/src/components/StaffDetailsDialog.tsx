@@ -6,6 +6,7 @@ import { apiErrorMessage } from '../utils/apiError';
 import { attendanceDateTime } from '../utils/attendanceTime';
 import { ModalLayer } from './ModalLayer';
 import { ShimmerProfileModal } from './Shimmer';
+import { PasswordRow } from './StudentDetailsDialog';
 
 const NA = 'Not available';
 const yes = (value: boolean) => (value ? 'Yes' : 'No');
@@ -21,7 +22,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
     <dl className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 sm:grid-cols-2">{children}</dl></section>;
 }
 
-export function StaffDetailsDialog({ staff, onClose }: { staff: AdminStaff; onClose: () => void }) {
+export function StaffDetailsDialog({ staff, onClose, onChangePassword }: { staff: AdminStaff; onClose: () => void; onChangePassword?: () => void }) {
   const [details, setDetails] = useState<StaffDetails | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -60,7 +61,6 @@ export function StaffDetailsDialog({ staff, onClose }: { staff: AdminStaff; onCl
   }, [onClose]);
 
   const account = details?.account;
-  const prefs = account?.preferences;
   const avatar = details?.identity.avatar_url;
   return <ModalLayer className="fixed inset-0 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="staff-details-title" className="uipro-card relative w-full max-w-2xl max-h-[90dvh] flex flex-col gap-5 overflow-hidden bg-white !p-6">
@@ -93,11 +93,9 @@ export function StaffDetailsDialog({ staff, onClose }: { staff: AdminStaff; onCl
             <Field label="Status">{account?.status}</Field>
             <Field label="Created">{when(account?.created_at ?? null)}</Field>
             <Field label="Last login">{when(account?.last_login_at ?? null)}</Field>
-            <Field label="Two-factor authentication">{account ? yes(account.two_factor_enabled) : null}</Field>
             <Field label="Recovery email">{account?.recovery_email}</Field>
             <Field label="Recovery email verified">{account ? yes(account.recovery_email_verified) : null}</Field>
-            <Field label="Display">{prefs ? `${prefs.theme} theme · ${prefs.font_size} text · ${prefs.language}` : null}</Field>
-            <Field label="Notifications">{prefs ? `All ${yes(prefs.notifications)} · Email ${yes(prefs.email_notifications)} · Push ${yes(prefs.push_notifications)} · In-app ${yes(prefs.in_app_notifications)}` : null}</Field>
+            <PasswordRow linked={!!account} onChange={onChangePassword} />
           </Group>
           <Group title="Assigned courses">
             <div className="sm:col-span-2"><dd className="space-y-1 text-xs text-slate-800">{details.courses.length ? details.courses.map(course =>

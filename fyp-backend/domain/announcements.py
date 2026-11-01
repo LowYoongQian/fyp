@@ -14,7 +14,8 @@ from datetime import datetime
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from db.models import Announcement
+from db.models import Announcement, Course, Lecturer, UserNotification
+from utils.db_helpers import my_course_ids
 from utils.timeutil import iso_utc, utcnow
 
 # High first. Anything unrecognised sorts as Medium so a typo cannot bury a notice.
@@ -23,13 +24,14 @@ _DEFAULT_PRIORITY_WEIGHT = 2
 
 
 def visible_announcements(db: Session, role: str, prog_codes, course_codes,
-                          course_groups: dict[str, set[str]] | None = None) -> list:
+                          course_groups: dict[str, set[str]] | None = None, recipient_user_id: str | None = None) -> list:
     """Published, in-window announcements addressed to this viewer, best first.
 
     role: "students" or "staff" — the audience the caller belongs to. An announcement
     aimed at the other audience is excluded; "all" reaches both.
     prog_codes / course_codes: the viewer's programme and course codes, compared
     case-insensitively. A student has one programme; a lecturer can have several.
+    recipient_user_id: the student reading; a course notice whose lecturer has since lost that course still shows to a student who already received it.
     """
     now = utcnow()
     other_audience = "staff" if role == "students" else "students"
@@ -65,12 +67,41 @@ def visible_announcements(db: Session, role: str, prog_codes, course_codes,
             return True
         return False
 
+    shown = [a for a in rows if addressed(a)]
+    if role == "students":
+        revoked = _revoked_course_notices(db, shown)
+        if revoked and recipient_user_id:
+            delivered = {key for (key,) in db.query(UserNotification.dedupe_key).filter(
+                UserNotification.user_id == recipient_user_id,
+                UserNotification.dedupe_key.in_([f"announcement:{notice_id}" for notice_id in revoked]))}
+            revoked = {notice_id for notice_id in revoked if f"announcement:{notice_id}" not in delivered}
+        shown = [a for a in shown if a.id not in revoked]
     return sorted(
-        (a for a in rows if addressed(a)),
+        shown,
         key=lambda a: (_PRIORITY_WEIGHT.get(a.priority, _DEFAULT_PRIORITY_WEIGHT),
                        a.created_at or datetime.min),
         reverse=True,
     )
+
+
+def _revoked_course_notices(db: Session, rows) -> set:
+    """Ids of course notices whose lecturer may no longer publish to that course (no longer a lecturer, or removed from the course by an admin).
+
+    Checked whenever a notice is delivered, so a scheduled notice does not go out after its lecturer loses the course. Notices by
+    someone without a staff profile (an administrator) are not checked here."""
+    codes_by_creator: dict = {}
+    revoked = set()
+    for a in rows:
+        if a.target_scope != "course" or not a.creator_user_id:
+            continue
+        if a.creator_user_id not in codes_by_creator:
+            lecturer = db.query(Lecturer).filter(Lecturer.user_id == a.creator_user_id).first()
+            codes_by_creator[a.creator_user_id] = None if lecturer is None else set() if (lecturer.role or "").strip().lower() != "lecturer" else {
+                code.upper() for (code,) in db.query(Course.course_code).filter(Course.id.in_(my_course_ids(db, lecturer.id))) if code}
+        codes = codes_by_creator[a.creator_user_id]
+        if codes is not None and (a.target_course_code or "").upper() not in codes:
+            revoked.add(a.id)
+    return revoked
 
 
 def announcement_dict(a) -> dict:

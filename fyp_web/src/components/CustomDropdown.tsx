@@ -17,6 +17,8 @@ export function CustomDropdown<T extends string | number>({
   className = '',
   ariaLabel,
   fullWidth = false,
+  disabled = false,
+  searchable = false,
 }: {
   options: (DropdownOption<T> | T)[];
   value: T;
@@ -27,13 +29,19 @@ export function CustomDropdown<T extends string | number>({
   className?: string;
   ariaLabel?: string;
   fullWidth?: boolean;
+  disabled?: boolean;
+  /** Adds a search box to the open list once it is long enough to need one (more than 8 options). */
+  searchable?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const keyboardOpen = useRef(false);
   const panelId = useId();
   useLayoutEffect(() => {
+    if (isOpen && searchRef.current) { searchRef.current.focus(); keyboardOpen.current = false; return; }
     if (isOpen && keyboardOpen.current) {
       const panel = document.getElementById(panelId);
       (panel?.querySelector<HTMLButtonElement>('[aria-selected="true"]') || panel?.querySelector<HTMLButtonElement>('[role="option"]'))?.focus();
@@ -49,11 +57,14 @@ export function CustomDropdown<T extends string | number>({
   );
 
   const selectedOption = normalizedOptions.find(o => o.value === value) || normalizedOptions[0];
+  const showSearch = searchable && normalizedOptions.length > 8;
+  const shown = showSearch && query.trim() ? normalizedOptions.filter(option => option.label.toLowerCase().includes(query.trim().toLowerCase())) : normalizedOptions;
+  const close = () => { setIsOpen(false); setQuery(''); };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
+        close();
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -68,14 +79,15 @@ export function CustomDropdown<T extends string | number>({
         aria-label={ariaLabel ? `${ariaLabel}: ${selectedOption?.label || placeholder}` : undefined}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        disabled={disabled}
         aria-controls={isOpen ? panelId : undefined}
         onKeyDown={event => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault(); keyboardOpen.current = true; setIsOpen(true);
           }
         }}
-        onClick={() => setIsOpen(!isOpen)}
-        className={`inline-flex items-center justify-between gap-2 px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100 font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 dark:focus:ring-blue-500/20 transition-all cursor-pointer shadow-2xs ${fullWidth ? 'min-h-11 w-full' : ''}`}
+        onClick={() => (isOpen ? close() : setIsOpen(true))}
+        className={`inline-flex items-center justify-between gap-2 px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100 font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-blue/20 dark:focus:ring-blue-500/20 transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 shadow-2xs ${fullWidth ? 'min-h-11 w-full' : ''}`}
       >
         <div className="flex items-center gap-1.5 truncate">
           {Icon && <Icon className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500 shrink-0" />}
@@ -92,8 +104,13 @@ export function CustomDropdown<T extends string | number>({
 
       {isOpen && (
         <FloatingPanel id={panelId} role="listbox" aria-label={ariaLabel || label || placeholder}
-          onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsOpen(false); }}
+          onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) close(); }}
           onKeyDown={event => {
+            if (event.target === searchRef.current) {   // typing in the search box is search, not type-ahead
+              if (event.key === 'ArrowDown') { event.preventDefault(); event.currentTarget.querySelector<HTMLButtonElement>('[role="option"]')?.focus(); }
+              if (event.key === 'Escape') { event.preventDefault(); close(); triggerRef.current?.focus(); }
+              return;
+            }
             const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'));
             const index = options.indexOf(document.activeElement as HTMLButtonElement);
             let next = -1;
@@ -105,8 +122,13 @@ export function CustomDropdown<T extends string | number>({
             if (next >= 0) { event.preventDefault(); options[next]?.focus(); }
           }}
           className={`absolute right-0 mt-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xl z-50 p-1.5 font-sans ${fullWidth ? 'w-full' : 'w-48'}`}>
+          {showSearch && (
+            <input ref={searchRef} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search" aria-label={`Search ${ariaLabel || label || 'options'}`}
+              className="mb-1.5 h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-800 focus:border-brand-blue focus:outline-none focus:ring-2 focus:ring-brand-blue/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" />
+          )}
           <div className="max-h-60 overflow-y-auto space-y-0.5 custom-scrollbar">
-            {normalizedOptions.map(opt => {
+            {showSearch && shown.length === 0 && <p role="status" className="px-3 py-2 text-xs text-slate-500">No matches.</p>}
+            {shown.map(opt => {
               const isSelected = opt.value === value;
               return (
                 <button
@@ -116,7 +138,7 @@ export function CustomDropdown<T extends string | number>({
                   aria-selected={isSelected}
                   onClick={() => {
                     onChange(opt.value);
-                    setIsOpen(false);
+                    close();
                     triggerRef.current?.focus();
                   }}
                   className={`w-full flex items-center justify-between px-3 py-2 text-xs rounded-lg transition-colors cursor-pointer text-left ${

@@ -1,17 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import List
+from typing import List, Optional
+from uuid import UUID
 from pydantic import BaseModel
 
 from db.database import get_db
+from domain import timetable_access
 from domain.audit import log_admin_action
-from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, groups_for_course,
+from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, add_missing_meetings, groups_for_course,
                               lecture_meetings, meeting_key_for, pick_slot_for_new)
 from domain.session_sync import sync_class_sessions
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, AcademicSemester, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
-from domain.semesters import lock_programme, require_enrolment_credit_limit, semester_dict, validate_credit_loads
+from domain.semesters import lock_programme, lock_programmes, require_enrolment_credit_limit, run_transaction, semester_dict, validate_credit_loads
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
+from utils.timeutil import utcnow
 from schemas import (
     MessageResponse,
     ProgrammeCreate, ProgrammeResponse,
@@ -93,11 +96,16 @@ def delete_programme(programme_id: str, db: Session = Depends(get_db), current_u
 # =====================================================================
 
 @router.get("/courses", response_model=List[dict])
-def get_courses(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    courses = db.query(Course).options(
+def get_courses(programme_id: Optional[UUID] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """Every course, or with programme_id only that programme's courses (the timetable page picks a course from one programme)."""
+    query = db.query(Course).options(
         joinedload(Course.lecturer),
-        joinedload(Course.programme)
-    ).all()
+        joinedload(Course.programme),
+        joinedload(Course.semester)
+    )
+    if programme_id:
+        query = query.filter(Course.programme_id == str(programme_id))
+    courses = query.all()
     # Lecture times come from class_meetings (source of truth), not the dead
     # Course.schedule_* columns.
     lecture_by_course = lecture_meetings(db, [c.id for c in courses])
@@ -115,10 +123,7 @@ def get_courses(db: Session = Depends(get_db), current_user: User = Depends(requ
             "lecturer_name": c.lecturer.name if c.lecturer else None,
             "programme_id": c.programme_id,
             "programme_name": c.programme.name if c.programme else None,
-            "schedule_day": m.day if m else None,
-            "schedule_start": m.start if m else None,
-            "schedule_end": m.end if m else None,
-            "schedule_room": m.room if m else None,
+            **timetable_access.lecture_slot(c, m),
         })
     return result
 
@@ -299,21 +304,14 @@ def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), cur
     if body.role in ("Tutor", "Practical"):
         # One meeting per enrolled group: the groups meet separately, so a single row
         # could not say when each of them sits. A course with nobody enrolled yet gets
-        # no meeting — there is no group to name, and inventing one would be a lie the
+        # no meeting here; each group's meeting is added when its first student is
+        # enrolled (create_enrolment), because inventing a group would be a lie the
         # CHECK constraint is there to prevent.
-        for group in groups_for_course(db, assignment.course_id):
-            try:
-                slot = pick_slot_for_new(db, assignment.course_id, assignment.lecturer_id, body.role)
-            except ValueError as e:
-                db.rollback()
-                raise HTTPException(status_code=400, detail=str(e))
-            db.add(ClassMeeting(
-                meeting_key=meeting_key_for(body.role, assignment.course_id, assignment.id, group),
-                course_id=assignment.course_id,
-                assignment_id=assignment.id, role=body.role, class_group=group,
-                lecturer_id=assignment.lecturer_id, **slot,
-            ))
-            db.flush()   # so the next group's slot sees this one as occupied
+        try:
+            add_missing_meetings(db, assignment.course_id, [assignment], groups_for_course(db, assignment.course_id))
+        except ValueError as e:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
 
     db.commit()
     db.refresh(assignment)
@@ -347,10 +345,14 @@ def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current
 
 
 @router.get("/timetable", response_model=List[dict])
-def get_global_timetable(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def get_global_timetable(semester_id: UUID = Query(...), programme_id: UUID = Query(...), course_id: UUID = Query(...),
+                         db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     # Read the class_meetings table (source of truth). meeting_id lets the admin
-    # UI edit a specific slot.
-    meetings = db.query(ClassMeeting).options(
+    # UI edit a specific slot. One chosen course in one semester, and only the current one: the programme, course and semester must
+    # belong together, so no id can widen the read to the rest of the semester.
+    course = timetable_access.scope_course(db, current_user, programme_id, course_id)
+    semester = timetable_access.require_viewable_semester(db, current_user, str(semester_id), course)
+    meetings = db.query(ClassMeeting).filter(ClassMeeting.course_id == course.id).options(
         joinedload(ClassMeeting.course), joinedload(ClassMeeting.lecturer)
     ).all()
     result = []
@@ -447,6 +449,8 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     # HH:MM, and every scheduler/session comparison consumes that same contract.
     normalized_start = f"{new_start // 60:02d}:{new_start % 60:02d}"
     normalized_end = f"{new_end // 60:02d}:{new_end % 60:02d}"
+    if (meeting.day, meeting.start, meeting.end) != (body.day, normalized_start, normalized_end):
+        meeting.effective_from = utcnow()   # a moved class is new from now on; days before the move must not become missed classes
     meeting.day, meeting.start, meeting.end, meeting.room = body.day, normalized_start, normalized_end, body.room
     from routers.attendance_features import notify_timetable_change
     notify_timetable_change(db, meeting, was)
@@ -514,15 +518,9 @@ def get_enrolments(db: Session = Depends(get_db), current_user: User = Depends(r
         })
     return result
 
-@router.post("/enrolments", response_model=MessageResponse, status_code=201)
-def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    student_id = body.get("student_id")
-    course_id = body.get("course_id")
-    semester = body.get("semester", "2026-Semester 1")
-    class_group = body.get("class_group", "G1")
-    
-    if not student_id or not course_id:
-         raise HTTPException(status_code=400, detail="student_id and course_id are required")
+def enrol_student(db, student_id, course_id, semester, class_group):
+    """Validate and add ONE enrolment inside the caller's transaction (never commits). Lock order: programme, student, semester.
+    Returns (student, course, semester name)."""
     course = get_or_404(db, Course, course_id, "Course")
     lock_programme(db, course.programme_id)
     db.refresh(course)
@@ -534,14 +532,14 @@ def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: Us
         if student.programme_id != term.programme_id:
             raise HTTPException(400, "Allocate the student to this study programme before enrolling in its semester")
         semester = term.name
-         
+
     existing = db.query(Enrolment).filter(
         Enrolment.student_id == student_id,
         Enrolment.course_id == course_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Student is already enrolled in this course")
-        
+
     # Check if the chosen group is full (max 25 students)
     group_count = db.query(Enrolment).filter(
         Enrolment.course_id == course_id,
@@ -550,23 +548,75 @@ def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: Us
     if group_count >= 25:
         raise HTTPException(status_code=400, detail=f"Group '{class_group}' is full. Maximum 25 students allowed.")
 
-    enrol = Enrolment(
-        student_id=student_id,
-        course_id=course_id,
-        semester=semester,
-        class_group=class_group
-    )
-    db.add(enrol)
-    db.commit()
+    first_in_group = class_group not in groups_for_course(db, course_id)
+    db.add(Enrolment(student_id=student_id, course_id=course_id, semester=semester, class_group=class_group))
+    if first_in_group:
+        # A group's first student: tutorials and practicals assigned before anyone was enrolled have no meeting for it yet.
+        # Only a NEW group is filled in, so a class time an admin deliberately removed is not brought back by a later enrolment.
+        try:
+            db.flush()
+            add_missing_meetings(db, course_id, db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == course_id).all(), [class_group])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    return student, course, semester
 
-    student = db.query(Student).filter(Student.id == student_id).first()
-    course = db.query(Course).filter(Course.id == course_id).first()
-    log_admin_action(db, current_user, "CREATE_ENROLMENT",
-                     f"Enrolled {student.student_code if student else student_id} in "
-                     f"{course.course_code if course else course_id} "
-                     f"({class_group}, {semester})")
 
+@router.post("/enrolments", response_model=MessageResponse, status_code=201)
+def create_enrolment(body: dict, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    student_id = body.get("student_id")
+    course_id = body.get("course_id")
+    semester = body.get("semester", "2026-Semester 1")
+    class_group = body.get("class_group", "G1")
+
+    if not student_id or not course_id:
+         raise HTTPException(status_code=400, detail="student_id and course_id are required")
+
+    def work():
+        student, course, term_name = enrol_student(db, student_id, course_id, semester, class_group)
+        log_admin_action(db, current_user, "CREATE_ENROLMENT",
+                         f"Enrolled {student.student_code} in {course.course_code} ({class_group}, {term_name})", commit=False)
+
+    run_transaction(db, work)
     return {"message": "Student successfully enrolled"}
+
+
+@router.post("/student-allocations", response_model=dict)
+def save_student_allocation(body: dict, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """One student's programme and course enrolment saved together, or not at all. Safe to repeat: a second call finds the
+    same result already stored and changes nothing, so a reply lost after the save never turns into a false failure."""
+    student_id, programme_id, course_id = body.get("student_id"), body.get("programme_id"), body.get("course_id")
+    semester, class_group = body.get("semester", "2026-Semester 1"), body.get("class_group", "G1")
+    if not student_id or not programme_id or not course_id:
+        raise HTTPException(400, "student_id, programme_id and course_id are required")
+
+    def work():
+        course = get_or_404(db, Course, course_id, "Course")
+        lock_programmes(db, programme_id, course.programme_id)   # programmes first, student second, semester last
+        db.refresh(course)   # an admin may have moved the course while we waited for the lock; only a locked programme is accepted below
+        if course.programme_id and str(course.programme_id) != str(programme_id):
+            raise HTTPException(400, "This course belongs to a different study programme.")
+        student = db.query(Student).filter(Student.id == student_id).populate_existing().with_for_update().first()
+        if not student:
+            raise HTTPException(400, "Selected student does not exist")
+        existing = db.query(Enrolment).filter(Enrolment.student_id == student_id, Enrolment.course_id == course_id).first()
+        if existing and existing.class_group != class_group:
+            raise HTTPException(409, f"This student is already enrolled in this course in group {existing.class_group}. Remove that enrolment first to change the group.")
+        result = {"programme_changed": str(student.programme_id) != str(programme_id), "enrolled": existing is None}
+        if result["programme_changed"]:
+            was = student.programme.code if student.programme else "none"
+            student.programme_id = programme_id
+            db.flush()
+            db.refresh(student)
+            log_admin_action(db, current_user, "ASSIGN_STUDENT_PROGRAMME",
+                             f"Programme for {student.student_code}: {was} -> {student.programme.code}", commit=False)
+        if not existing:
+            student, course, term_name = enrol_student(db, student_id, course_id, semester, class_group)
+            log_admin_action(db, current_user, "CREATE_ENROLMENT",
+                             f"Enrolled {student.student_code} in {course.course_code} ({class_group}, {term_name})", commit=False)
+        return result
+
+    result = run_transaction(db, work)
+    return {**result, "message": "Allocation saved" if result["programme_changed"] or result["enrolled"] else "Allocation was already saved"}
 
 @router.delete("/enrolments/{enrolment_id}", response_model=MessageResponse)
 def delete_enrolment(enrolment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):

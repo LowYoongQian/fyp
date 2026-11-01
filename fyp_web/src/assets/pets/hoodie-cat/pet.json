@@ -1,0 +1,9 @@
+{
+  "id": "hoodie-cat",
+  "displayName": "Hoodie Cat",
+  "description": "A laid-back black-and-white cat wearing a blue hoodie, brown backpack, and sneakers.",
+  "spriteVersionNumber": 2,
+  "spritesheetPath": "spritesheet.webp",
+  "category": "western",
+  "subcategory": "back-to-school"
+}

@@ -6,7 +6,7 @@ class LoginScreen extends StatefulWidget {
   final String portalType; // 'student' or 'staff'
   final bool isSyncing;
   final Function(String, String, String)
-  onLogin; // (emailOrId, password, portalType)
+  onLogin; // (email or staff ID, password, portalType)
   final VoidCallback onBackPressed;
 
   const LoginScreen({
@@ -54,10 +54,10 @@ class _LoginScreenState extends State<LoginScreen> {
         : const Color(0xFF800000);
     final String portalTitle = isStudent ? "Student Login" : "Staff Login";
     final String idLabel = isStudent
-        ? "Student ID / Email Address"
+        ? "School email"
         : "Staff ID / Email Address";
     final String idHint = isStudent
-        ? "eg. ST2510091 or email"
+        ? "name@student.school.edu"
         : "eg. T000001 or email";
 
     final primaryTextColor = isDarkMode
@@ -213,8 +213,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) {
                           return isStudent
-                              ? "Student ID or Email is required"
+                              ? "School email is required"
                               : "Staff ID or Email is required";
+                        }
+                        if (isStudent && !v.contains('@')) {
+                          return "Use your school email";
                         }
                         return null;
                       },

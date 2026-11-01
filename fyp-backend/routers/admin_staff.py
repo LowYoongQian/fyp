@@ -87,13 +87,8 @@ def get_staff_details(
         },
         "account": {
             "account_role": user.role, "status": user.status, "created_at": iso_utc(user.created_at),
-            "last_login_at": iso_utc(user.last_login_at), "two_factor_enabled": user.two_factor_enabled,
+            "last_login_at": iso_utc(user.last_login_at),
             "recovery_email": user.recovery_email, "recovery_email_verified": user.recovery_email_verified,
-            "preferences": {
-                "theme": user.theme_preference, "font_size": user.font_size_preference, "language": user.language_preference,
-                "notifications": user.notifications_enabled, "email_notifications": user.email_notifications,
-                "push_notifications": user.push_notifications, "in_app_notifications": user.in_app_notifications,
-            },
         } if user else None,
         "courses": sorted(courses.values(), key=lambda c: c["code"]),
     }

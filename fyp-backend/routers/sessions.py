@@ -21,6 +21,7 @@ from db.models import (
     User,
 )
 from domain.attendance import require_session_enrolment
+from domain import timetable_access
 from domain.semesters import campus_date, course_semester, require_semester_date, within_semester
 from domain.checkin_challenge import consume_challenge, issue_challenge
 from domain.audit import log_audit_event
@@ -82,6 +83,9 @@ def require_course_access(db: Session, current_user: User, course_id: str, actio
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
     if course.id not in my_course_ids(db, lecturer.id):
         raise HTTPException(status_code=403, detail=f"Not authorized to {action} for this course")
+    # Still assigned after the semester ends, but its classes and attendance are no longer open to staff.
+    if course.id not in timetable_access.teaching_course_ids(db, lecturer.id):
+        raise HTTPException(status_code=403, detail=timetable_access.NOT_CURRENT)
     return course
 
 
@@ -315,7 +319,7 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
         ClassSession.scheduled_start <= day_end,
     )
     if current_user.role != "admin":
-        replacements = replacements.filter(ClassSession.course_id.in_(my_course_ids(db, lecturer.id)))
+        replacements = replacements.filter(ClassSession.course_id.in_(timetable_access.teaching_course_ids(db, lecturer.id)))
     existing_ids = {str(item["id"]) for item in result}
     for lesson in replacements.all():
         if str(lesson.id) in existing_ids:
@@ -341,7 +345,7 @@ def get_classes_needing_attention(db: Session = Depends(get_db),
     query = db.query(ClassSession).filter(ClassSession.status == "needs_attention")
     if current_user.role != "admin":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        query = query.filter(ClassSession.course_id.in_(my_course_ids(db, lecturer.id)))
+        query = query.filter(ClassSession.course_id.in_(timetable_access.teaching_course_ids(db, lecturer.id)))
 
     result = []
     now = utcnow()
@@ -469,7 +473,7 @@ def get_barred_list_readiness(course_id: str | None = None, db: Session = Depend
         query = query.filter(ClassSession.course_id == course_id)
     elif current_user.role != "admin":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        query = query.filter(ClassSession.course_id.in_(my_course_ids(db, lecturer.id)))
+        query = query.filter(ClassSession.course_id.in_(timetable_access.teaching_course_ids(db, lecturer.id)))
     return barred_list_readiness(query.all())
 
 # A GET /sessions/open used to sit here answering "which of my classes can I check into
@@ -735,7 +739,7 @@ def get_active_lecturer_sessions(db: Session = Depends(get_db), current_user: Us
             raise HTTPException(status_code=404, detail="Lecturer profile not found")
     else:
         sessions = db.query(ClassSession).filter(
-            ClassSession.course_id.in_(my_course_ids(db, lecturer.id)),
+            ClassSession.course_id.in_(timetable_access.teaching_course_ids(db, lecturer.id)),
             ClassSession.is_open == True
         ).all()
 
@@ -761,10 +765,10 @@ def get_my_taught_courses(db: Session = Depends(get_db), current_user: User = De
     else:
         # Owned OR assigned — the same rule every other lecturer screen uses. This one
         # checked ownership only, so a tutor saw an empty list here and their classes
-        # everywhere else.
+        # everywhere else. Only current-semester courses: this list feeds attendance work.
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         courses = db.query(Course).filter(
-            Course.id.in_(my_course_ids(db, lecturer.id))
+            Course.id.in_(timetable_access.teaching_course_ids(db, lecturer.id))
         ).all()
 
     # Lecture times come from class_meetings (source of truth), not Course.schedule_*.
@@ -776,10 +780,7 @@ def get_my_taught_courses(db: Session = Depends(get_db), current_user: User = De
             "id": c.id,
             "course_name": c.course_name,
             "course_code": c.course_code,
-            "schedule_day": m.day if m else None,
-            "schedule_start": m.start if m else None,
-            "schedule_end": m.end if m else None,
-            "schedule_room": m.room if m else None,
+            **timetable_access.lecture_slot(c, m),
         })
     return result
 

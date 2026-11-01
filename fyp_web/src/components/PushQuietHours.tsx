@@ -9,7 +9,7 @@ export function PushQuietHours({ enabled, start, end, timezone, disabled, error,
   const field = 'uipro-input w-full sm:w-40 disabled:opacity-50';
   return <section className="border border-slate-200 bg-slate-50/80 rounded-2xl p-5 space-y-4">
     <h4 className="flex items-center gap-2 text-xs font-bold text-slate-900"><Moon className="h-4 w-4 text-[#2563eb]" />Mobile push quiet hours</h4>
-    <p className="text-[11px] leading-relaxed text-slate-500">Pause phone alerts during quiet hours; expired class reminders will not be delivered late; in-app updates remain available.</p>
+    <p className="text-[11px] leading-relaxed text-slate-500">Pause phone alerts during quiet hours; missed class reminders are skipped.</p>
     <div className="flex items-center justify-between gap-3 p-3 border border-slate-200 bg-white rounded-xl">
       <span id="quiet-hours-label" className="font-medium text-xs text-slate-900">Enable quiet hours</span>
       <CustomSwitch checked={enabled} disabled={disabled} onChange={onEnabledChange} ariaLabel="Enable quiet hours" />

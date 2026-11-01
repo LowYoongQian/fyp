@@ -73,7 +73,7 @@ def calculate_schedule(db: Session) -> dict:
             "day": r.day, "start": r.start, "end": r.end, "room": r.room,
             "role": r.role, "course_id": r.course_id,
             "assignment_id": r.assignment_id, "class_group": r.class_group,
-            "meeting_id": r.id,
+            "meeting_id": r.id, "effective_from": r.effective_from,
             "semester": {"name": r.course.semester.name, "start_date": r.course.semester.start_date,
                          "end_date": r.course.semester.end_date} if r.course and r.course.semester_id else None,
         }
@@ -205,6 +205,30 @@ def groups_for_course(db: Session, course_id) -> list:
         Enrolment.course_id == course_id
     ).distinct().all()
     return sorted({g for (g,) in rows if g})
+
+
+def add_missing_meetings(db: Session, course_id, assignments, groups) -> list:
+    """Give each Tutor/Practical assignment the meeting it lacks for each of these groups, and return the rows added.
+
+    Additive only: a meeting that already exists, including one an admin moved, is left exactly as it is, so running this twice
+    adds nothing. Raises ValueError when no clash-free slot is left; the caller owns the rollback."""
+    have = {(assignment_id, group) for assignment_id, group in db.query(ClassMeeting.assignment_id, ClassMeeting.class_group).filter(
+        ClassMeeting.course_id == course_id, ClassMeeting.assignment_id.isnot(None))}
+    added = []
+    for assignment in assignments:
+        if assignment.role not in ("Tutor", "Practical"):
+            continue
+        for group in groups:
+            if (assignment.id, group) in have:
+                continue
+            row = ClassMeeting(
+                meeting_key=meeting_key_for(assignment.role, course_id, assignment.id, group), course_id=course_id,
+                assignment_id=assignment.id, role=assignment.role, class_group=group, lecturer_id=assignment.lecturer_id,
+                **pick_slot_for_new(db, course_id, assignment.lecturer_id, assignment.role))
+            db.add(row)
+            db.flush()   # so the next meeting's slot sees this one as taken
+            added.append(row)
+    return added
 
 
 def _desired_meetings(db: Session):

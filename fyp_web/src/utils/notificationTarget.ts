@@ -93,8 +93,8 @@ export function opensDetail(target: NotificationTarget, tab: string, role: strin
 
 /** Why a page-only fallback was shown, in words a user can act on. */
 export function unsupportedReason(target: NotificationTarget) {
-  if (target.kind === 'attendance_record') return 'This older medical-leave notice refers to a record that is no longer listed, so only the page was opened.';
-  return 'This notification type opens the page but does not point to a specific item yet.';
+  if (target.kind === 'attendance_record') return 'That record is no longer listed, so only the page was opened.';
+  return 'This notice only opens the page.';
 }
 
 /** Scroll to, focus and briefly outline a notification target; no looping animation, reduced motion respected. */

@@ -1,0 +1,7 @@
+/* Public pages: the scroll story's 3D CSS scenes. Loaded only with those pages. */
+
+
+/* ---------- Scroll story ---------- */
+.ps-stage { perspective: 1800px; perspective-origin: 50% 40%; }
+.ps-3d { transform-style: preserve-3d; }
+.ps-page { backface-visibility: hidden; }

@@ -1,5 +1,5 @@
 import { FloatingPanel } from './FloatingPanel';
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense } from 'react';
 import { animateUiEntrance } from '../utils/uiMotion';
 import { useAuth } from '../context/AuthContext';
 import sasLogo from '../assets/saslogo.webp';
@@ -43,6 +43,9 @@ import { NotificationDetailDialog } from './NotificationDetailDialog';
 import { AccountAvatar } from './AccountAvatar';
 import type { InboxNotice } from '../services/notificationInbox';
 
+// Only accounts with the AI Assistant download the pet.
+const Pet = lazy(() => import('./Pet').then(module => ({ default: module.Pet })));
+
 interface MainLayoutProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void | Promise<boolean>;
@@ -79,9 +82,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   const [detailRaw, setDetail] = useState<{ noticeId: string; tab: string; owner: string } | null>(null);
   const detail = detailRaw && detailRaw.owner === owner && detailRaw.tab === currentTab ? detailRaw : null;
   const latestNotice = useRef(0);
-  const resolveTarget = useCallback((nonce: number, status: TargetStatus) => {
+  const resolveTarget = useCallback((nonce: number, status: TargetStatus, detail?: string) => {
     if (nonce !== latestNotice.current) return;
-    setPending(null); setTargetNote(note => note && { ...note, status });
+    setPending(null); setTargetNote(note => note && { ...note, status, ...(detail ? { detail } : {}) });
   }, []);
   const openNotice = async (item: InboxNotice) => {
     const nonce = ++latestNotice.current;
@@ -136,13 +139,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     return () => window.removeEventListener('open-user-profile', openProfile);
   }, [setCurrentTab]);
 
+
   const handleLogout = () => {
     broadcastAccountLogout();
     // Immediately destroy session tokens so refreshing the page (F5 / Ctrl+F5) CANNOT cancel logout
     sessionStorage.removeItem('auth_token');
     sessionStorage.removeItem('auth_user');
     sessionStorage.removeItem('auth_session_expires_at');
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', '/login');
     clearApiCache();
     setIsLoggingOut(true);
     setIsProfileMenuOpen(false);
@@ -200,6 +204,18 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         ];
 
   const currentItem = navItems.find(item => item.id === currentTab);
+
+  // Lets a page card open another page of this account's own menu; any other destination is ignored.
+  useEffect(() => {
+    const openTab = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
+      if (tab && navItems.some(item => item.id === tab)) { setSidebarOpen(false); setCurrentTab(tab); }
+    };
+    window.addEventListener('open-app-tab', openTab);
+    return () => window.removeEventListener('open-app-tab', openTab);
+  });
+  // One pet for every signed-in page of an account that has the AI Assistant, except the full assistant page itself.
+  const showPet = currentTab !== 'chatbot' && navItems.some(item => item.id === 'chatbot');
   const accountLabels: Record<string, string> = { profile: 'User Profile', profile_security: 'Security & Password', settings: 'Settings' };
   const currentTabLabel = accountLabels[currentTab] || (currentItem ? currentItem.label : t('common.dashboard', 'en'));
   const portalName = user?.role === 'admin' ? 'Admin Portal' : user?.role === 'student' ? 'Student Portal' : 'Staff Portal';
@@ -515,7 +531,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       </aside>
 
       {/* Main Content Pane */}
-      <div className="flex-grow flex flex-col min-w-0 h-screen overflow-y-auto z-10 relative">
+      <div data-pet-body className="flex-grow flex flex-col min-w-0 h-screen overflow-y-auto z-10 relative">
         {/* Top Header */}
         <header
           style={{ backgroundColor: 'var(--theme-surface)', borderColor: 'var(--theme-border)' }}
@@ -567,16 +583,18 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           <NotificationTargetContext.Provider value={{ pending, resolve: resolveTarget }}>
             {targetNote && (targetNote.status !== 'opened' || !pending) ? <div role="status" aria-live="polite" data-notification-target-note className="mb-4 flex items-start justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-medium text-blue-800">
               <p>{targetNote!.status === 'opened' ? 'Opened from notification.'
-                : targetNote!.status === 'missing' ? 'That item is no longer available, or you no longer have access to it.'
+                : targetNote!.status === 'missing' ? 'That item is not available.'
                 : targetNote!.status === 'error' ? 'Could not open that item right now. Please try again.'
-                : targetNote!.status === 'legacy' ? 'This older notification has no link to a specific item, so only the page was opened.'
-                : targetNote!.detail || 'This notification type opens the page but does not point to a specific item yet.'}</p>
+                : targetNote!.status === 'legacy' ? 'This older notice has no link, so only the page was opened.'
+                : targetNote!.status === 'blocked' ? (targetNote!.detail || 'That timetable cannot be opened.')
+                : targetNote!.detail || 'This notice only opens the page.'}</p>
               <button type="button" aria-label="Dismiss notification note" onClick={() => setTargetNote(null)} className="shrink-0 rounded-lg px-2 py-0.5 font-semibold hover:bg-blue-100">Dismiss</button>
             </div> : null}
             {children}
             {detail && token ? <NotificationDetailDialog key={detail.noticeId} token={token} noticeId={detail.noticeId} onClose={() => setDetail(null)} /> : null}
           </NotificationTargetContext.Provider>
         </main>
+        {showPet && <Suspense fallback={null}><Pet /></Suspense>}
       </div>
 
       {/* Full-Screen Logout Transition Overlay */}

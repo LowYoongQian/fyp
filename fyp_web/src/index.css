@@ -870,86 +870,14 @@ html.dark .shimmer-placeholder-dark {
 
 /* Dynamic Star Grow, Shrink & Rotating Sparkle Animation */
 @keyframes dynamicStarShimmer {
-  0% {
-    transform: scale(0) rotate(0deg);
-    opacity: 0;
-    filter: drop-shadow(0 0 0px rgba(255, 255, 255, 0));
-  }
-  25% {
-    transform: scale(1.4) rotate(90deg);
-    opacity: 1;
-    filter: drop-shadow(0 0 12px rgba(255, 255, 255, 1));
-  }
-  50% {
-    transform: scale(0.6) rotate(180deg);
-    opacity: 0.5;
-    filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6));
-  }
-  75% {
-    transform: scale(1.2) rotate(270deg);
-    opacity: 0.9;
-    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.9));
-  }
-  100% {
-    transform: scale(0) rotate(360deg);
-    opacity: 0;
-    filter: drop-shadow(0 0 0px rgba(255, 255, 255, 0));
-  }
+  0%, 100% { transform: scale(0.3) rotate(0deg); opacity: 0; }
+  30% { transform: scale(1) rotate(20deg); opacity: 1; }
+  55% { transform: scale(0.7) rotate(30deg); opacity: 0.55; }
+  80% { transform: scale(0.95) rotate(45deg); opacity: 0.9; }
 }
 
 .animate-star-sparkle {
   animation: dynamicStarShimmer var(--star-duration, 5s) ease-in-out infinite;
-}
-
-/* Rare Late-Night Astronomical Constellation Starlight Linking & Unlinking */
-@keyframes constellationLineLink {
-  0% {
-    stroke-dashoffset: 200;
-    opacity: 0;
-  }
-  25% {
-    opacity: 1;
-  }
-  100% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-}
-
-.animate-constellation-link {
-  stroke-dasharray: 200;
-  animation: constellationLineLink 3.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-
-@keyframes constellationLineUnlink {
-  0% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-  100% {
-    stroke-dashoffset: 200;
-    opacity: 0;
-  }
-}
-
-.animate-constellation-unlink {
-  stroke-dasharray: 200;
-  animation: constellationLineUnlink 3.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-
-@keyframes constellationFadeOut {
-  0% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(0.94);
-  }
-}
-
-.animate-constellation-fadeout {
-  animation: constellationFadeOut 2.5s ease-in-out forwards;
 }
 
 /* Slow Cosmic Orbital Drift for Night Planets and Black Holes */
@@ -965,72 +893,90 @@ html.dark .shimmer-placeholder-dark {
   }
 }
 
-@keyframes blackHoleAccretionSpin {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  50% {
-    transform: rotate(180deg) scale(1.04);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
-  }
-}
-
 .animate-cosmic-drift {
   animation: slowCosmicDrift var(--orbit-duration, 140s) ease-in-out infinite;
 }
 
-.animate-blackhole-spin {
-  animation: blackHoleAccretionSpin 45s linear infinite;
+/* Login sky: shooting star, sun corona/rays, milky way, distant star twinkle, black-hole disk flow, card entrance. */
+.login-meteor {
+  position: absolute; height: 2px; border-radius: 9999px; pointer-events: none;
+  background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(186,230,253,0.35) 55%, #fff 100%);
+  filter: drop-shadow(0 0 5px rgba(186,230,253,0.85));
+  transform-origin: 100% 50%; opacity: 0;
+  animation: loginMeteor 1.25s cubic-bezier(0.25, 0.6, 0.35, 1) forwards;
 }
-
-.animate-star-sparkle {
-  animation: dynamicStarShimmer 3.5s ease-in-out infinite;
+.login-meteor::after {
+  content: ''; position: absolute; right: -2px; top: 50%; width: 4px; height: 4px; margin-top: -2px;
+  border-radius: 9999px; background: #fff; box-shadow: 0 0 8px 2px rgba(224,242,254,0.9);
 }
-
-/* Natural Smooth Meteor Flight (Head leading Down-Left, Tail trailing Up-Right) */
-@keyframes naturalMeteorFlight {
-  0% {
-    transform: translate(0, 0) rotate(-35deg);
-    opacity: 0;
-  }
-  8% {
-    opacity: 1;
-  }
-  85% {
-    opacity: 1;
-  }
-  100% {
-    transform: translate(-130vw, 110vh) rotate(-35deg);
-    opacity: 0;
-  }
+/* Rotate first, then move along the streak's own axis, so the tail always trails the head. */
+@keyframes loginMeteor {
+  0% { transform: rotate(var(--meteor-angle)) translateX(0) scaleX(0.15); opacity: 0; }
+  15% { opacity: 1; }
+  70% { transform: rotate(var(--meteor-angle)) translateX(var(--meteor-travel)) scaleX(1); opacity: 1; }
+  100% { transform: rotate(var(--meteor-angle)) translateX(calc(var(--meteor-travel) * 1.3)) scaleX(0.5); opacity: 0; }
 }
-
-.animate-natural-meteor {
-  animation: naturalMeteorFlight 1.5s linear forwards;
+.login-sun-corona { background: radial-gradient(circle, rgba(255,241,190,0.6) 0%, rgba(253,186,116,0.22) 32%, rgba(253,186,116,0) 68%); }
+.login-sun-rays {
+  background: repeating-conic-gradient(from 0deg, rgba(255,250,225,0.16) 0deg 2deg, rgba(255,250,225,0) 2deg 12deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 28%, rgba(0,0,0,0.8) 36%, transparent 62%);
+  mask-image: radial-gradient(circle, transparent 28%, rgba(0,0,0,0.8) 36%, transparent 62%);
 }
-
-@keyframes naturalMeteorFlightLoop {
-  0% {
-    transform: translate(0, 0) rotate(-35deg);
-    opacity: 0;
-  }
-  0.4% {
-    opacity: 1;
-  }
-  3.2% {
-    transform: translate(-130vw, 110vh) rotate(-35deg);
-    opacity: 0;
-  }
-  100% {
-    transform: translate(-130vw, 110vh) rotate(-35deg);
-    opacity: 0;
-  }
+.login-milky-way {
+  position: absolute; left: -30%; top: 6%; width: 160%; height: 34%; transform: rotate(-18deg);
+  background: linear-gradient(180deg, rgba(167,139,250,0) 0%, rgba(167,139,250,0.07) 30%, rgba(224,242,254,0.11) 50%, rgba(167,139,250,0.07) 70%, rgba(167,139,250,0) 100%);
 }
+@keyframes loginStarTwinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.95; } }
+.login-star-twinkle { animation: loginStarTwinkle 5s ease-in-out infinite; }
+@keyframes loginDiskFlow { to { stroke-dashoffset: -48; } }
+.login-disk-flow { animation: loginDiskFlow 6s linear infinite; }
+@keyframes loginCardEnter { from { opacity: 0; transform: translateY(14px) scale(0.985); } to { opacity: 1; transform: none; } }
+.login-card-enter { animation: loginCardEnter 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; }
+/* Constellations: stars arrive one by one, hair-thin lines draw between them, the name appears, it rests, then the figure fades. */
+.login-constellation { pointer-events: none; opacity: 0; animation: loginConstellationLife 22s linear forwards; }
+@keyframes loginConstellationLife { 0% { opacity: 0; } 3% { opacity: 1; } 84% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-6px); } }
+.login-constellation-star { transform-box: fill-box; transform-origin: center; opacity: 0;
+  animation: loginConstellationStarIn 1.1s cubic-bezier(0.22, 1, 0.36, 1) var(--d) forwards, loginConstellationTwinkle var(--tw) ease-in-out calc(var(--d) + 1.1s) infinite alternate; }
+@keyframes loginConstellationStarIn { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: scale(1); } }
+@keyframes loginConstellationTwinkle { from { opacity: 1; } to { opacity: 0.62; } }
+.login-constellation-line { fill: none; stroke: rgb(226 232 240); stroke-width: 1; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; opacity: 0;
+  animation: loginConstellationLine 1.4s cubic-bezier(0.65, 0, 0.35, 1) var(--d) forwards; }
+@keyframes loginConstellationLine { 0% { stroke-dashoffset: 1; opacity: 0.15; } 100% { stroke-dashoffset: 0; opacity: 0.42; } }
+.login-constellation-label { position: absolute; left: 50%; top: 100%; margin-top: 6px; transform: translateX(-50%); white-space: nowrap;
+  font: italic 500 11px/1 Georgia, 'Times New Roman', serif; letter-spacing: 0.06em; color: rgb(226 232 240 / 0.62);
+  text-shadow: 0 0 8px rgb(15 23 42 / 0.9); opacity: 0; animation: loginConstellationLabel 1.2s ease-out var(--d) forwards; }
+@keyframes loginConstellationLabel { from { opacity: 0; transform: translate(-50%, 4px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
-.animate-natural-meteor-loop {
-  animation: naturalMeteorFlightLoop 25s linear infinite;
+/* Aurora: rayed curtains rising from a bright lower edge into violet, swaying and breathing; one episode fades in, holds, fades out. */
+.login-aurora { position: absolute; inset: 0 0 auto 0; height: 64%; pointer-events: none; opacity: 0; mix-blend-mode: screen;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 26%, #000 80%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 26%, #000 80%, transparent 100%);
+  animation: loginAuroraEpisode var(--episode, 60s) ease-in-out forwards; }
+@keyframes loginAuroraEpisode { 0% { opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { opacity: 0; } }
+.login-aurora-curtain { position: absolute; transform-origin: 50% 100%; opacity: 0.75;
+  background:
+    radial-gradient(ellipse 46% 12% at 50% 80%, rgb(var(--c) / 0.85), rgb(var(--c) / 0) 100%),
+    repeating-linear-gradient(90deg, rgb(var(--c) / 0.34) 0 1px, rgb(var(--c) / 0) 1px 4px),
+    linear-gradient(to top, rgb(var(--c) / 0) 0%, rgb(var(--c) / 0.7) 16%, rgb(var(--c) / 0.28) 38%, rgb(139 92 246 / 0.16) 64%, rgb(139 92 246 / 0) 100%);
+  /* Every edge fades, rays included: soft sides, a long fade to the top, and a curved foot so overlapping curtains form a wavy band. */
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 28%, #000 72%, transparent 100%), linear-gradient(to top, transparent 0%, #000 18%, #000 40%, transparent 100%), radial-gradient(120% 92% at 50% 0%, #000 72%, transparent 100%);
+  -webkit-mask-composite: source-in, source-in;
+  mask-image: linear-gradient(to right, transparent 0%, #000 28%, #000 72%, transparent 100%), linear-gradient(to top, transparent 0%, #000 18%, #000 40%, transparent 100%), radial-gradient(120% 92% at 50% 0%, #000 72%, transparent 100%);
+  mask-composite: intersect;
+  animation: loginAuroraSway var(--sway) ease-in-out var(--delay) infinite alternate, loginAuroraPulse var(--pulse) ease-in-out var(--delay) infinite alternate; }
+@keyframes loginAuroraSway {
+  from { transform: translateX(-2.5%) skewX(calc(var(--tilt) - 3deg)) scaleY(0.93); }
+  to { transform: translateX(2.5%) skewX(calc(var(--tilt) + 3deg)) scaleY(1.05); } }
+@keyframes loginAuroraPulse { from { opacity: 0.55; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the sky visible but still: twinkling stars would otherwise end on their invisible frame. */
+  .animate-star-sparkle, .login-star-twinkle { animation: none !important; opacity: 0.85; }
+  .login-meteor { display: none; }
+  /* Still figures and a steady aurora instead of animation (the global rule would otherwise end them on their invisible frame). */
+  .login-constellation, .login-constellation-star, .login-constellation-label, .login-aurora, .login-aurora-curtain { animation: none !important; opacity: 1; }
+  .login-constellation-line { animation: none !important; stroke-dashoffset: 0; opacity: 0.42; }
+  .login-aurora-curtain { opacity: 0.7; transform: skewX(var(--tilt)); }
 }
 
 /* ==========================================================================
@@ -1819,4 +1765,24 @@ body :is(button, a[href], [role="tab"], [role="switch"]):focus-visible {
   .password-reset-actions button {
     flex: 1;
   }
+}
+
+/* Login badge: on hover a light streak sweeps across the logo and fades, like a shiny badge catching the light. The logo image itself is the
+   mask, so the light stays inside the badge's shape. */
+.login-logo-shine { position: relative; }
+.login-logo-shine::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(115deg, transparent 32%, rgba(255, 255, 255, 0.15) 40%, rgba(255, 255, 255, 0.9) 47%, rgba(255, 255, 255, 0.15) 54%, transparent 62%);
+  background-size: 260% 100%; background-position: 130% 0;
+  -webkit-mask: var(--logo-mask) center / contain no-repeat; mask: var(--logo-mask) center / contain no-repeat;
+}
+.login-logo-shine:hover::after { animation: login-logo-shine 1.8s ease-in-out infinite; }
+@keyframes login-logo-shine {
+  0% { background-position: 130% 0; opacity: 0; }
+  12% { opacity: 1; }
+  58% { background-position: -30% 0; opacity: 1; }
+  72%, 100% { background-position: -30% 0; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-logo-shine:hover::after { animation: none; opacity: 0.35; background-position: 50% 0; }
 }

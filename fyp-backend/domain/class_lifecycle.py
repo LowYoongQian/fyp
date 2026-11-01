@@ -33,6 +33,13 @@ def class_can_open(class_record, now) -> bool:
     )
 
 
+def class_listed(class_record, now) -> bool:
+    """An upcoming class appears in attendance lists from one hour before it starts (the moment it may be opened).
+    Showing a row never opens check-in; every class that is open, finished, cancelled or needing review always shows."""
+    return not (class_record.status == "scheduled" and class_record.scheduled_start
+                and now < class_record.scheduled_start - timedelta(hours=1))
+
+
 def has_active_replacement(replacements) -> bool:
     return any(item.status != "cancelled" for item in replacements)
 

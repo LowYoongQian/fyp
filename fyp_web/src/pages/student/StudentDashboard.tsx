@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dashboardAttendance } from './dashboardAttendance';
-import { apiService } from '../../services/api';
+import { apiService, clearApiCache } from '../../services/api';
 import { useLiveRefresh } from '../../hooks/useLiveRefresh';
+import { StudentNextAction } from '../../components/StudentNextAction';
+import { ShimmerStudentDashboard } from '../../components/Shimmer';
+import { useMalaysiaToday } from '../../hooks/useMalaysiaToday';
 import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
 import type { Announcement, StudentProfile, StudentEnrolmentDetail, StudentActiveSession } from '../../services/api';
 import {
@@ -54,19 +57,31 @@ export const StudentDashboard: React.FC = () => {
   const [loadedUserId, setLoadedUserId] = useState<string | number | null>(null);
   const [recoveryEmailVerified, setRecoveryEmailVerified] = useState<boolean | null>(null);
   const [recoveryTipSkipped, setRecoveryTipSkipped] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const today = useMalaysiaToday();
 
-  useLiveRefresh(async () => {
-    const [sessions, enrolmentsList] = await Promise.all([apiService.studentGetAttendanceSessions(), apiService.studentGetEnrolments()]);
+  // The dashboard shows the current semester only ('current' is checked by the server); history screens keep the full list.
+  const refreshCurrent = async () => {
+    const [sessions, enrolmentsList] = await Promise.all([apiService.studentGetAttendanceSessions('current'), apiService.studentGetEnrolments('current')]);
     setStatistics(dashboardAttendance(sessions));
     setCompletedCourses([...new Set(sessions.map(session => String(session.course_id)))]);
     setEnrolments(enrolmentsList);
-  }, ['attendance'], String(user?.user_id));
+  };
+  useLiveRefresh(refreshCurrent, ['attendance'], String(user?.user_id));
+  // Malaysia midnight can end or start a semester: quietly fetch again so old totals never stay up as current.
+  const lastToday = useRef(today);
+  useEffect(() => {
+    if (lastToday.current === today) return;
+    lastToday.current = today;
+    clearApiCache();
+    void refreshCurrent().catch(() => undefined);
+  }, [today]);
   useLiveRefresh(async () => setActiveSessions(await apiService.studentGetActiveSessions()), ['sessions'], String(user?.user_id));
   useLiveRefresh(async () => setAnnouncements(await apiService.studentGetAnnouncements()), ['notices'], String(user?.user_id));
   useNotificationListRecord({ tab: 'student_dashboard', kinds: ['announcement'], ids: announcements.map(item => String(item.id)), ready: !loading,
     dataVersion: [announcements, showAllNotices], prepare: id => { if (announcements.findIndex(item => String(item.id) === id) >= 6) setShowAllNotices(true); } });
   useLiveRefresh(async () => {
-    const [profile, list] = await Promise.all([apiService.studentGetProfile(), apiService.studentGetEnrolments()]);
+    const [profile, list] = await Promise.all([apiService.studentGetProfile(), apiService.studentGetEnrolments('current')]);
     setStudent(profile); setEnrolments(list);
   }, ['timetable', 'account'], String(user?.user_id));
 
@@ -91,11 +106,11 @@ export const StudentDashboard: React.FC = () => {
       try {
         const [profile, enrolmentsList, activeSessionsList, notices, accountProfile, sessions] = await Promise.all([
           apiService.studentGetProfile(),
-          apiService.studentGetEnrolments(),
+          apiService.studentGetEnrolments('current'),
           apiService.studentGetActiveSessions(),
           apiService.studentGetAnnouncements(),
           apiService.getUserProfile().catch(() => null),
-          apiService.studentGetAttendanceSessions(),
+          apiService.studentGetAttendanceSessions('current'),
         ]);
         if (cancelled) return;
         setStatistics(dashboardAttendance(sessions));
@@ -117,7 +132,7 @@ export const StudentDashboard: React.FC = () => {
     };
     void loadStudentData();
     return () => { cancelled = true; };
-  }, [user]);
+  }, [user, reloadKey]);
 
   useEffect(() => {
     const handleRecoveryEmailVerified = () => setRecoveryEmailVerified(true);
@@ -153,7 +168,8 @@ export const StudentDashboard: React.FC = () => {
   const overallAttendance = statistics.overall;
   const attendanceLabel = overallAttendance === null ? 'No completed classes' : `${overallAttendance}%`;
   const hasLowCourse = enrolments.some(e => typeof e.attendance_rate === 'number' && e.attendance_rate < 80);
-  const standing = overallAttendance === null ? 'No completed classes'
+  const standing = enrolments.length === 0 ? 'No current courses assigned'
+    : overallAttendance === null ? 'No completed classes'
     : hasLowCourse ? 'Below 80% in at least one course — review course attendance'
     : 'No course below the 80% attendance threshold';
   const totalCreditHours = enrolments.reduce((acc, curr) => acc + (curr.credit_hours ?? 0), 0);
@@ -164,23 +180,12 @@ export const StudentDashboard: React.FC = () => {
   const statusPieData = statistics.breakdown;
   const completedCount = statusPieData.reduce((sum, item) => sum + item.value, 0);
 
-  if (loading || loadedUserId !== user?.user_id) {
-    return (
-      <div className="space-y-6 animate-pulse">
-        <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="h-28 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-          <div className="h-28 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-          <div className="h-28 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-        </div>
-        <div className="h-64 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
-      </div>
-    );
-  }
+  if (loading || loadedUserId !== user?.user_id) return <ShimmerStudentDashboard />;
 
   if (loadError) {
-    return <div role="alert" className="p-6 text-center">
-      <p>Unable to load your dashboard. Please check your connection and refresh the page.</p>
+    return <div role="alert" className="uipro-card space-y-3 p-6 text-center text-xs">
+      <p className="text-slate-600 dark:text-slate-300">Unable to load your dashboard. Please check your connection and try again.</p>
+      <button type="button" onClick={() => setReloadKey(key => key + 1)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-brand-blue dark:border-slate-700">Retry</button>
     </div>;
   }
   return (
@@ -197,6 +202,8 @@ export const StudentDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      <StudentNextAction key={String(user?.user_id)} userId={String(user?.user_id)} />
 
       {recoveryEmailVerified === false && !recoveryTipSkipped && (
         <section className="uipro-card relative overflow-hidden rounded-2xl border border-blue-200 bg-blue-50/90 p-5 shadow-sm dark:border-blue-500/30 dark:bg-blue-500/10">
@@ -223,11 +230,11 @@ export const StudentDashboard: React.FC = () => {
                   </span>
                 </div>
                 <p className="mt-1 text-xs font-medium leading-relaxed text-slate-600 dark:text-slate-300">
-                  Add and verify your personal Gmail for password resets.
+                  Add and verify a personal email for notices and password resets.
                 </p>
                 <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-blue-700 dark:text-blue-300">
                   <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-white">1</span>
-                  Open Profile, then add your Gmail.
+                  Open Profile, then add your email.
                 </div>
               </div>
             </div>
@@ -281,9 +288,9 @@ export const StudentDashboard: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-xs flex items-center justify-between">
           <div className="space-y-1">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">Enrolled Courses</span>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">Current Courses</span>
             <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{enrolments.length}</span>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">({totalCreditHours} Credit Hours total)</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">{enrolments.length ? `(${totalCreditHours} Credit Hours total)` : 'No current courses assigned'}</span>
           </div>
           <div className="p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 rounded-xl">
             <BookOpen className="h-5 w-5" />
@@ -356,7 +363,7 @@ export const StudentDashboard: React.FC = () => {
             <span>Attendance Analytics :</span>
           </h3>
           <span className="text-[10px] font-mono font-semibold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-500/20">
-            All recorded completed classes
+            Current semester only
           </span>
         </div>
 
@@ -409,7 +416,7 @@ export const StudentDashboard: React.FC = () => {
                   <ReferenceLine y={80} stroke="#F59E0B" strokeDasharray="4 4" label={{ value: '80% Requirement', fill: '#D97706', fontSize: 10, position: 'insideTopRight' }} />
                   <Area type="monotone" dataKey="rate" stroke="#3B82F6" strokeWidth={3} fillOpacity={1} fill="url(#attendanceGradient)" />
                 </AreaChart>
-              </ResponsiveContainer>) : <p>No completed classes yet.</p>}
+              </ResponsiveContainer>) : <p className="text-xs text-slate-500 dark:text-slate-400">{enrolments.length ? 'No completed classes yet.' : 'No current courses assigned.'}</p>}
             </div>
           </div>
 
@@ -449,7 +456,7 @@ export const StudentDashboard: React.FC = () => {
                     }}
                   />
                 </PieChart>
-              </ResponsiveContainer>) : <p>No completed classes yet.</p>}
+              </ResponsiveContainer>) : <p className="text-xs text-slate-500 dark:text-slate-400">{enrolments.length ? 'No completed classes yet.' : 'No current courses assigned.'}</p>}
               {completedCount > 0 && <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
                 <span className="text-lg font-bold text-slate-900 dark:text-slate-100 font-space">{attendanceLabel}</span>
                 <span className="text-[9px] text-slate-500 dark:text-slate-400 font-medium">Completed classes</span>
@@ -503,7 +510,7 @@ export const StudentDashboard: React.FC = () => {
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>) : <p>No enrolled courses yet.</p>}
+            </ResponsiveContainer>) : <p className="text-xs text-slate-500 dark:text-slate-400">No current courses assigned.</p>}
           </div>
         </div>
       </div>
@@ -513,12 +520,12 @@ export const StudentDashboard: React.FC = () => {
         {/* Enrolled Modules List */}
         <div className="lg:col-span-2 space-y-4">
           <h3 className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider pl-1">
-            Enrolled Course Modules :
+            Current Course Modules :
           </h3>
           
           {enrolments.length === 0 ? (
             <div className="uipro-card bg-white dark:bg-slate-900/60 p-8 text-center text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              No registered course modules found.
+              No current courses assigned.
             </div>
           ) : (
             <div className="space-y-3">
@@ -548,13 +555,13 @@ export const StudentDashboard: React.FC = () => {
                     <div className="flex items-center gap-3">
                       <div className="text-right">
                         <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wider">Attendance</span>
-                        <span className={`text-xs font-extrabold ${(rate ?? 0) < 80 ? 'text-red-600 dark:text-red-400' : (rate ?? 0) < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                        <span className={`text-xs font-extrabold ${rate === null ? 'text-slate-500 dark:text-slate-400' : rate < 80 ? 'text-red-600 dark:text-red-400' : rate < 90 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
                           {rate === null ? 'No completed classes' : `${rate}%`}
                         </span>
                       </div>
                       <div className="w-12 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                         <div 
-                          className={`h-full rounded-full ${(rate ?? 0) < 80 ? 'bg-red-500' : (rate ?? 0) < 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                          className={`h-full rounded-full ${rate === null ? 'bg-slate-300 dark:bg-slate-600' : rate < 80 ? 'bg-red-500' : rate < 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
                           style={{ width: `${rate ?? 0}%` }}
                         />
                       </div>
@@ -588,7 +595,7 @@ export const StudentDashboard: React.FC = () => {
             <div className="p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-500/20 rounded-xl flex gap-2.5 text-[10px] text-blue-800 dark:text-blue-300">
               <Wifi className="h-4.5 w-4.5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
               <p className="font-medium">
-                Subnet validation checks require you to be connected to official campus access points to register presence.
+                Connect to campus Wi-Fi to check in.
               </p>
             </div>
           </div>

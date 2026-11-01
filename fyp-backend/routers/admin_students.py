@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
@@ -9,6 +10,7 @@ from utils.timeutil import iso_utc
 from utils.security import require_admin, require_lecturer, hash_password
 from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
 from domain.audit import log_admin_action
+from domain.semesters import lock_programmes, run_transaction
 from schemas import (
     AdminStudentCreate, AdminStudentUpdate,
     MessageResponse, StudentProgrammeAssign
@@ -73,14 +75,8 @@ def get_student_details(
             "avatar_url": user.avatar_url if user else None,
         },
         "account": {
-            "status": user.status, "created_at": iso_utc(user.created_at), "last_login_at": iso_utc(user.last_login_at),
-            "two_factor_enabled": user.two_factor_enabled, "recovery_email": user.recovery_email,
-            "recovery_email_verified": user.recovery_email_verified,
-            "preferences": {
-                "theme": user.theme_preference, "font_size": user.font_size_preference, "language": user.language_preference,
-                "notifications": user.notifications_enabled, "email_notifications": user.email_notifications,
-                "push_notifications": user.push_notifications, "in_app_notifications": user.in_app_notifications,
-            },
+            "account_role": user.role, "status": user.status, "created_at": iso_utc(user.created_at), "last_login_at": iso_utc(user.last_login_at),
+            "recovery_email": user.recovery_email, "recovery_email_verified": user.recovery_email_verified,
         } if user else None,
         "programme": {"code": programme.code, "name": programme.name} if programme else None,
         "courses": sorted((
@@ -102,16 +98,22 @@ def assign_student_programme(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    student = get_or_404(db, Student, student_id, "Student")
+    get_or_404(db, Student, student_id, "Student")
 
-    was = student.programme.code if student.programme else "none"
-    student.programme_id = body.programme_id
-    db.commit()
+    def work():
+        # Programme first, student second: the same order as an enrolment, so the two can never wait on each other.
+        lock_programmes(db, body.programme_id)
+        student = db.query(Student).filter(Student.id == student_id).populate_existing().with_for_update().first()
+        if not student:
+            raise HTTPException(404, "Student not found")
+        was = student.programme.code if student.programme else "none"
+        student.programme_id = body.programme_id
+        db.flush()
+        db.refresh(student)
+        log_admin_action(db, current_user, "ASSIGN_STUDENT_PROGRAMME",
+                         f"Programme for {student.student_code}: {was} -> {student.programme.code if student.programme else 'none'}", commit=False)
 
-    now = student.programme.code if student.programme else "none"
-    log_admin_action(db, current_user, "ASSIGN_STUDENT_PROGRAMME",
-                     f"Programme for {student.student_code}: {was} -> {now}")
-
+    run_transaction(db, work)
     return {"message": "Programme assigned to student successfully"}
 
 @router.post("/students", response_model=MessageResponse, status_code=201)
@@ -122,16 +124,17 @@ def create_student(
 ):
     # Enforce email domain
     require_email_domain(body.email, "@student.school.edu", "Student")
-        
+    email = body.email.strip().lower()   # one stored spelling, so sign-in (case-insensitive) can never match two accounts
+
     # Check if email exists
-    ensure_unique(db, User, User.email, body.email, detail="Email already registered")
+    ensure_unique(db, User, func.lower(User.email), email, detail="Email already registered")
     
     # Check if student code exists
     ensure_unique(db, Student, Student.student_code, body.student_code, detail="Student code already exists")
     
     # Create credentials
     hashed = hash_password(body.password)
-    user = User(email=body.email, password_hash=hashed, role="student")
+    user = User(email=email, password_hash=hashed, role="student")
     db.add(user)
     db.flush()
     
@@ -158,12 +161,13 @@ def update_student(
 
     changed = []
 
-    if body.email is not None and body.email != user.email:
+    if body.email is not None and body.email.strip().lower() != user.email.lower():
         require_email_domain(body.email, "@student.school.edu", "Student")
+        new_email = body.email.strip().lower()
         # Check uniqueness
-        ensure_unique(db, User, User.email, body.email, detail="Email already registered")
-        changed.append(f"email {user.email} -> {body.email}")
-        user.email = body.email
+        ensure_unique(db, User, func.lower(User.email), new_email, exclude_id=user.id, detail="Email already registered")
+        changed.append(f"email {user.email} -> {new_email}")
+        user.email = new_email
 
     if body.password is not None and body.password.strip() != "":
         user.password_hash = hash_password(body.password)

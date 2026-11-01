@@ -18,12 +18,21 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <dd className="mt-0.5 break-words text-xs font-medium text-slate-800">{children || NA}</dd></div>;
 }
 
+/** Stored passwords are salted bcrypt hashes and cannot be shown; the honest alternative is to set a new one through the existing Edit form. */
+export function PasswordRow({ linked, onChange }: { linked: boolean; onChange?: () => void }) {
+  return <div className="min-w-0 sm:col-span-2"><dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Password</dt>
+    <dd className="mt-0.5 flex flex-wrap items-center gap-3 text-xs font-medium text-slate-800">
+      <span>{linked ? 'Current password cannot be viewed. Use Edit to set a new password.' : 'No login account is linked, so there is no password to change.'}</span>
+      {linked && onChange && <button type="button" onClick={onChange} className="uipro-button uipro-button-secondary">Change password</button>}
+    </dd></div>;
+}
+
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="space-y-3"><h3 className="text-xs font-bold text-slate-700">{title}</h3>
     <dl className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 sm:grid-cols-2">{children}</dl></section>;
 }
 
-export function StudentDetailsDialog({ student, onClose }: { student: AdminStudent; onClose: () => void }) {
+export function StudentDetailsDialog({ student, onClose, onChangePassword }: { student: AdminStudent; onClose: () => void; onChangePassword?: () => void }) {
   const [details, setDetails] = useState<StudentDetails | null>(null);
   const [error, setError] = useState('');
   const [photo, setPhoto] = useState<Photo>({ state: 'loading' });
@@ -82,7 +91,6 @@ export function StudentDetailsDialog({ student, onClose }: { student: AdminStude
   }, [onClose]);
 
   const account = details?.account;
-  const prefs = account?.preferences;
   return <ModalLayer className="fixed inset-0 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="student-details-title" className="uipro-card relative w-full max-w-2xl max-h-[90dvh] flex flex-col gap-5 overflow-hidden bg-white !p-6">
       <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 pb-4">
@@ -110,14 +118,13 @@ export function StudentDetailsDialog({ student, onClose }: { student: AdminStude
           <Field label="Profile avatar">{details.identity.avatar_url ? <img src={details.identity.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" /> : null}</Field>
         </Group>
         <Group title="Account">
+          <Field label="Account role">{account?.account_role}</Field>
           <Field label="Status">{account?.status}</Field>
           <Field label="Created">{when(account?.created_at ?? null)}</Field>
           <Field label="Last login">{when(account?.last_login_at ?? null)}</Field>
-          <Field label="Two-factor authentication">{account ? yes(account.two_factor_enabled) : null}</Field>
           <Field label="Recovery email">{account?.recovery_email}</Field>
           <Field label="Recovery email verified">{account ? yes(account.recovery_email_verified) : null}</Field>
-          <Field label="Display">{prefs ? `${prefs.theme} theme · ${prefs.font_size} text · ${prefs.language}` : null}</Field>
-          <Field label="Notifications">{prefs ? `All ${yes(prefs.notifications)} · Email ${yes(prefs.email_notifications)} · Push ${yes(prefs.push_notifications)} · In-app ${yes(prefs.in_app_notifications)}` : null}</Field>
+          <PasswordRow linked={!!account} onChange={onChangePassword} />
         </Group>
         <Group title="Programme and courses">
           <Field label="Programme">{details.programme ? `${details.programme.code} · ${details.programme.name}` : null}</Field>

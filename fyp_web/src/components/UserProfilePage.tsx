@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { RecordsStatus } from './RecordsStatus';
 import { accountRoleLabel } from '../utils/accountRole';
+import { personalEmailError } from '../utils/personalEmail';
 import { ShimmerProfileModal } from './Shimmer';
 import { useAccountProfile } from '../hooks/useAccountProfile';
 import { THEME_TOKENS } from '../theme/themeTokens';
@@ -184,8 +185,10 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
     event.preventDefault();
     if (!canUseRecoveryEmail) return;
     setRecoveryError(null);
-    if (!/^[^\s@]+@gmail\.com$/i.test(recoveryEmail.trim())) {
-      setRecoveryError('Enter your personal Gmail.');
+    const typed = recoveryEmail.trim();
+    const formatError = personalEmailError(typed);
+    if (formatError) {
+      setRecoveryError(formatError);
       return;
     }
     setRecoveryLoading(true);
@@ -673,7 +676,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                       </span>
                     </div>
                     <p style={{ color: THEME_TOKENS.textSecondary }} className="mt-1 leading-relaxed">
-                      Use your personal Gmail to reset your password.
+                      Notices and password resets go here; sign-in stays your school email.
                     </p>
                   </div>
                 </div>
@@ -687,19 +690,19 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                   <form onSubmit={recoveryStep === 'email' ? requestRecoveryCode : confirmRecoveryCode} className="mt-4 space-y-3">
                     <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
                       <span className="rounded-full bg-brand-blue px-2 py-1 text-white">1</span>
-                      <span>Add Gmail</span>
+                      <span>Add email</span>
                       <span className="h-px flex-1 bg-slate-200" />
                       <span className={`rounded-full px-2 py-1 ${recoveryStep === 'code' ? 'bg-brand-blue text-white' : 'bg-slate-200 text-slate-500'}`}>2</span>
                       <span>Verify</span>
                     </div>
                     {recoveryStep === 'email' ? (
                       <div>
-                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Personal Gmail</label>
+                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Personal email</label>
                         <TextInput
                           type="email"
                           value={recoveryEmail}
                           onChange={event => setRecoveryEmail(event.target.value)}
-                          placeholder="yourname@gmail.com"
+                          placeholder="yourname@example.com"
                           autoComplete="email"
                           className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                         />
@@ -716,7 +719,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                           placeholder="6-digit code"
                           className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-center font-mono text-base font-bold tracking-[0.35em] text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                         />
-                        <button type="button" onClick={() => setRecoveryStep('email')} className="mt-2 text-[10px] font-bold text-brand-blue">Change Gmail</button>
+                        <button type="button" onClick={() => setRecoveryStep('email')} className="mt-2 text-[10px] font-bold text-brand-blue">Change email</button>
                       </div>
                     )}
                     {recoveryError && <p className="text-[10px] font-bold text-red-500">{recoveryError}</p>}

@@ -2,11 +2,11 @@ import { FloatingPanel } from '../../components/FloatingPanel';
 import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { api, apiService } from '../../services/api';
+import { apiService } from '../../services/api';
 import { useNotificationTarget } from '../../context/NotificationTargetContext';
 import { revealNotificationTarget } from '../../utils/notificationTarget';
 import { attendanceDateTime, attendanceSource } from '../../utils/attendanceTime';
-import type { AdminSession, AdminAttendanceRecord } from '../../services/api';
+import type { AdminSession, AdminAttendanceRecord, TimetableFilter } from '../../services/api';
 import { swalSuccess, swalError } from '../../utils/swal';
 import {
   UserCheck,
@@ -26,8 +26,11 @@ import {
   Check,
   Eye
 } from 'lucide-react';
-import { ShimmerTableSkeleton } from '../../components/Shimmer';
+import { LoadingRegion, ShimmerTableSkeleton, ShimmerTimetablePicker } from '../../components/Shimmer';
 import { InfinityLoop } from '../../components/loading-ui/infinity';
+import { ProgrammeCoursePicker } from '../../components/ProgrammeCoursePicker';
+import { cancelled, useProgrammeCourse } from '../../hooks/useProgrammeCourse';
+import type { Loaded } from '../../hooks/useProgrammeCourse';
 
 interface FilterOption {
   value: string;
@@ -105,14 +108,15 @@ const FilterDropdown: React.FC<{
 };
 
 export const AttendanceManager: React.FC = () => {
-  const [sessions, setSessions] = useState<AdminSession[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // The chosen programme and course come first; no class is requested or shown until both are chosen.
+  const [programme, setProgramme] = useState('');
+  const [course, setCourse] = useState('');
+  const [result, setResult] = useState<Loaded<AdminSession>>({ key: '', status: 'loading', items: [] });
+  const [sessionsTry, setSessionsTry] = useState(0);
 
   // QOL Search & Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed'>('all');
-  const [selectedCourse, setSelectedCourse] = useState<string>('all');
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
   const [selectedStaff, setSelectedStaff] = useState<string>('all');
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
@@ -131,58 +135,67 @@ export const AttendanceManager: React.FC = () => {
   const [modalStatusFilter, setModalStatusFilter] = useState<'all' | 'present' | 'absent' | 'leave' | 'unmarked'>('all');
   const [submittingStudentId, setSubmittingStudentId] = useState<number | string | null>(null);
   const attendanceDialogRef = useRef<HTMLDivElement>(null);
+  const modalRequest = useRef<AbortController | null>(null);
+
+  // Changing the programme or course clears the old results and every choice made inside them, so nothing stale can act on another course.
+  const choose = (nextProgramme: string, nextCourse: string) => {
+    modalRequest.current?.abort();
+    setProgramme(nextProgramme); setCourse(nextCourse);
+    setSearchQuery(''); setStatusFilter('all'); setSelectedGroup('all'); setSelectedStaff('all'); setPage(1);
+    setSelectedSession(null); setAttendanceList([]); setModalError(null);
+  };
+  const scope = useProgrammeCourse(programme, course, choose);
+  const { programmes, chosen } = scope;
+  const key = chosen ? `${programme}|${course}` : '';
+  const filter: TimetableFilter = { programmeId: programme, courseId: course };
 
   useEffect(() => {
-    fetchSessions();
-  }, []);
+    if (!key) return;
+    const controller = new AbortController();
+    apiService.adminGetSessions({ programmeId: programme, courseId: course }, controller.signal)
+      .then(items => { if (!controller.signal.aborted) setResult({ key, status: 'ready', items }); })
+      .catch(error => { if (!cancelled(error) && !controller.signal.aborted) setResult({ key, status: 'failed', items: [] }); });
+    return () => controller.abort();
+    // One load per chosen course (and per Refresh); older requests are cancelled so a slow answer never replaces the current course.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, sessionsTry]);
+  const current = result.key === key ? result : { key, status: 'loading' as const, items: [] as AdminSession[] };
+  const sessions = current.items;
+  const loading = !!key && current.status === 'loading';
+  const error = current.status === 'failed' ? 'Could not load classes. Please try again.' : null;
+  const refresh = () => { setResult({ key: '', status: 'loading', items: [] }); setSessionsTry(count => count + 1); };
 
-  // Notification target: find the exact class among ALL loaded sessions (refetching once if it is newer than the cache),
-  // clear filters, jump to its page, then outline it. Nothing else is ever highlighted.
+  // Notification target: the server says which programme and course the class belongs to, that choice is restored, and the class is found in
+  // that course's own list (nothing else is loaded or highlighted).
   const { pending, resolve } = useNotificationTarget('admin_attendance');
   const [focusSession, setFocusSession] = useState<{ id: string; nonce: number } | null>(null);
+  const [wanted, setWanted] = useState<{ id: string; nonce: number } | null>(null);
   useEffect(() => {
-    if (!pending || pending.target.kind !== 'class' || loading) return;
+    if (!pending || pending.target.kind !== 'class') return;
     const { classId } = pending.target, { nonce } = pending;
-    let cancelled = false;
-    void (async () => {
-      let list = sessions;
-      if (!list.some(item => String(item.id) === classId)) {
-        try { list = (await api.get<AdminSession[]>('/admin/sessions', { timeout: 15000 })).data; } catch { list = []; }
-        if (cancelled) return;
-        if (list.some(item => String(item.id) === classId)) setSessions(list);
-      }
-      const index = list.findIndex(item => String(item.id) === classId);
-      if (index < 0) return resolve?.(nonce, 'missing');
-      setSearchQuery(''); setStatusFilter('all'); setSelectedCourse('all'); setSelectedGroup('all'); setSelectedStaff('all');
-      setPage(Math.floor(index / limit) + 1);
-      setFocusSession({ id: classId, nonce });
-    })();
-    return () => { cancelled = true; };
+    const controller = new AbortController();
+    apiService.adminGetSessionScope(classId, controller.signal).then(info => {
+      if (controller.signal.aborted) return;
+      choose(info.programme_id, info.course_id);
+      setWanted({ id: classId, nonce });
+    }).catch(error => {
+      if (controller.signal.aborted) return;
+      resolve?.(nonce, (error as { response?: { status?: number } })?.response?.status === 404 ? 'missing' : 'error');
+    });
+    return () => controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending?.nonce, loading]);
+  }, [pending?.nonce]);
+  useEffect(() => {
+    if (!wanted || !key || current.status === 'loading') return;
+    const index = current.status === 'ready' ? sessions.findIndex(item => String(item.id) === wanted.id) : -1;
+    setWanted(null);
+    if (index < 0) return resolve?.(wanted.nonce, current.status === 'failed' ? 'error' : 'missing');
+    setPage(Math.floor(index / limit) + 1);
+    setFocusSession(wanted);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted, key, current.status]);
 
-  const fetchSessions = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await apiService.adminGetSessions();
-      setSessions(data);
-      setPage(1);
-    } catch (err: any) {
-      setError('Failed to load class sessions. Please verify the backend is running.');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Dynamic filter dropdown options
-  const uniqueCourses = useMemo(() => {
-    const map = new Map<string, string>();
-    sessions.forEach(s => map.set(s.course_code, s.course_name));
-    return Array.from(map.entries()).map(([code, name]) => ({ code, name }));
-  }, [sessions]);
-
+  // The class group and staff filters narrow the chosen course's own list.
   const uniqueGroups = useMemo(() => {
     const set = new Set<string>();
     sessions.forEach(s => {
@@ -198,11 +211,6 @@ export const AttendanceManager: React.FC = () => {
     });
     return Array.from(set).sort();
   }, [sessions]);
-
-  const courseFilterOptions = useMemo<FilterOption[]>(() => [
-    { value: 'all', label: `All Courses (${uniqueCourses.length})`, description: 'Show every course session' },
-    ...uniqueCourses.map(course => ({ value: course.code, label: course.code, description: course.name })),
-  ], [uniqueCourses]);
 
   const groupFilterOptions = useMemo<FilterOption[]>(() => [
     { value: 'all', label: `All Groups (${uniqueGroups.length})`, description: 'Show every class group' },
@@ -220,9 +228,6 @@ export const AttendanceManager: React.FC = () => {
       // 1. Status Filter
       if (statusFilter === 'active' && !s.is_open && s.status !== 'Active') return false;
       if (statusFilter === 'closed' && (s.is_open || s.status === 'Active')) return false;
-
-      // 2. Course Filter
-      if (selectedCourse !== 'all' && s.course_code !== selectedCourse) return false;
 
       // 3. Class Group Filter
       if (selectedGroup !== 'all' && s.class_group !== selectedGroup) return false;
@@ -246,7 +251,7 @@ export const AttendanceManager: React.FC = () => {
 
       return true;
     });
-  }, [sessions, statusFilter, selectedCourse, selectedGroup, selectedStaff, searchQuery]);
+  }, [sessions, statusFilter, selectedGroup, selectedStaff, searchQuery]);
 
   // Table Pagination Computations
   const totalCount = filteredSessions.length;
@@ -279,13 +284,12 @@ export const AttendanceManager: React.FC = () => {
   const resetFilters = () => {
     setSearchQuery('');
     setStatusFilter('all');
-    setSelectedCourse('all');
     setSelectedGroup('all');
     setSelectedStaff('all');
     setPage(1);
   };
 
-  const isFilterActive = searchQuery !== '' || statusFilter !== 'all' || selectedCourse !== 'all' || selectedGroup !== 'all' || selectedStaff !== 'all';
+  const isFilterActive = searchQuery !== '' || statusFilter !== 'all' || selectedGroup !== 'all' || selectedStaff !== 'all';
 
   // Session Attendance Modal Logic
   const openAttendanceModal = async (session: AdminSession) => {
@@ -295,14 +299,18 @@ export const AttendanceManager: React.FC = () => {
     setModalLoading(true);
     setStudentSearchQuery('');
     setModalStatusFilter('all');
+    modalRequest.current?.abort();
+    const controller = new AbortController();
+    modalRequest.current = controller;
     try {
-      const data = await apiService.adminGetSessionAttendance(session.id);
-      setAttendanceList(data.attendance_list || []);
-    } catch (err: any) {
-      setModalError('Failed to fetch session attendance detail.');
+      const data = await apiService.adminGetSessionAttendance(session.id, filter, controller.signal);
+      if (!controller.signal.aborted) setAttendanceList(data.attendance_list || []);
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      setModalError('Could not load this class. Please try again.');
       console.error(err);
     } finally {
-      setModalLoading(false);
+      if (!controller.signal.aborted) setModalLoading(false);
     }
   };
 
@@ -379,7 +387,7 @@ export const AttendanceManager: React.FC = () => {
         status: newStatus,
         wifi_verified: record.wifi_verified,
         liveness_passed: record.liveness_passed
-      });
+      }, filter);
       
       setAttendanceList(prev => prev.map(item => item.student_id === record.student_id
         ? { ...item, status: newStatus, marked_at: saved.marked_at, method: saved.method } : item));
@@ -405,7 +413,7 @@ export const AttendanceManager: React.FC = () => {
         status: 'present',
         wifi_verified: updatedWifi,
         liveness_passed: updatedLiveness
-      });
+      }, filter);
 
       setAttendanceList(prev => prev.map(item => item.student_id === record.student_id
         ? { ...item, wifi_verified: updatedWifi, liveness_passed: updatedLiveness, marked_at: saved.marked_at, method: saved.method } : item));
@@ -456,8 +464,8 @@ export const AttendanceManager: React.FC = () => {
           </div>
           <div className="flex items-center gap-2 self-start md:self-auto">
             <button
-              onClick={fetchSessions}
-              disabled={loading}
+              onClick={refresh}
+              disabled={!key || loading}
               className="uipro-button uipro-button-secondary py-2 px-3.5 text-xs flex items-center gap-2 cursor-pointer"
             >
               <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
@@ -467,8 +475,11 @@ export const AttendanceManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Controls & Table Container */}
-      <div className="uipro-card space-y-5">
+      {programmes.status === 'loading' ? <LoadingRegion label="Loading programmes…" className="space-y-5"><ShimmerTimetablePicker /></LoadingRegion>
+        : <ProgrammeCoursePicker scope={scope} title="Course" />}
+
+      {/* Controls & Table Container: only once a programme and course are chosen */}
+      {chosen && <div className="uipro-card space-y-5">
         {/* QOL Category Filter Tabs */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-100">
           <div className="flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl">
@@ -530,7 +541,7 @@ export const AttendanceManager: React.FC = () => {
         {/* QOL Advanced Filter Bar */}
         {(isFilterDrawerOpen || isFilterActive) && (
           <div className="p-4 bg-slate-50/80 border border-slate-200/70 rounded-xl space-y-3 animate-in fade-in duration-150">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {/* 1. Search Query */}
               <div className="min-w-0 space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Search Keyword</label>
@@ -546,18 +557,7 @@ export const AttendanceManager: React.FC = () => {
                 </div>
               </div>
 
-              {/* 2. Course Filter */}
-              <div className="space-y-1">
-                <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Course</label>
-                <FilterDropdown
-                  value={selectedCourse}
-                  options={courseFilterOptions}
-                  icon={BookOpen}
-                  onChange={(next) => { setSelectedCourse(next); setPage(1); }}
-                />
-              </div>
-
-              {/* 3. Class Group Filter */}
+              {/* 2. Class Group Filter */}
               <div className="space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Class Group</label>
                 <FilterDropdown
@@ -568,7 +568,7 @@ export const AttendanceManager: React.FC = () => {
                 />
               </div>
 
-              {/* 4. Staff / Lecturer Filter */}
+              {/* 3. Staff / Lecturer Filter */}
               <div className="space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Staff / Lecturer</label>
                 <FilterDropdown
@@ -599,19 +599,22 @@ export const AttendanceManager: React.FC = () => {
 
         {/* Sessions Table Output */}
         {loading || pageChanging ? (
-          <ShimmerTableSkeleton
-            headers={['Course', 'Staff Name', 'Role', 'Group', 'Class Start', 'Class End', 'Opened At', 'Closed At', 'Status', 'Actions']}
-            rows={limit}
-            showPagination={true}
-          />
+          <LoadingRegion label="Loading classes…">
+            <ShimmerTableSkeleton
+              headers={['Course', 'Staff Name', 'Role', 'Group', 'Class Start', 'Class End', 'Opened At', 'Closed At', 'Status', 'Actions']}
+              rows={limit}
+              showPagination={true}
+            />
+          </LoadingRegion>
         ) : error ? (
-          <div className="py-12 text-center text-danger-red font-sans text-xs bg-danger-red-light border border-danger-red/10 rounded-xl">
-            {error}
+          <div role="alert" className="space-y-3 py-12 text-center text-danger-red font-sans text-xs bg-danger-red-light border border-danger-red/10 rounded-xl">
+            <p>{error}</p>
+            <button type="button" onClick={refresh} className="uipro-button uipro-button-secondary inline-flex items-center gap-2"><RefreshCw className="h-3.5 w-3.5" />Retry</button>
           </div>
         ) : filteredSessions.length === 0 ? (
           <div className="py-16 text-center text-slate-400 font-sans text-xs border border-dashed border-slate-200 rounded-xl space-y-2">
-            <p className="font-semibold text-slate-600">No class sessions found</p>
-            <p className="text-[11px] text-slate-400">Try broadening your search keyword or clearing filter selections.</p>
+            <p className="font-semibold text-slate-600">{sessions.length === 0 ? 'No classes yet for this course.' : 'No classes match.'}</p>
+            {sessions.length > 0 && <p className="text-[11px] text-slate-400">Clear the filters to see them all.</p>}
             {isFilterActive && (
               <button
                 type="button"
@@ -660,7 +663,7 @@ export const AttendanceManager: React.FC = () => {
                       </td>
                       <td className="py-3.5 px-4 text-slate-500 font-medium">
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-650 border border-slate-200">
-                          {session.lecturer_role || 'Lecturer'}
+                          {session.lecturer_role || '—'}
                         </span>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-slate-600 font-bold">
@@ -758,7 +761,7 @@ export const AttendanceManager: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Modal Dialog: AUDIT / MANAGE ATTENDANCE */}
       {selectedSession && createPortal((

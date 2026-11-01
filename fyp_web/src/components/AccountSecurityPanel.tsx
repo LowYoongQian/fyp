@@ -73,7 +73,7 @@ export function AccountSecurityPanel({ enabled: initialEnabled }: { enabled: boo
       }} className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl bg-white border p-6 space-y-4 shadow-xl">
         <div className="flex justify-between gap-4"><h3 id="security-title" className="font-bold flex gap-2"><KeyRound className="text-blue-600" size={20} />{codes.length ? 'Save your recovery codes' : action === 'logout-all' ? 'Sign out all devices' : action === 'setup' ? 'Set up your authenticator' : action === 'disable' ? 'Disable 2FA' : 'Replace recovery codes'}</h3>
           {!codes.length && <button type="button" aria-label="Close security dialog" disabled={busy} onClick={close}><X size={18} /></button>}</div>
-        {codes.length ? <><p className="text-sm text-slate-500">Shown only once; each code works once in place of an authenticator code; keep them somewhere safe outside this browser.</p>
+        {codes.length ? <><p className="text-sm text-slate-500">Save these codes now. Each works once and is not shown again.</p>
           <div className="grid gap-2 rounded-xl bg-slate-50 p-4 font-mono text-xs select-all">{codes.map(item => <span key={item}>{item}</span>)}</div>
           <button type="button" className={`${secondaryButton} gap-2`} onClick={async () => { try { await navigator.clipboard.writeText(codes.join('\n')); setCopied(true); } catch { setError('Select and copy the codes manually.'); } }}><Copy size={16} />{copied ? 'Copied' : 'Copy codes'}</button>
           <button type="button" className={button} onClick={close}>I have saved my codes</button></> : <>

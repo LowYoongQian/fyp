@@ -1,0 +1,15 @@
+Pet artwork from OpenPets (https://openpets.dev, https://github.com/OpenPetsHQ/openpets).
+
+luna-techbot  "Luna TechBot"  OpenPets original catalog pet, sprite version 2 (8 x 11 cells of 192 x 208)
+  Source: https://zip.openpets.dev/pets/luna-techbot-openpets/luna-techbot.zip (catalog v3, generated 2026-10-29)
+  ZIP SHA-256: bf8a44a1496c2bc86fdcae29de689fe42be0c8ec26e776b73fe30c05582a8469
+  Licence: no separate artwork licence is published for this catalog pet; confirm OpenPets' terms before public release.
+
+hoodie-cat  "Hoodie Cat"  OpenPets original (also the default pet bundled in the OpenPets repository), sprite version 2
+  Source: https://zip.openpets.dev/pets/hoodie-cat-openpets/hoodie-cat.zip (catalog v3, generated 2026-10-29)
+  ZIP SHA-256: 436354d68c6d197b77c47c70c1e2676cc7a996ebc9ab28cfc4cf6a98a0094426
+  The spritesheet is byte-identical to apps/desktop/assets/default-pet-spritesheet.webp in the OpenPets repository,
+  which is released under the MIT License, Copyright (c) 2026 OpenPets.
+
+Fetched with the same catalog/ZIP endpoints that `npx -y install-pet <id>` (install-pet 4.1.0, MIT) uses; the installer
+itself was not run because it writes into a personal OpenPets app folder rather than this project.

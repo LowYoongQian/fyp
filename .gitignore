@@ -148,5 +148,10 @@ test_*.py
 # Only the consolidated root changelog is versioned.
 *.[mM][dD]
 !/CHANGELOG.md
-/output/report/
+# Local captures, recordings, screenshots and reports (never shipped).
+/output/
+# Test tooling kept on this PC only: the demo-screen capture harness and the ML training scripts.
+/fyp_flutter/tool/demo_capture/
+/fyp-backend/ml/training/
+/fyp-backend/scratch/
 /review-workflow/

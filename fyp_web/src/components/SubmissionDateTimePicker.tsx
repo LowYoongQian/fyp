@@ -3,11 +3,13 @@ import { useId, useRef, useState } from 'react';
 import { hour24, localMinute, monthDays } from '../utils/submissionTime';
 import { FloatingPanel } from './FloatingPanel';
 
-type Props = { label: string; value: string; min?: string; max?: string; onChange: (value: string) => void };
+/** `now` ('YYYY-MM-DDTHH:mm') replaces the device clock for today/current time, e.g. to use Malaysia time. */
+type Props = { label: string; value: string; min?: string; max?: string; now?: string; zoneLabel?: string; onChange: (value: string) => void };
 
 /** Shared viewport-aware layer keeps date filters visible above cards and dialogs. */
-export function SubmissionDateTimePicker({ label, value, min, max, onChange }: Props) {
+export function SubmissionDateTimePicker({ label, value, min, max, now, zoneLabel = 'Local time', onChange }: Props) {
   const id = useId();
+  const nowMinute = () => now || localMinute(new Date());
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -24,7 +26,7 @@ export function SubmissionDateTimePicker({ label, value, min, max, onChange }: P
   const close = () => { setOpen(false); setTimePart(null); trigger.current?.focus(); };
   const toggle = () => {
     if (open) return close();
-    let next = value || `${localMinute(new Date()).slice(0, 10)}T${label === 'From' ? '00:00' : '23:59'}`;
+    let next = value || `${nowMinute().slice(0, 10)}T${label === 'From' ? '00:00' : '23:59'}`;
     if (min && next < min) next = min;
     if (max && next > max) next = max;
     setDraft(next); setMonth(next.slice(0, 7)); setOpen(true);
@@ -62,11 +64,11 @@ export function SubmissionDateTimePicker({ label, value, min, max, onChange }: P
           const date = `${month}-${String(day).padStart(2, '0')}`;
           const selected = date === datePart;
           const unavailable = Boolean(min && date < min.slice(0, 10)) || Boolean(max && date > max.slice(0, 10));
-          return <button key={date} type="button" aria-label={new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: 'full' })} aria-pressed={selected} disabled={unavailable} onClick={() => setDraft(`${date}T${hour}:${minute}`)} className={`min-h-9 rounded-xl text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-25 ${selected ? 'bg-brand-blue text-white shadow-sm' : date === localMinute(new Date()).slice(0, 10) ? 'bg-blue-50 text-brand-blue ring-1 ring-inset ring-blue-200 dark:bg-blue-500/10' : 'text-slate-700 hover:bg-blue-50 dark:text-slate-300 dark:hover:bg-slate-800'}`}>{day}</button>;
+          return <button key={date} type="button" aria-label={new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { dateStyle: 'full' })} aria-pressed={selected} disabled={unavailable} onClick={() => setDraft(`${date}T${hour}:${minute}`)} className={`min-h-9 rounded-xl text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-25 ${selected ? 'bg-brand-blue text-white shadow-sm' : date === nowMinute().slice(0, 10) ? 'bg-blue-50 text-brand-blue ring-1 ring-inset ring-blue-200 dark:bg-blue-500/10' : 'text-slate-700 hover:bg-blue-50 dark:text-slate-300 dark:hover:bg-slate-800'}`}>{day}</button>;
         })}
       </div>
       <div className="mt-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60">
-        <div className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400"><Clock3 className="h-3.5 w-3.5 text-brand-blue" />Local time <span className="ml-auto text-[10px]">Tap to choose</span></div>
+        <div className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400"><Clock3 className="h-3.5 w-3.5 text-brand-blue" />{zoneLabel} <span className="ml-auto text-[10px]">Tap to choose</span></div>
         <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-2">
           <div className="text-center text-[10px] text-slate-400"><button ref={hourButton} type="button" aria-label={`${label} hour: ${displayHour}`} aria-expanded={timePart === 'hour'} aria-controls={`${id}-hours`} onClick={() => setTimePart(timePart === 'hour' ? null : 'hour')} className={timeClass}>{String(displayHour).padStart(2, '0')}<ChevronDown className="h-3.5 w-3.5 text-slate-400" /></button><span className="mt-1 block">Hour</span></div>
           <span className="pt-3 text-xl text-slate-400">:</span>
@@ -77,10 +79,10 @@ export function SubmissionDateTimePicker({ label, value, min, max, onChange }: P
         </div>
         {timePart && <TimeOptions key={timePart} id={`${id}-${timePart === 'hour' ? 'hours' : 'minutes'}`} label={timePart === 'hour' ? 'Choose hour' : 'Choose minute'} values={Array.from({ length: timePart === 'hour' ? 12 : 60 }, (_, index) => timePart === 'hour' ? index + 1 : index)} selected={timePart === 'hour' ? displayHour : Number(minute)} onSelect={number => chooseTime(timePart, number)} />}
         <div className="mt-3 flex flex-wrap gap-2">
-          {[['Start of day', '00:00'], ['Current time', localMinute(new Date()).slice(11)], ['End of day', '23:59']].map(([text, time]) => {
+          {[['Start of day', '00:00'], ['Current time', nowMinute().slice(11)], ['End of day', '23:59']].map(([text, time]) => {
             const next = `${datePart}T${time}`;
             const unavailable = Boolean(min && next < min) || Boolean(max && next > max);
-            return <button key={text} type="button" disabled={unavailable} onClick={() => { setDraft(`${datePart}T${text === 'Current time' ? localMinute(new Date()).slice(11) : time}`); setTimePart(null); }} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-medium text-slate-600 hover:border-blue-300 hover:text-brand-blue disabled:opacity-30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">{text}</button>;
+            return <button key={text} type="button" disabled={unavailable} onClick={() => { setDraft(`${datePart}T${text === 'Current time' ? nowMinute().slice(11) : time}`); setTimePart(null); }} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-medium text-slate-600 hover:border-blue-300 hover:text-brand-blue disabled:opacity-30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">{text}</button>;
           })}
         </div>
         <p aria-live="polite" className="mt-3 text-center text-xs font-medium text-brand-blue dark:text-blue-400">Selected: {displayHour}:{minute} {period}</p>

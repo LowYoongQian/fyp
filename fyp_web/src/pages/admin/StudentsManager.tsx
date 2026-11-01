@@ -76,7 +76,7 @@ export const StudentsManager: React.FC = () => {
       setTotalCount(res.total || 0);
     } catch (err: any) {
       if (version !== requestVersion.current) return;
-      setError('Failed to fetch student registry. Please ensure backend is running.');
+      setError('Could not load students. Please try again.');
       console.error(err);
     } finally {
       if (version === requestVersion.current) setLoading(false);
@@ -161,7 +161,7 @@ export const StudentsManager: React.FC = () => {
     if (mutationPending.current) return;
     const isConfirmed = await swalConfirmDelete(
       studentName,
-      'This will cascadingly delete their enrolments, face embeddings, attendance records, and risk logs.'
+      'Their enrolments, face data, attendance records and risk history will also be deleted.'
     );
     if (!isConfirmed) return;
     try {
@@ -182,7 +182,7 @@ export const StudentsManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {detailsStudent && <StudentDetailsDialog student={detailsStudent} onClose={() => setDetailsStudent(null)} />}
+      {detailsStudent && <StudentDetailsDialog student={detailsStudent} onClose={() => setDetailsStudent(null)} onChangePassword={() => { const target = detailsStudent; setDetailsStudent(null); handleOpenEdit(target); }} />}
       {faceStudent && <FaceResetDialog student={faceStudent} onClose={() => setFaceStudent(null)} onSaved={() => {
         requestVersion.current++;
         setStudents(previous => previous.map(student => student.id === faceStudent.id ? { ...student, is_face_registered: false } : student));

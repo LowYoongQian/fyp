@@ -1,6 +1,6 @@
 import { TextInput } from '../../components/LimitedTextField';
 import { ModalLayer } from '../../components/ModalLayer';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
 import type { CampusNetwork, SecuritySettings } from '../../services/api';
 import { swalSuccess, swalError, swalConfirmDelete } from '../../utils/swal';
@@ -10,7 +10,7 @@ import {
   CheckSquare, Square, ShieldCheck, Search, RefreshCw,
   MapPin, Radio, Lock, Check, Sparkles, Laptop, Eye, EyeOff
 } from 'lucide-react';
-import { ShimmerTableSkeleton } from '../../components/Shimmer';
+import { LoadingRegion, ShimmerNetworkDetection, ShimmerNetworkMode, ShimmerNetworkRules, ShimmerTableSkeleton } from '../../components/Shimmer';
 
 interface DetectedConnection {
   client_ip: string;
@@ -27,7 +27,12 @@ interface DetectedConnection {
 export const CampusNetworkManager: React.FC = () => {
   const [networks, setNetworks] = useState<CampusNetwork[]>([]);
   const [settings, setSettings] = useState<SecuritySettings>({});
-  const [loading, setLoading] = useState(false);
+  // Each part of the page has its own ready/failed state: nothing is drawn as a real value until it has really arrived.
+  const [networksReady, setNetworksReady] = useState(false);
+  const [settingsReady, setSettingsReady] = useState(false);
+  const [networksFailed, setNetworksFailed] = useState(false);
+  const [settingsFailed, setSettingsFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);   // a quiet reload: what is on screen stays put
   const [savingSettings, setSavingSettings] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -40,6 +45,8 @@ export const CampusNetworkManager: React.FC = () => {
 
   // Live Connection Detection States
   const [isDetecting, setIsDetecting] = useState(false);
+  const [detectionSettled, setDetectionSettled] = useState(false);   // the first detection has finished, well or badly
+  const [detectionFailed, setDetectionFailed] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [detectedConn, setDetectedConn] = useState<DetectedConnection | null>(null);
 
@@ -55,32 +62,43 @@ export const CampusNetworkManager: React.FC = () => {
     detectLiveConnection();
   }, []);
 
+  const loadRun = useRef(0);
+  const detectRun = useRef(0);
+
   const fetchAll = async () => {
-    setLoading(true);
-    try {
-      clearApiCache();
-      const [nets, cfg] = await Promise.all([
-        apiService.adminGetCampusNetworks(),
-        apiService.adminGetSecuritySettings()
-      ]);
-      setNetworks(nets);
-      setSettings(cfg);
-    } catch {
-      await swalError('Load Failed', 'Could not load network security configuration.');
-    } finally {
-      setLoading(false);
-    }
+    const run = ++loadRun.current;
+    setRefreshing(true);
+    clearApiCache();
+    const wasReady = networksReady && settingsReady;
+    // Each request shows its own part the moment it arrives; a newer load makes an older answer irrelevant.
+    const load = <T,>(request: Promise<T>, apply: (value: T) => void, setFailed: (failed: boolean) => void) => request.then(value => {
+      if (run === loadRun.current) { apply(value); setFailed(false); }
+      return true;
+    }, () => {
+      if (run === loadRun.current) setFailed(true);
+      return false;
+    });
+    const results = await Promise.all([
+      load(apiService.adminGetCampusNetworks(), value => { setNetworks(value); setNetworksReady(true); }, setNetworksFailed),
+      load(apiService.adminGetSecuritySettings(), value => { setSettings(value); setSettingsReady(true); }, setSettingsFailed),
+    ]);
+    if (run !== loadRun.current) return;
+    setRefreshing(false);
+    if (wasReady && results.includes(false)) await swalError('Load Failed', 'Could not refresh network security. What is shown may be out of date.');
   };
 
   const detectLiveConnection = async () => {
+    const run = ++detectRun.current;
     setIsDetecting(true);
+    setDetectionFailed(false);
     try {
       const conn = await apiService.adminDetectCurrentConnection();
-      setDetectedConn(conn);
+      if (run === detectRun.current) setDetectedConn(conn);
     } catch (err) {
       console.error('Failed to detect client connection', err);
+      if (run === detectRun.current) { setDetectedConn(null); setDetectionFailed(true); }   // never keep an old result as if it were current
     } finally {
-      setIsDetecting(false);
+      if (run === detectRun.current) { setIsDetecting(false); setDetectionSettled(true); }
     }
   };
 
@@ -186,7 +204,7 @@ export const CampusNetworkManager: React.FC = () => {
     setFormError(null);
     if (!label.trim()) { setFormError('Connection Name / Label is required.'); return; }
     if (!cidr.trim()) {
-      setFormError('A campus CIDR/IP range is required; Wi-Fi names and MAC addresses are supporting information only.');
+      setFormError('Enter the campus network address.');
       return;
     }
     setCreating(true);
@@ -242,11 +260,11 @@ export const CampusNetworkManager: React.FC = () => {
       clearApiCache();
       setNetworks(prev => prev.filter(n => n.id !== net.id));
       await fetchAll();
-      await swalSuccess('Rule Removed', 'Campus connection deleted from database.');
+      await swalSuccess('Rule Removed', 'Campus network deleted.');
     } catch (err: any) {
       console.error('Delete network error:', err);
       await fetchAll();
-      await swalError('Delete Failed', err.response?.data?.detail || 'Could not delete network from database.');
+      await swalError('Delete Failed', err.response?.data?.detail || 'Could not delete the network.');
     }
   };
 
@@ -256,15 +274,16 @@ export const CampusNetworkManager: React.FC = () => {
 
   const handleSaveSettings = async () => {
     setSavingSettings(true);
+    let notice: () => Promise<unknown>;
     try {
       const updated = await apiService.adminUpdateSecuritySettings(settings);
       setSettings(updated);
-      await swalSuccess('Settings Saved', 'Security verification policy updated.');
+      notice = () => swalSuccess('Settings Saved', 'Security verification policy updated.');
     } catch (err: any) {
-      await swalError('Save Failed', err.response?.data?.detail || 'Could not save settings.');
-    } finally {
-      setSavingSettings(false);
+      notice = () => swalError('Save Failed', err.response?.data?.detail || 'Could not save settings.');
     }
+    setSavingSettings(false);   // free the button before the message, which stays on screen for a few seconds
+    await notice();
   };
 
   const ToggleRow: React.FC<{ keyName: string; title: string; desc: string }> = ({ keyName, title, desc }) => {
@@ -286,6 +305,13 @@ export const CampusNetworkManager: React.FC = () => {
       </button>
     );
   };
+
+  const loadProblem = (what: string) => (
+    <div role="alert" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+      <p>Could not load {what}.</p>
+      <button type="button" onClick={() => { fetchAll(); }} disabled={refreshing} className="uipro-button uipro-button-secondary shrink-0 py-1.5 px-3 text-xs cursor-pointer">Try again</button>
+    </div>
+  );
 
   const filteredNetworks = useMemo(() => {
     return networks.filter(n => {
@@ -324,10 +350,10 @@ export const CampusNetworkManager: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => { fetchAll(); detectLiveConnection(); }}
-              disabled={loading || isDetecting}
+              disabled={refreshing || isDetecting}
               className="uipro-button uipro-button-secondary py-2 px-3.5 text-xs flex items-center gap-2 cursor-pointer"
             >
-              <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${loading || isDetecting ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${refreshing || isDetecting ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             <button onClick={() => { resetForm(); setIsCreateOpen(true); }} className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer">
@@ -337,7 +363,10 @@ export const CampusNetworkManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Dynamic System Connection Mode Banner */}
+      {/* Dynamic System Connection Mode Banner: never drawn from defaults, so a safe-looking mode cannot appear before the real one */}
+      {!(settingsReady && networksReady) ? (
+        settingsFailed || networksFailed ? loadProblem('the connection mode') : <LoadingRegion label="Loading connection mode…"><ShimmerNetworkMode /></LoadingRegion>
+      ) : (
       <div className={`p-4 rounded-2xl border transition-all duration-200 shadow-sm ${
         isNetworkVerificationOn
           ? 'bg-emerald-50/90 border-emerald-200/80 text-emerald-900'
@@ -366,7 +395,7 @@ export const CampusNetworkManager: React.FC = () => {
               <p className="text-xs opacity-90 leading-relaxed font-sans">
                 {isNetworkVerificationOn
                   ? `Attendance requires a server-observed IP inside a configured campus range (${activePermittedCount} active).`
-                  : 'Verification is OFF. Students can submit attendance anywhere without Wi-Fi checks.'}
+                  : 'Network check is off. Students can check in from anywhere.'}
               </p>
             </div>
           </div>
@@ -387,9 +416,10 @@ export const CampusNetworkManager: React.FC = () => {
           </button>
         </div>
       </div>
+      )}
 
       {/* Container 1: Live Connection Auto-Capture */}
-      {!loading && activePermittedCount === 0 && <p role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-800">No active campus IP range is configured; check-in will be blocked until an administrator adds one. Wi-Fi names and MAC addresses alone cannot grant access.</p>}
+      {networksReady && activePermittedCount === 0 && <p role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-relaxed text-amber-800">No campus network is set up, so check-in is blocked.</p>}
       <div className="uipro-card bg-white space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
@@ -438,13 +468,15 @@ export const CampusNetworkManager: React.FC = () => {
           </div>
         </div>
 
-        {isDetecting ? (
-          <div className="p-8 text-center text-slate-400 text-xs space-y-2">
-            <Loader2 className="h-6 w-6 text-brand-blue animate-spin mx-auto" />
-            <p>Detecting current connection...</p>
+        {!detectionSettled ? (
+          <LoadingRegion label="Detecting your connection…"><ShimmerNetworkDetection /></LoadingRegion>
+        ) : detectionFailed ? (
+          <div role="alert" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+            <p>Could not detect your connection.</p>
+            <button type="button" onClick={detectLiveConnection} disabled={isDetecting} className="uipro-button uipro-button-secondary shrink-0 py-1.5 px-3 text-xs cursor-pointer">Try again</button>
           </div>
         ) : detectedConn ? (
-          <div key={`card-detected-${showDetectedSensitive}`} className="p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3">
+          <div key={`card-detected-${showDetectedSensitive}`} aria-busy={isDetecting} className={`p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3 transition-opacity ${isDetecting ? 'opacity-60' : ''}`}>
             <div className="flex items-center justify-between">
               <span className="text-[9.5px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> Connection Detected
@@ -489,7 +521,7 @@ export const CampusNetworkManager: React.FC = () => {
               <button
                 type="button"
                 onClick={handleAutoCaptureCurrentConnection}
-                disabled={capturing}
+                disabled={capturing || isDetecting}
                 className={`py-2 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center gap-2 border ${
                   isCurrentConnWhitelisted
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100/60'
@@ -526,16 +558,19 @@ export const CampusNetworkManager: React.FC = () => {
               Configure attendance network checks.
             </p>
           </div>
-          <button onClick={handleSaveSettings} disabled={savingSettings} className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer">
+          <button onClick={handleSaveSettings} disabled={savingSettings || !settingsReady} className="uipro-button uipro-button-primary py-2 px-4 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
             {savingSettings ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> : <Save className="h-3.5 w-3.5 mr-2" />}
             Save Rules
           </button>
         </div>
+        {!settingsReady ? (
+          settingsFailed ? loadProblem('the verification rules') : <LoadingRegion label="Loading verification rules…"><ShimmerNetworkRules /></LoadingRegion>
+        ) : <>
         <div className="grid md:grid-cols-2 gap-3">
-          <ToggleRow keyName="network_check_enabled" title="Enable network verification" desc="Master switch. When off, system connection is public and attendance skips Wi-Fi checks." />
-          <ToggleRow keyName="fail_closed" title="Fail-closed (block off-campus)" desc="Reject check-in when the network can't be verified. Off = allow but flag." />
-          <ToggleRow keyName="trust_proxy_header" title="Trust configured proxy peers" desc="Forwarded addresses are accepted only from TRUSTED_PROXY_CIDRS configured on the server." />
-          <ToggleRow keyName="demo_simulate_network" title="Demo: simulate campus IP" desc="Override observed IP with simulated IP below for localhost testing." />
+          <ToggleRow keyName="network_check_enabled" title="Enable network verification" desc="When off, attendance does not check the campus network." />
+          <ToggleRow keyName="fail_closed" title="Fail-closed (block off-campus)" desc="Block check-in when the network cannot be checked; off allows it and flags it." />
+          <ToggleRow keyName="trust_proxy_header" title="Trust configured proxy peers" desc="Only use forwarded addresses from trusted servers." />
+          <ToggleRow keyName="demo_simulate_network" title="Demo: simulate campus IP" desc="Use the test address below instead of the real one (testing only)." />
         </div>
 
         {truthy(settings.demo_simulate_network) && (
@@ -550,9 +585,10 @@ export const CampusNetworkManager: React.FC = () => {
               placeholder="10.52.13.77"
               className="uipro-input font-mono text-xs"
             />
-            <p className="text-[10px] text-amber-700">Set this inside a configured CIDR range to simulate an on-campus check-in.</p>
+            <p className="text-[10px] text-amber-700">Use an address inside a campus network to test an on-campus check-in.</p>
           </div>
         )}
+        </>}
       </div>
 
       {/* Container 3: Connection Matrix & Permitted Wi-Fi List */}
@@ -601,17 +637,21 @@ export const CampusNetworkManager: React.FC = () => {
           </div>
         </div>
 
-        {loading ? (
-          <ShimmerTableSkeleton
-            headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Protocol / Subnet', 'Location', 'Actions']}
-            rows={5}
-            showPagination={false}
-          />
+        {!networksReady ? (
+          networksFailed ? loadProblem('the campus connections') : (
+            <LoadingRegion label="Loading campus connections…">
+              <ShimmerTableSkeleton
+                headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Protocol / Subnet', 'Location', 'Actions']}
+                rows={5}
+                showPagination={false}
+              />
+            </LoadingRegion>
+          )
         ) : filteredNetworks.length === 0 ? (
           <div className="py-14 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl space-y-2">
             <Radio className="h-8 w-8 text-slate-300 mx-auto animate-pulse" />
             <p className="font-semibold text-slate-600">No network connection rules configured yet</p>
-            <p className="text-[11px] text-slate-400">Add the campus LAN range or campus public egress IP (for example, 10.52.0.0/16); SSID-only rules cannot permit check-in.</p>
+            <p className="text-[11px] text-slate-400">Enter the campus network address, for example 10.52.0.0/16.</p>
           </div>
         ) : (
           <div key={`table-saved-${showSavedSensitive}`} className="overflow-x-auto border border-slate-100 rounded-xl">

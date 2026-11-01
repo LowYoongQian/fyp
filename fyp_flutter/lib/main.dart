@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
+import 'services/attendance_parity.dart';
+import 'widgets/check_in_success_dialog.dart';
 import 'services/offline_checkin_sync.dart';
 import 'services/server_discovery_service.dart';
 import 'services/user_service.dart';
@@ -597,8 +599,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       // Fetch stable device fingerprint for multi-device session binding.
       final deviceId = await LocalCacheService.getOrCreateDeviceId();
 
-      // Authenticate via backend. The server resolves email OR student/staff ID
-      // and returns the full profile, so the app never touches the DB directly.
+      // Authenticate via backend. Students sign in with their school email only; staff may use their staff ID.
+      // The server returns the full profile, so the app never touches the DB directly.
       final apiUrl = ApiConfig.getEffectiveUrl();
       final http.Response response;
       try {
@@ -724,7 +726,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
           ),
-          title: Text(codeSent ? 'Check your Gmail' : 'Add a recovery email'),
+          title: Text(codeSent ? 'Check your email' : 'Add a recovery email'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -732,7 +734,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               Text(
                 codeSent
                     ? 'Enter the 6-digit code we sent.'
-                    : 'Use your personal Gmail for password resets.',
+                    : 'Notices and password resets go here; sign-in stays your school email.',
               ),
               const SizedBox(height: 14),
               TextField(
@@ -741,8 +743,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                     ? TextInputType.number
                     : TextInputType.emailAddress,
                 decoration: InputDecoration(
-                  labelText: codeSent ? 'Verification code' : 'Gmail address',
-                  hintText: codeSent ? '000000' : 'yourname@gmail.com',
+                  labelText: codeSent ? 'Verification code' : 'Personal email',
+                  hintText: codeSent ? '000000' : 'yourname@example.com',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -774,7 +776,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                     ),
                     title: const Text('Account recovery is not set'),
                     content: const Text(
-                      'Without a verified Gmail, you cannot reset your password if you lose it. Add one as soon as possible.',
+                      'Without a verified personal email, you cannot reset your password if you lose it. Add one as soon as possible.',
                     ),
                     actions: [
                       TextButton(
@@ -802,8 +804,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 try {
                   if (!codeSent) {
                     final email = emailController.text.trim().toLowerCase();
-                    if (!email.endsWith('@gmail.com')) {
-                      throw Exception('Enter a Gmail address.');
+                    if (email.length > 254 ||
+                        email.split('@').first.length > 64 ||
+                        !RegExp(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$").hasMatch(email)) {
+                      throw Exception('Enter a valid email address.');
+                    }
+                    if (RegExp(r'@([^@]+\.)?school\.edu$').hasMatch(email)) {
+                      throw Exception('Use a personal email, not a school address.');
                     }
                     await UserService.requestRecoveryEmail(email, token);
                     setDialogState(() {
@@ -900,7 +907,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         'endTime': end,
         'room': room ?? 'Main Hall A',
         'lecturerName': c['lecturer_name'] ?? 'TBA',
-        'attendanceRate': (c['attendance_rate'] as num?)?.toDouble() ?? 100.0,
+        'attendanceRate': courseRate(c),
       });
     }
 
@@ -980,7 +987,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         if (today) checkedIn = true;
       }
       return <String, dynamic>{'courseCode': r['course_code'] ?? 'Unknown', 'courseName': r['course_name'] ?? 'Unknown',
-        'group': r['class_group'] ?? '-', 'date': label, 'status': status == 'present' ? 'Verified' : 'Absent',
+        'group': r['class_group'] ?? '-', 'date': label, 'status': historyStatus(status),
         'wifiVerified': r['network_verified'] ?? false, 'faceVerified': r['liveness_passed'] == true};
     }).toList();
     setState(() { attendanceHistory = history; isCheckedInToday = checkedIn; });
@@ -1057,7 +1064,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           'courseName': r['course_name'] ?? 'Unknown',
           'group': r['class_group'] ?? '-',
           'date': dateLabel,
-          'status': (status == 'present') ? 'Verified' : 'Absent',
+          'status': historyStatus(status),
           'wifiVerified': r['network_verified'] ?? false,
           'faceVerified': true,
         });
@@ -1217,7 +1224,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           'courseName': r['course_name'] ?? 'Unknown',
           'group': r['class_group'] ?? '-',
           'date': dateLabel,
-          'status': status == 'present' ? 'Verified' : 'Absent',
+          'status': historyStatus(status),
           'wifiVerified': netVerified,
           'faceVerified': true,
         });
@@ -1433,7 +1440,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       final bool liveVerified =
           resJson['liveness_passed'] == true || livenessPassed;
 
-      _showCheckInSuccessModalDialog(
+      showCheckInSuccessDialog(
         context,
         courseCode: courseCode,
         courseName: courseName,
@@ -1453,361 +1460,6 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     }
   }
 
-  void _showCheckInSuccessModalDialog(
-    BuildContext context, {
-    required String courseCode,
-    required String courseName,
-    required String timeSlot,
-    required String room,
-    required String classGroup,
-    required String lecturerName,
-    required String lecturerRole,
-    required bool wifiVerified,
-    required bool livenessPassed,
-  }) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        final now = DateTime.now();
-        final daysOrder = [
-          'Monday',
-          'Tuesday',
-          'Wednesday',
-          'Thursday',
-          'Friday',
-          'Saturday',
-          'Sunday',
-        ];
-        final dayName = daysOrder[now.weekday - 1];
-        const months = [
-          'Jan',
-          'Feb',
-          'Mar',
-          'Apr',
-          'May',
-          'Jun',
-          'Jul',
-          'Aug',
-          'Sep',
-          'Oct',
-          'Nov',
-          'Dec',
-        ];
-        final formattedDate =
-            "$dayName, ${now.day.toString().padLeft(2, '0')} ${months[now.month - 1]} ${now.year}";
-
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-          elevation: 12,
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Top Success Icon
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981).withOpacity(0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.check_circle_rounded,
-                    color: Color(0xFF10B981),
-                    size: 40,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  "Attendance Verified!",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF10B981),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  "Your check-in has been successfully recorded.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isDark
-                        ? const Color(0xFF94A3B8)
-                        : const Color(0xFF475569),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // Card Box for Details
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF0F172A)
-                        : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: isDark
-                          ? const Color(0xFF1E293B)
-                          : const Color(0xFFE2E8F0),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Course Code & Name
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2563EB).withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.school_rounded,
-                              color: Color(0xFF2563EB),
-                              size: 20,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "$courseCode - $courseName",
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                    color: isDark
-                                        ? Colors.white
-                                        : const Color(0xFF0F172A),
-                                  ),
-                                ),
-                                if (classGroup.isNotEmpty ||
-                                    room.isNotEmpty) ...[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    "$classGroup • $room",
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: isDark
-                                          ? const Color(0xFF94A3B8)
-                                          : const Color(0xFF64748B),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12.0),
-                        child: Divider(height: 1),
-                      ),
-
-                      // Time & Date
-                      _buildDetailRow(
-                        isDark: isDark,
-                        icon: Icons.calendar_today_rounded,
-                        iconColor: const Color(0xFF0284C7),
-                        title: "Date & Time",
-                        value: "$timeSlot\n$formattedDate",
-                      ),
-                      const SizedBox(height: 10),
-
-                      // Teacher / Lecturer & Role
-                      _buildDetailRow(
-                        isDark: isDark,
-                        icon: Icons.person_outline_rounded,
-                        iconColor: const Color(0xFF7C3AED),
-                        title: "Lecturer / Instructor",
-                        value: "$lecturerName ($lecturerRole)",
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Verification Badges Row
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 8,
-                          horizontal: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: wifiVerified
-                              ? const Color(0xFF10B981).withOpacity(0.1)
-                              : const Color(0xFFF59E0B).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: wifiVerified
-                                ? const Color(0xFF10B981).withOpacity(0.3)
-                                : const Color(0xFFF59E0B).withOpacity(0.3),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.wifi_rounded,
-                              size: 14,
-                              color: wifiVerified
-                                  ? const Color(0xFF10B981)
-                                  : const Color(0xFFD97706),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              wifiVerified ? "WiFi Verified" : "WiFi Bypassed",
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: wifiVerified
-                                    ? const Color(0xFF059669)
-                                    : const Color(0xFFD97706),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 8,
-                          horizontal: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: livenessPassed
-                              ? const Color(0xFF10B981).withOpacity(0.1)
-                              : const Color(0xFFF59E0B).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: livenessPassed
-                                ? const Color(0xFF10B981).withOpacity(0.3)
-                                : const Color(0xFFF59E0B).withOpacity(0.3),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.face_rounded,
-                              size: 14,
-                              color: livenessPassed
-                                  ? const Color(0xFF10B981)
-                                  : const Color(0xFFD97706),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              livenessPassed
-                                  ? "Liveness Passed"
-                                  : "Liveness Alert",
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: livenessPassed
-                                    ? const Color(0xFF059669)
-                                    : const Color(0xFFD97706),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-
-                // Close Button
-                SizedBox(
-                  width: double.infinity,
-                  height: 46,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text(
-                      "Done",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildDetailRow({
-    required bool isDark,
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String value,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 16, color: iconColor),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: isDark
-                      ? const Color(0xFF94A3B8)
-                      : const Color(0xFF64748B),
-                ),
-              ),
-              const SizedBox(height: 1),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isDark
-                      ? const Color(0xFFE2E8F0)
-                      : const Color(0xFF1E293B),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
 
   // Register facial signature via the backend (no direct DB).
   //

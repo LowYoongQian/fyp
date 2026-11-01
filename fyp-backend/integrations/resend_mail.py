@@ -8,6 +8,8 @@ import os
 
 import httpx
 
+from domain import personal_email
+
 
 class EmailError(Exception):
     """A failed send, with a short stable code the caller can store and show."""
@@ -17,8 +19,15 @@ class EmailError(Exception):
         self.code, self.status = code, status
 
 
+def _sender_is_real() -> bool:
+    """The sender must be a real address on a domain we can send from, never a school identity alias (it has no mailbox or DNS of ours)."""
+    sender = (os.getenv("RESEND_FROM_EMAIL") or "").strip()
+    address = (sender.rpartition("<")[2].rstrip(">") if "<" in sender else sender).strip().lower()
+    return "@" in address and not personal_email.is_school_identity(address)
+
+
 def configured() -> bool:
-    return bool(os.getenv("RESEND_API_KEY") and os.getenv("RESEND_FROM_EMAIL"))
+    return bool(os.getenv("RESEND_API_KEY") and os.getenv("RESEND_FROM_EMAIL")) and _sender_is_real()
 
 
 def to_html(text: str) -> str:
@@ -29,7 +38,7 @@ def to_html(text: str) -> str:
 
 def send(to: str, subject: str, text: str, idempotency_key: str) -> str:
     api_key, sender = os.getenv("RESEND_API_KEY"), os.getenv("RESEND_FROM_EMAIL")
-    if not api_key or not sender:
+    if not api_key or not sender or not _sender_is_real():
         raise EmailError("not_configured", 503)
     try:
         response = httpx.post("https://api.resend.com/emails", timeout=10,

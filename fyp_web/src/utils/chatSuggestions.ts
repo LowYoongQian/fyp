@@ -1,4 +1,5 @@
-export const DEFAULT_CHAT_SUGGESTIONS = [
+/** Shown only before a chat has any context, labelled as starters. Never appended to follow-ups. */
+export const CHAT_STARTERS = [
   'Show students below 80% attendance',
   'Show average attendance across my courses',
   'List all enrolled students',
@@ -10,19 +11,21 @@ const topics = (text: string) => [
   /enrol|courses|students/i.test(text), /session|history|timetable/i.test(text),
 ];
 
-/** Visit-only frequency ranking; names come from server suggestions, never prompt parsing. */
-export function rankChatSuggestions(candidates: string[], questions: string[], latest = '') {
+/**
+ * Orders the candidates for one chat. `questions` is that chat's own history: a question already asked is never
+ * offered again, and topics it keeps returning to rank first. Candidates come from the server's answer context
+ * (resolved entities only) and nothing is added here, so identical contexts give identical chips.
+ */
+export function rankChatSuggestions(candidates: string[], questions: string[]) {
+  const asked = new Set(questions.map(question => question.trim().toLowerCase()));
   const unique = new Map<string, string>();
-  for (const text of [...candidates, ...DEFAULT_CHAT_SUGGESTIONS]) {
+  for (const text of candidates) {
     const trimmed = text.trim();
-    if (trimmed && !unique.has(trimmed.toLowerCase())) unique.set(trimmed.toLowerCase(), trimmed);
+    if (trimmed && !asked.has(trimmed.toLowerCase()) && !unique.has(trimmed.toLowerCase())) unique.set(trimmed.toLowerCase(), trimmed);
   }
-  const serverQuestions = new Set(candidates.map(s => s.trim().toLowerCase()));
-  const scored = [...unique.values()]
-    .filter(s => s.toLowerCase() !== latest.trim().toLowerCase())
-    .map((text, index) => ({ text, index, score: questions.slice(-40).reduce((sum, question, position) => {
-      const matches = topics(text).some((topic, i) => topic && topics(question)[i]);
-      return sum + (matches ? 1 + position / 40 : 0);
-    }, 0) + (serverQuestions.has(text.toLowerCase()) ? 2 : 0) }));
-  return scored.sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 4).map(s => s.text);
+  const recent = questions.slice(-40);
+  return [...unique.values()]
+    .map((text, index) => ({ text, index, score: recent.reduce((sum, question, position) =>
+      sum + (topics(text).some((topic, i) => topic && topics(question)[i]) ? 1 + position / 40 : 0), 0) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 4).map(s => s.text);
 }

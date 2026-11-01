@@ -1,6 +1,7 @@
 import { FloatingPanel } from '../../components/FloatingPanel';
 import { TextInput, TextArea } from '../../components/LimitedTextField';
 import { ModalLayer } from '../../components/ModalLayer';
+import { ShimmerAtRisk, ShimmerText } from '../../components/Shimmer';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
 import { apiErrorMessage } from '../../utils/apiError';
@@ -127,7 +128,10 @@ function CustomDropdown<T extends string | number>({
 export const AtRisk: React.FC = () => {
   const [riskList, setRiskList] = useState<RiskScore[]>([]);
   const [alertLogs, setAlertLogs] = useState<AlertLog[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Starts true so the first paint is the page placeholder, never a page of zero students; `loaded` stays true once any answer arrived.
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Filter States
   const [activeFilter, setActiveFilter] = useState<'all' | RiskLevel>('all');
@@ -151,6 +155,7 @@ export const AtRisk: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
+    setLoadFailed(false);
     try {
       const [riskData, alertData] = await Promise.all([
         apiService.getRiskScores(),
@@ -158,8 +163,11 @@ export const AtRisk: React.FC = () => {
       ]);
       setRiskList(riskData);
       setAlertLogs(alertData);
+      setLoaded(true);
+      setLoadFailed(false);
     } catch (err) {
       console.error('Failed to load risk dashboard data:', err);
+      setLoadFailed(true);   // what is already shown stays; nothing pretends there are no records
     } finally {
       setLoading(false);
     }
@@ -202,6 +210,7 @@ export const AtRisk: React.FC = () => {
     } catch (err) {
       // The modal stays open with the same identifier, so a retry can never send the warning twice.
       setSendError(apiErrorMessage(err, 'The warning could not be sent. Please try again.'));
+      clearApiCache();   // a refused course (for example one whose semester ended) must not stay in a cached list
       void loadData();
     } finally {
       setSendingAlert(false);
@@ -314,8 +323,19 @@ export const AtRisk: React.FC = () => {
     { key: 'observing', label: 'Total Observing', value: counts.observing, icon: Eye, color: 'text-slate-500 dark:text-slate-400', bg: 'bg-slate-100 dark:bg-slate-800/60 border-slate-200/50 dark:border-slate-700/40' },
   ] as const;
 
+  if (!loaded && !loadFailed) return <ShimmerAtRisk />;
+
+  const loadAlert = loadFailed && (
+    <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-rose-50 p-4 text-xs font-semibold text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+      <p className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" />{loaded ? 'Could not update the latest data.' : 'Could not load at-risk students.'}</p>
+      <button type="button" onClick={() => void loadData()} disabled={loading} className="uipro-button uipro-button-secondary inline-flex shrink-0 items-center gap-2"><RefreshCw className="h-4 w-4" />Retry</button>
+    </div>
+  );
+  if (!loaded) return <div className="space-y-6">{loadAlert}</div>;
+
   return (
     <div className="space-y-6">
+      {loadAlert}
       {/* Top Banner */}
       <div className="uipro-card bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 relative overflow-hidden transition-colors shadow-xs">
         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -327,7 +347,7 @@ export const AtRisk: React.FC = () => {
               At-Risk Early-Warning Dashboard
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-sans">
-              Random Forest machine learning classifier predicting students falling below the 80% attendance threshold. View risk reasons and dispatch official warnings.
+              See which students are at risk and send warnings.
             </p>
           </div>
 
@@ -460,30 +480,17 @@ export const AtRisk: React.FC = () => {
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                <tbody aria-busy={loading} className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                  {loading && <tr className="sr-only"><td role="status" colSpan={6}>Loading students</td></tr>}
                   {loading ? (
-                    // Theme-Aware Shimmer Skeletons
-                    Array.from({ length: itemsPerPage }).map((_, idx) => (
-                      <tr key={idx} className="animate-pulse">
-                        <td className="py-4 px-5">
-                          <div className="h-3.5 w-32 bg-slate-200 dark:bg-slate-800 rounded mb-1.5"></div>
-                          <div className="h-2.5 w-16 bg-slate-150 dark:bg-slate-800/60 rounded"></div>
-                        </td>
-                        <td className="py-4 px-4">
-                          <div className="h-3.5 w-16 bg-slate-200 dark:bg-slate-800 rounded"></div>
-                        </td>
-                        <td className="py-4 px-4 text-center">
-                          <div className="h-3.5 w-12 bg-slate-200 dark:bg-slate-800 rounded mx-auto"></div>
-                        </td>
-                        <td className="py-4 px-4 text-center">
-                          <div className="h-5 w-16 bg-slate-200 dark:bg-slate-800 rounded-full mx-auto"></div>
-                        </td>
-                        <td className="py-4 px-4">
-                          <div className="h-3.5 w-48 bg-slate-200 dark:bg-slate-800 rounded"></div>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <div className="h-7 w-16 bg-slate-200 dark:bg-slate-800 rounded-lg ml-auto"></div>
-                        </td>
+                    Array.from({ length: Math.min(itemsPerPage, 10) }).map((_, idx) => (
+                      <tr key={idx} aria-hidden="true">
+                        <td className="py-4 px-5"><ShimmerText width="w-32" height="h-3.5" className="mb-1.5" /><ShimmerText width="w-16" height="h-2.5" /></td>
+                        <td className="py-4 px-4"><ShimmerText width="w-16" height="h-3.5" /></td>
+                        <td className="py-4 px-4"><ShimmerText width="w-12" height="h-3.5" className="mx-auto" /></td>
+                        <td className="py-4 px-4"><ShimmerText width="w-16" height="h-5" className="mx-auto rounded-full" /></td>
+                        <td className="py-4 px-4"><ShimmerText width="w-48" height="h-3.5" /></td>
+                        <td className="py-4 px-5"><ShimmerText width="w-16" height="h-7" className="ml-auto rounded-lg" /></td>
                       </tr>
                     ))
                   ) : paginatedRisk.length === 0 ? (
@@ -656,12 +663,13 @@ export const AtRisk: React.FC = () => {
               </h3>
             </div>
 
-            <div className="space-y-3 overflow-y-auto max-h-[480px] pr-1">
+            <div aria-busy={loading} className="space-y-3 overflow-y-auto max-h-[480px] pr-1">
+              {loading && <p role="status" className="sr-only">Loading dispatch logs</p>}
               {loading ? (
                 Array.from({ length: 4 }).map((_, idx) => (
-                  <div key={idx} className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl space-y-2 animate-pulse">
-                    <div className="h-3 w-32 bg-slate-200 dark:bg-slate-800 rounded"></div>
-                    <div className="h-10 bg-slate-200 dark:bg-slate-800 rounded"></div>
+                  <div key={idx} aria-hidden="true" className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl space-y-2">
+                    <ShimmerText width="w-32" height="h-3" />
+                    <ShimmerText width="w-full" height="h-10" />
                   </div>
                 ))
               ) : alertLogs.length === 0 ? (
@@ -752,7 +760,7 @@ export const AtRisk: React.FC = () => {
             </div>
 
             {sendError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">{sendError}</p>}
-            <p className="text-[10px] text-slate-400">Sent to the student&apos;s verified recovery email through the email service. Acceptance does not confirm inbox delivery or that it was read.</p>
+            <p className="text-[10px] text-slate-400">Sent to the student&apos;s recovery email. Delivery is not confirmed.</p>
             <div className="flex justify-end gap-3 pt-1">
               <button
                 type="button"

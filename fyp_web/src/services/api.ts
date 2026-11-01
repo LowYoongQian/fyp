@@ -191,8 +191,34 @@ export interface AcademicSemester {
   status: 'upcoming' | 'active' | 'ended';
   course_ids?: string[];
 }
+/** Read-only plan for carrying a semester's courses into a later one. `ready` is false while the system has no safe way to apply it. */
+export type RolloverCourse = {
+  course_id: string; course_code: string; course_name: string; credit_hours: number | null;
+  lecturer: { name: string; active: boolean } | null; staff: { name: string; role: string; active: boolean }[];
+  groups: { group: string; students: number }[]; students: number; unassigned_students: number; students_eligible: number; students_without_active_account: number;
+  would_copy: { staff: number; groups: number }; issues: string[]; status: 'clear' | 'needs_attention';
+};
+export type RolloverPreview = {
+  source: AcademicSemester & { programme: { code: string; name: string } | null }; target: AcademicSemester & { programme: { code: string; name: string } | null };
+  ready: boolean; limitation: string; blocking: string[]; warnings: string[]; retained: string[]; never_copied: string[]; fingerprint: string;
+  totals: { source_courses: number; selected: number; needing_attention: number; students: number };
+  courses: RolloverCourse[]; not_included: { course_id: string; course_code: string | null; reason: string }[];
+};
 export type SemesterWrite = Pick<AcademicSemester, 'programme_id' | 'name' | 'start_date' | 'end_date' | 'max_student_credits'> & { course_ids: string[] };
-export type AcademicCalendar = { server_time: string; timezone: string; courses: { course_id: string; course_code: string; semester: AcademicSemester | null }[] };
+/** One row of the semester list: authorised metadata from the semester records, with whether its timetable may be opened and why not. */
+export type TimetableSemester = AcademicSemester & {
+  state: 'current' | 'upcoming' | 'ended';
+  programme: { code: string; name: string } | null;
+  course_count: number; class_count: number;
+  can_view: boolean; block_reason: string | null;
+  /** The server's clock (UTC), so the page does not trust a wrong device clock. */
+  server_time?: string;
+  /** Admin only: the chosen course this row and its counts are for. */
+  course_id?: string; course_code?: string; course_name?: string;
+};
+/** An admin's programme and course choice, sent with every admin timetable read so the server can check they belong together. */
+export type TimetableFilter = { programmeId: string; courseId: string };
+export type AcademicCalendar = { server_time: string; timezone: string; courses: { course_id: string; course_code: string; semester: AcademicSemester | null; programme?: { code: string; name: string } | null }[] };
 
 export interface CourseStaffAssignment {
   id: number | string;
@@ -369,9 +395,8 @@ export interface AdminStaff {
 export interface StaffDetails {
   identity: { lecturer_id: string; user_id: string | null; name: string; staff_id: string; email: string | null; staff_role: string | null; avatar_url: string | null };
   account: {
-    account_role: string; status: string; created_at: string | null; last_login_at: string | null; two_factor_enabled: boolean;
+    account_role: string; status: string; created_at: string | null; last_login_at: string | null;
     recovery_email: string | null; recovery_email_verified: boolean;
-    preferences: { theme: string; font_size: string; language: string; notifications: boolean; email_notifications: boolean; push_notifications: boolean; in_app_notifications: boolean };
   } | null;
   courses: { code: string; name: string; roles: string[] }[];
 }
@@ -384,9 +409,8 @@ export interface FaceRegistration {
 export interface StudentDetails {
   identity: { student_id: string; user_id: string | null; name: string; student_code: string; email: string | null; avatar_url: string | null };
   account: {
-    status: string; created_at: string | null; last_login_at: string | null; two_factor_enabled: boolean;
+    account_role: string; status: string; created_at: string | null; last_login_at: string | null;
     recovery_email: string | null; recovery_email_verified: boolean;
-    preferences: { theme: string; font_size: string; language: string; notifications: boolean; email_notifications: boolean; push_notifications: boolean; in_app_notifications: boolean };
   } | null;
   programme: { code: string; name: string } | null;
   courses: { code: string; name: string; credits: number | null; semester: string | null; class_group: string | null }[];
@@ -402,7 +426,7 @@ export interface AdminSession {
   course_code: string;
   course_name: string;
   lecturer_name: string;
-  lecturer_role?: string;
+  lecturer_role?: string | null;
   class_group: string;
   opened_at: string | null;
   closed_at: string | null;
@@ -545,6 +569,15 @@ export interface StudentActiveSession {
   already_checked_in: boolean;
 }
 
+/** The server's single suggestion for what a student should do next. */
+export interface StudentNextAction {
+  action: 'check_in' | 'register_face' | 'verify_email' | 'view_next_class' | 'none';
+  reason?: 'no_upcoming_class' | 'no_enrolment';
+  checked_in: number; waiting: number; face_registered: boolean; email_verified: boolean;
+  session: { id: string; course_id: string; course_code: string; course_name: string; class_group: string; scheduled_start: string | null; scheduled_end: string | null; room: string | null } | null;
+  next_class: { course_id: string; course_code: string; course_name: string; role: string; room: string | null; day: string; start: string; end: string; starts_at_local: string; meeting_id: string } | null;
+}
+
 export const apiService = {
   studentFeedbackPage: async (params: RecordPageQuery, signal?: AbortSignal): Promise<RecordPage<StudentFeedbackReport>> =>
     (await api.get('/students/me/feedback/page', { params, signal, timeout: 15000 })).data,
@@ -567,11 +600,6 @@ export const apiService = {
     (await api.post('/auth/recovery-email/request', { recovery_email: recoveryEmail })).data,
   verifyRecoveryEmail: async (code: string) =>
     (await api.post('/auth/recovery-email/verify', { code })).data,
-
-  register: async (data: any) => {
-    const response = await api.post('/auth/register', data);
-    return response.data;
-  },
 
   // Real Backend Session APIs
   openSession: async (courseId: number | string, classGroup: string = 'All') => {
@@ -660,6 +688,8 @@ export const apiService = {
     messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; created_at: string }>;
     has_more: boolean;
     next_cursor: string | null;
+    /** What the chat's last answer showed (newest page only); null when no state was ever stored, which is not the same as an empty list. */
+    suggestions?: string[] | null;
   }> => {
     const response = await api.get('/query/history', {
       params: {
@@ -675,9 +705,19 @@ export const apiService = {
     return cachedGet('/lecturers/me/courses');
   },
 
-  getLecturerTimetable: async (): Promise<Course[]> => {
-    return cachedGet('/lecturers/me/timetable');
-  },
+  /** One semester at a time, never cached: the server refuses anything but the caller's own current semester, and an old answer must not outlive that. */
+  getLecturerTimetable: async (semesterId: string, signal?: AbortSignal): Promise<Course[]> =>
+    (await api.get('/lecturers/me/timetable', { params: { semester_id: semesterId }, signal })).data,
+  // Students and staff send no filter; an admin must (the server refuses an admin read without them, and anyone else's forged one).
+  getTimetableSemesters: async (filter?: TimetableFilter, signal?: AbortSignal): Promise<TimetableSemester[]> =>
+    (await api.get('/timetable/semesters', { params: filter && { programme_id: filter.programmeId, course_id: filter.courseId }, signal, timeout: 10000 })).data,
+  getTimetableSemester: async (semesterId: string, filter?: TimetableFilter, signal?: AbortSignal): Promise<TimetableSemester> =>
+    (await api.get(`/timetable/semesters/${semesterId}`, { params: filter && { programme_id: filter.programmeId, course_id: filter.courseId }, signal, timeout: 10000 })).data,
+  /** The admin timetable page's own option lists: uncached and abortable, so a slow answer can never replace a newer choice. */
+  getTimetableProgrammes: async (signal?: AbortSignal): Promise<Programme[]> => (await api.get('/admin/programmes', { signal, timeout: 10000 })).data,
+  getTimetableCourses: async (programmeId: string, signal?: AbortSignal): Promise<Course[]> =>
+    (await api.get('/admin/courses', { params: { programme_id: programmeId }, signal, timeout: 10000 })).data,
+  getMeetingSemester: async (meetingId: string, signal?: AbortSignal): Promise<TimetableSemester> => (await api.get(`/timetable/meetings/${meetingId}/semester`, { signal, timeout: 10000 })).data,
 
   getLecturerEnrolments: async (): Promise<Enrolment[]> => {
     return cachedGet('/lecturers/me/enrolments');
@@ -742,7 +782,14 @@ export const apiService = {
     return (await api.get(`/admin/students/${studentId}/details`, { signal, timeout: 15000 })).data;
   },
   adminGetFacePhoto: async (studentId: number | string, registrationVersion: string, signal?: AbortSignal): Promise<Blob> => {
-    return (await api.get(`/admin/students/${studentId}/face/photo`, { params: { registration_version: registrationVersion }, responseType: 'blob', signal, timeout: 15000 })).data;
+    try {
+      return (await api.get(`/admin/students/${studentId}/face/photo`, { params: { registration_version: registrationVersion }, responseType: 'blob', signal, timeout: 15000 })).data;
+    } catch (error) {
+      // A failed blob request carries its JSON error body as a Blob; decode it so the dialog can show the server's own message.
+      const response = (error as { response?: { data?: unknown } })?.response;
+      if (response?.data instanceof Blob) { try { response.data = JSON.parse(await response.data.text()); } catch { /* keep the generic message */ } }
+      throw error;
+    }
   },
   adminResetFace: async (studentId: number | string, current_password: string, registration_version: string): Promise<FaceRegistration> => {
     return (await api.post(`/admin/students/${studentId}/face/reset`, { current_password, registration_version, confirm_reset: true }, { timeout: 15000 })).data;
@@ -789,6 +836,8 @@ export const apiService = {
   // Programmes CRUD
   getAcademicCalendar: async (): Promise<AcademicCalendar> => (await api.get('/academic-calendar', { timeout: 10000 })).data,
   adminGetSemesters: async (): Promise<AcademicSemester[]> => (await api.get('/admin/semesters')).data,
+  adminPreviewRollover: async (body: { source_semester_id: string; target_semester_id: string; course_ids?: string[] }, signal?: AbortSignal): Promise<RolloverPreview> =>
+    (await api.post('/admin/semesters/rollover-preview', body, { signal })).data,
   adminSaveSemester: async (body: SemesterWrite, id?: string): Promise<AcademicSemester> =>
     (await (id ? api.put(`/admin/semesters/${id}`, body) : api.post('/admin/semesters', body))).data,
   adminGetProgrammes: async (): Promise<Programme[]> => {
@@ -828,9 +877,8 @@ export const apiService = {
   adminGetAssignments: async (): Promise<CourseStaffAssignment[]> => {
     return cachedGet('/admin/assignments');
   },
-  adminGetTimetable: async (): Promise<Course[]> => {
-    return cachedGet('/admin/timetable');
-  },
+  adminGetTimetable: async (semesterId: string, filter: TimetableFilter, signal?: AbortSignal): Promise<Course[]> =>
+    (await api.get('/admin/timetable', { params: { semester_id: semesterId, programme_id: filter.programmeId, course_id: filter.courseId }, signal })).data,
   adminUpdateTimetableSlot: async (
     meetingId: number | string,
     slot: { day: string; start: string; end: string; room: string }
@@ -859,6 +907,17 @@ export const apiService = {
     return response.data;
   },
 
+  // Programme and first course saved together by the server in one transaction. Repeating the same call is safe (it answers "already saved").
+  adminSaveStudentAllocation: async (allocation: { student_id: number | string; programme_id: number | string; course_id: number | string; semester?: string; class_group?: string }): Promise<{ message: string; programme_changed: boolean; enrolled: boolean }> => {
+    try {
+      return (await api.post('/admin/student-allocations', allocation)).data;
+    } catch (error: any) {
+      // No answer or a server failure: the save may still have been committed, so cached lists must not be reused.
+      if (!error.response || error.response.status >= 500) clearApiCache();
+      throw error;
+    }
+  },
+
   // Student Enrolments CRUD
   adminGetEnrolments: async (): Promise<Enrolment[]> => {
     return cachedGet('/admin/enrolments');
@@ -873,15 +932,17 @@ export const apiService = {
   },
 
   // Admin Attendance APIs
-  adminGetSessions: async (): Promise<AdminSession[]> => {
-    return cachedGet('/admin/sessions');
-  },
-  adminGetSessionAttendance: async (sessionId: number | string): Promise<AdminSessionAttendanceResponse> => {
-    const response = await api.get(`/admin/sessions/${encodeURIComponent(String(sessionId))}/attendance`);
+  // Every admin attendance read and edit names the chosen programme and course; the server refuses any that do not belong together.
+  adminGetSessions: async (filter: TimetableFilter, signal?: AbortSignal): Promise<AdminSession[]> =>
+    (await api.get('/admin/sessions', { params: { programme_id: filter.programmeId, course_id: filter.courseId }, signal, timeout: 15000 })).data,
+  adminGetSessionScope: async (sessionId: string, signal?: AbortSignal): Promise<{ programme_id: string; course_id: string; course_code: string; course_name: string }> =>
+    (await api.get(`/admin/sessions/${encodeURIComponent(sessionId)}/scope`, { signal, timeout: 10000 })).data,
+  adminGetSessionAttendance: async (sessionId: number | string, filter: TimetableFilter, signal?: AbortSignal): Promise<AdminSessionAttendanceResponse> => {
+    const response = await api.get(`/admin/sessions/${encodeURIComponent(String(sessionId))}/attendance`, { params: { programme_id: filter.programmeId, course_id: filter.courseId }, signal });
     return response.data;
   },
-  adminUpdateAttendance: async (sessionId: number | string, studentId: number | string, data: { status: 'present' | 'absent'; wifi_verified: boolean; liveness_passed: boolean }): Promise<{ message: string; marked_at: string; method: string }> => {
-    const response = await api.put(`/admin/attendance/${encodeURIComponent(String(sessionId))}/${encodeURIComponent(String(studentId))}`, data);
+  adminUpdateAttendance: async (sessionId: number | string, studentId: number | string, data: { status: 'present' | 'absent'; wifi_verified: boolean; liveness_passed: boolean }, filter: TimetableFilter): Promise<{ message: string; marked_at: string; method: string }> => {
+    const response = await api.put(`/admin/attendance/${encodeURIComponent(String(sessionId))}/${encodeURIComponent(String(studentId))}`, data, { params: { programme_id: filter.programmeId, course_id: filter.courseId } });
     return response.data;
   },
 
@@ -926,8 +987,9 @@ export const apiService = {
   studentGetProfile: async (): Promise<StudentProfile> => {
     return cachedGet('/students/me/profile');
   },
-  studentGetEnrolments: async (): Promise<StudentEnrolmentDetail[]> => {
-    return cachedGet('/students/me/enrolments');
+  /** `scope: 'current'` is the dashboard's view (courses of a running semester only); the default keeps every retained enrolment for history and forms. */
+  studentGetEnrolments: async (scope: 'all' | 'current' = 'all'): Promise<StudentEnrolmentDetail[]> => {
+    return cachedGet('/students/me/enrolments', scope === 'current' ? { scope } : undefined);
   },
   studentGetMedicalLeave: async (signal?: AbortSignal): Promise<MedicalLeaveRecord[]> => {
     const response = await api.get('/students/me/medical-leave', { signal, timeout: 15000 });
@@ -947,15 +1009,17 @@ export const apiService = {
     const response = await api.get(`/students/me/medical-leave/${encodeURIComponent(requestId)}/proof`, { responseType: 'blob' });
     return response.data;
   },
-  studentGetCourses: async (): Promise<Course[]> => {
-    return cachedGet('/students/me/courses');
-  },
+  studentGetCourses: async (semesterId: string, signal?: AbortSignal): Promise<Course[]> =>
+    (await api.get('/students/me/courses', { params: { semester_id: semesterId }, signal })).data,
   studentGetAttendance: async (): Promise<StudentAttendanceRecord[]> => {
     return cachedGet('/students/me/attendance');
   },
-  studentGetAttendanceSessions: async (): Promise<StudentAttendanceSession[]> => {
-    return cachedGet('/students/me/attendance-sessions');
+  /** `scope: 'current'` limits it to classes held in a running semester; the default is the full retained history. */
+  studentGetAttendanceSessions: async (scope: 'all' | 'current' = 'all'): Promise<StudentAttendanceSession[]> => {
+    return cachedGet('/students/me/attendance-sessions', scope === 'current' ? { scope } : undefined);
   },
+  /** Never cached: a stale suggestion would send a student to a class that has closed. */
+  studentGetNextAction: async (): Promise<StudentNextAction> => (await api.get('/students/me/next-action', { timeout: 15000 })).data,
   studentGetActiveSessions: async (): Promise<StudentActiveSession[]> => {
     return cachedGet('/students/me/active-sessions');
   },
@@ -1003,6 +1067,11 @@ export const apiService = {
   // ─── User Profile & Account Settings APIs ──────────────────────────
   getUserProfile: async () => {
     return cachedGet('/auth/me');
+  },
+  // Public and sent without the session token, to the same server the rest of the app uses. A non-2xx answer rejects, so callers keep the bundled logo.
+  getPublicLogo: async (signal?: AbortSignal): Promise<string | null> => {
+    const { data } = await axios.get(`${API_BASE_URL}/public/logo`, { signal, timeout: 8000 });
+    return typeof data?.logo_url === 'string' ? data.logo_url : null;
   },
   changePassword: async (data: { current_password: string; new_password: string }) => {
     const response = await api.put('/auth/me/change-password', data);
@@ -1055,11 +1124,14 @@ export const apiService = {
     const response = await api.put(`/admin/reports/mc/${recordId}`, { status, source, reviewer_note: reviewerNote });
     return response.data;
   },
-  getAdminAuditLogs: async (category?: string, search?: string) => {
+  /** `range` bounds are timezone-aware instants: created_from inclusive, created_to EXCLUSIVE. */
+  getAdminAuditLogs: async (category?: string, search?: string, range?: { created_from?: string; created_to?: string }, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (category && category.toLowerCase() !== 'all') params.append('category', category);
     if (search) params.append('search', search);
-    const response = await api.get<AuditLogEntry[]>(`/admin/audit/logs?${params.toString()}`);
+    if (range?.created_from) params.append('created_from', range.created_from);
+    if (range?.created_to) params.append('created_to', range.created_to);
+    const response = await api.get<AuditLogEntry[]>(`/admin/audit/logs?${params.toString()}`, { signal });
     return response.data;
   },
   getAuditIPLocation: async (ipAddress: string) => {

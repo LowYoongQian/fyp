@@ -14,7 +14,7 @@ from sqlalchemy.exc import DBAPIError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from db.database import SessionLocal, engine
-from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course
+from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course, ClassMeeting
 from domain.account_security import validate_session
 from integrations.mobile_push import push_loop
 from utils.security import decode_token
@@ -330,6 +330,15 @@ def _check_semester_schema():
         raise RuntimeError('Semester database schema/access is not ready; run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
 
 
+def _check_class_meeting_schema():
+    # Missed-class recovery reads class_meetings.effective_from (migration b4d7e1f0a2c9).
+    try:
+        with engine.connect() as connection:
+            connection.execute(select(ClassMeeting.effective_from).where(false()))
+    except DBAPIError as error:
+        raise RuntimeError('Timetable database schema is not ready (migration b4d7e1f0a2c9); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     trusted_proxy_ranges()  # Fail startup on unsafe proxy wildcard configuration.
@@ -338,6 +347,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(_check_alert_delivery_schema)
     await asyncio.to_thread(_check_account_security_schema)
     await asyncio.to_thread(_check_semester_schema)
+    await asyncio.to_thread(_check_class_meeting_schema)
     tasks = [
         asyncio.create_task(_keep_pool_warm()),
         asyncio.create_task(_class_lifecycle_loop()),

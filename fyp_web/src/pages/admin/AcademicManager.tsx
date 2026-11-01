@@ -1,7 +1,7 @@
 import { TextInput } from '../../components/LimitedTextField';
 import { SemestersPanel } from '../../components/SemestersPanel';
 import { FloatingPanel } from '../../components/FloatingPanel';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../../services/api';
 import type { Student, AdminStaff, Programme, Course, CourseStaffAssignment, Enrolment } from '../../services/api';
 import { swalSuccess, swalError, swalConfirm } from '../../utils/swal';
@@ -24,14 +24,40 @@ import {
   AlertCircle,
   CalendarDays
 } from 'lucide-react';
-import { ShimmerTableSkeleton } from '../../components/Shimmer';
+import { ShimmerAcademics } from '../../components/Shimmer';
 
+/** A bespoke picker's open list in the CustomDropdown look: pale selected and hover rows, rounded and padded, the scrollbar inside the rounded shell. */
+const MenuPanel: React.FC<{ footer?: React.ReactNode; children: React.ReactNode }> = ({ footer, children }) => (
+  <FloatingPanel clip className="absolute left-0 right-0 mt-1.5 flex flex-col rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl z-50 dark:border-slate-800 dark:bg-slate-900">
+    <div className="custom-scrollbar min-h-0 max-h-52 space-y-0.5 overflow-y-auto pr-0.5">{children}</div>
+    {footer && <div className="mt-1 shrink-0 border-t border-slate-100 pt-1 dark:border-slate-800">{footer}</div>}
+  </FloatingPanel>
+);
+
+const MenuOption: React.FC<{ primary: string; secondary?: string; aside?: React.ReactNode; label?: string; selected?: boolean; disabled?: boolean; mono?: boolean; secondaryMono?: boolean; onSelect: () => void }> = ({ primary, secondary, aside, label, selected = false, disabled = false, mono = false, secondaryMono = false, onSelect }) => (
+  <button type="button" disabled={disabled} aria-current={selected ? 'true' : undefined} aria-label={label ?? (secondary ? `${primary}, ${secondary}` : undefined)} onClick={onSelect}
+    className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-xs transition-colors ${disabled ? 'cursor-not-allowed text-slate-400 dark:text-slate-500' : 'cursor-pointer'} ${selected
+      ? 'bg-blue-50/90 text-brand-blue dark:bg-blue-500/10 dark:text-blue-400'
+      : disabled ? '' : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/80 dark:hover:text-slate-100'}`}>
+    <span className="flex min-w-0 flex-col">
+      <span className={`truncate font-bold ${mono ? 'font-mono' : ''}`}>{primary}</span>
+      {secondary && <span className={`truncate text-[10px] font-medium ${secondaryMono ? 'font-mono' : ''} ${selected ? 'text-blue-700/80 dark:text-blue-300' : 'text-slate-500 dark:text-slate-400'}`}>{secondary}</span>}
+    </span>
+    {aside}
+    {selected && <Check className="h-3.5 w-3.5 shrink-0 text-brand-blue dark:text-blue-400" />}
+  </button>
+);
+
+type ApiFailure = { response?: { status: number; data?: { detail?: string } } };
 type SubTab = 'programmes' | 'courses' | 'staff' | 'students' | 'semesters';
 const LEDGER_PAGE_SIZE = 6;
 
 export const AcademicManager: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('programmes');
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);   // the first load has settled: later loads (Sync, after a save) keep the page and its drafts
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [coursesFailed, setCoursesFailed] = useState(false);
   const [ledgerSearch, setLedgerSearch] = useState<Record<SubTab, string>>({ programmes: '', courses: '', staff: '', students: '', semesters: '' });
   const [ledgerPage, setLedgerPage] = useState<Record<SubTab, number>>({ programmes: 1, courses: 1, staff: 1, students: 1, semesters: 1 });
 
@@ -85,29 +111,27 @@ export const AcademicManager: React.FC = () => {
   const [isEnrolCourseDropdownOpen, setIsEnrolCourseDropdownOpen] = useState(false);
   const [isEnrolGroupDropdownOpen, setIsEnrolGroupDropdownOpen] = useState(false);
   const [savingStudentAllocation, setSavingStudentAllocation] = useState(false);
+  const savingAllocationRef = useRef(false);
 
   const loadAllData = async () => {
     setLoading(true);
-    try {
-      const [sList, stList, pList, cList, aList, eList] = await Promise.all([
-        apiService.adminGetStudents(),
-        apiService.adminGetStaff(),
-        apiService.adminGetProgrammes(),
-        apiService.adminGetCourses(),
-        apiService.adminGetAssignments(),
-        apiService.adminGetEnrolments()
-      ]);
-      setStudents(sList.items);
-      setStaff(stList.items);
-      setProgrammes(pList);
-      setCourses(cList);
-      setAssignments(aList);
-      setEnrolments(eList);
-    } catch (err) {
-      console.error("Failed to load academic data:", err);
-    } finally {
-      setLoading(false);
-    }
+    // Each list loads and applies on its own: one failing request must not blank the others (a missing course list used to hide the programmes too).
+    const track = <T,>(request: Promise<T>, apply: (value: T) => void) => request.then(apply).then(() => true, (error: unknown) => {
+      console.error("Failed to load academic data:", error);
+      return false;
+    });
+    const results = await Promise.all([
+      track(apiService.adminGetStudents(), value => setStudents(value.items)),
+      track(apiService.adminGetStaff(), value => setStaff(value.items)),
+      track(apiService.adminGetProgrammes(), setProgrammes),
+      track(apiService.adminGetCourses(), setCourses),
+      track(apiService.adminGetAssignments(), setAssignments),
+      track(apiService.adminGetEnrolments(), setEnrolments),
+    ]);
+    setLoadFailed(results.includes(false));
+    setCoursesFailed(!results[3]);
+    setLoading(false);
+    setLoaded(true);
   };
 
   useEffect(() => {
@@ -212,7 +236,7 @@ export const AcademicManager: React.FC = () => {
   const handleDeleteProgramme = async (id: number | string) => {
     const isConfirmed = await swalConfirm(
       'Delete Programme?',
-      'Deleting this programme will set all student and course associations to NULL.',
+      'Students and courses in this programme will be left without a programme.',
       'Yes, delete it'
     );
     if (!isConfirmed) return;
@@ -251,7 +275,7 @@ export const AcademicManager: React.FC = () => {
   const handleDeleteCourse = async (id: number | string) => {
     const isConfirmed = await swalConfirm(
       'Delete Course?',
-      'This will cascadingly remove all student enrolments in this course.',
+      'All student enrolments in this course will also be removed.',
       'Yes, delete it'
     );
     if (!isConfirmed) return;
@@ -298,21 +322,28 @@ export const AcademicManager: React.FC = () => {
 
   const handleSaveStudentAllocation = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingAllocationRef.current) return;   // a second click while the first save is still running (a ref: state only updates after the next render)
     if (!selectedStudentIdForProg || !studProgId || !enrolStudentId || !enrolCourseId || !enrolGroup || !enrolSemester.trim()) {
-      await swalError('Incomplete Allocation', 'Select the programme student, study programme, enrolment student, course, group, and semester before saving.');
+      await swalError('Incomplete Allocation', 'Select a student, programme, course, group and semester first.');
       return;
     }
+    if (selectedStudentIdForProg !== enrolStudentId) {
+      await swalError('Different Students', 'The programme and the course must be saved for the same student.');
+      return;
+    }
+    const allocation = { student_id: enrolStudentId, programme_id: studProgId, course_id: enrolCourseId, semester: enrolSemester.trim(), class_group: enrolGroup };
+    savingAllocationRef.current = true;
     setSavingStudentAllocation(true);
+    let notice: () => Promise<unknown>;
+    let refresh = true;   // a plain refusal changed nothing, so only a save or an unconfirmed attempt reads the lists again
     try {
-      await Promise.all([
-        apiService.adminAssignStudentProgramme(selectedStudentIdForProg, studProgId),
-        apiService.adminCreateEnrolment({
-          student_id: enrolStudentId,
-          course_id: enrolCourseId,
-          semester: enrolSemester.trim(),
-          class_group: enrolGroup
-        })
-      ]);
+      let saved;
+      try {
+        saved = await apiService.adminSaveStudentAllocation(allocation);
+      } catch (err) {
+        if ((err as ApiFailure).response && (err as ApiFailure).response!.status < 500) throw err;   // the system answered: that is the real reason
+        saved = await apiService.adminSaveStudentAllocation(allocation);   // lost answer: repeating is safe, it says "already saved" if the first try went through
+      }
       setSelectedStudentIdForProg('');
       setSelectedStudentLabelForProg('');
       setStudProgId('');
@@ -321,13 +352,30 @@ export const AcademicManager: React.FC = () => {
       setEnrolStudentLabel('');
       setEnrolCourseId('');
       setEnrolCourseLabel('');
-      await loadAllData();
-      await swalSuccess('Allocation Saved', 'The programme allocation and course enrolment were saved successfully.');
-    } catch (err: any) {
-      await swalError('Error', err.response?.data?.detail || err.message || 'Operation failed');
-    } finally {
-      setSavingStudentAllocation(false);
+      notice = () => saved.programme_changed || saved.enrolled
+        ? swalSuccess('Allocation Saved', 'The programme allocation and course enrolment were saved successfully.')
+        : swalSuccess('Already Saved', 'This allocation was already saved. Nothing changed.');
+    } catch (err) {
+      const answer = (err as ApiFailure).response;
+      refresh = !(answer && answer.status < 500);
+      notice = refresh
+        ? () => swalError('Could Not Confirm', "The connection failed, so we can't tell if this was saved. The lists were refreshed; please check them before trying again. What you entered is kept.")
+        : () => swalError('Error', answer?.data?.detail || 'Operation failed');
     }
+    // Free the button before the lists and the toast: neither may keep "Saving Allocation..." on screen.
+    savingAllocationRef.current = false;
+    setSavingStudentAllocation(false);
+    if (refresh) await loadAllData();
+    await notice();
+  };
+
+  const chooseAllocationStudent = (student: Student) => {
+    // One student for both parts of the form, so the programme can never go to one student and the course to another.
+    const label = `${student.name} (${student.student_code})`;
+    setSelectedStudentIdForProg(String(student.id));
+    setSelectedStudentLabelForProg(label);
+    setEnrolStudentId(String(student.id));
+    setEnrolStudentLabel(label);
   };
 
   const handleDeleteEnrolment = async (id: number | string) => {
@@ -426,6 +474,9 @@ export const AcademicManager: React.FC = () => {
     setLedgerPage(current => ({ ...current, [activeSubTab]: Math.max(1, Math.min(page, totalPages)) }));
   };
 
+  // Before the first data arrives the whole page is a skeleton of its real layout; after that only a refresh indicator shows, so a draft is never wiped.
+  if (loading && !loaded) return <ShimmerAcademics tab={activeSubTab} />;
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
@@ -443,12 +494,18 @@ export const AcademicManager: React.FC = () => {
         <button
           onClick={loadAllData}
           disabled={loading}
+          aria-busy={loading}
           className="flex items-center gap-2 py-2 px-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all cursor-pointer"
         >
           <RefreshCw className={`h-4 w-4 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
           Sync Records
         </button>
       </div>
+
+      {loadFailed && !loading && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-100 bg-rose-50 p-4 text-xs text-rose-700">
+        <span>Some records could not be loaded. These lists may be incomplete.</span>
+        <button type="button" onClick={loadAllData} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 font-semibold"><RefreshCw className="h-3.5 w-3.5" />Retry</button>
+      </div>}
 
       {/* Primary Sub-Tabs */}
       <div className="flex flex-wrap gap-1 bg-slate-150/50 p-1 rounded-xl border border-slate-200/50 max-w-2xl text-xs font-sans">
@@ -476,7 +533,7 @@ export const AcademicManager: React.FC = () => {
       </div>
 
       {/* Main Form and Grid Area */}
-      {activeSubTab === 'semesters' ? <SemestersPanel programmes={programmes} courses={courses} onSaved={loadAllData} /> : <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {activeSubTab === 'semesters' ? <SemestersPanel programmes={programmes} courses={courses} onSaved={loadAllData} coursesLoading={loading} coursesError={coursesFailed} onRetryCourses={loadAllData} onOpenCourses={() => setActiveSubTab('courses')} /> : <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         {/* LEFT COLUMN: Input Form */}
         <div className="uipro-card bg-white/80 p-5 space-y-4">
@@ -594,34 +651,13 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
                   </button>
                   {isCourseProgDropdownOpen && (
-                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCourseProgId('');
-                          setCourseProgLabel('');
-                          setIsCourseProgDropdownOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-2 text-xs hover:bg-slate-50 border-b border-slate-100 last:border-0"
-                      >
-                        -- None --
-                      </button>
+                    <MenuPanel>
+                      <MenuOption primary="-- None --" selected={!courseProgId} onSelect={() => { setCourseProgId(''); setCourseProgLabel(''); setIsCourseProgDropdownOpen(false); }} />
                       {programmes.map(p => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => {
-                            setCourseProgId(p.id.toString());
-                            setCourseProgLabel(`${p.code} - ${p.name}`);
-                            setIsCourseProgDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-2.5 text-xs hover:bg-brand-blue hover:text-white flex flex-col gap-0.5 border-b border-slate-100 last:border-0"
-                        >
-                          <span className="font-semibold">{p.code}</span>
-                          <span className="text-[10px] text-slate-400 truncate hover:text-white">{p.name}</span>
-                        </button>
+                        <MenuOption key={p.id} primary={p.code} secondary={p.name} selected={courseProgId === p.id.toString()}
+                          onSelect={() => { setCourseProgId(p.id.toString()); setCourseProgLabel(`${p.code} - ${p.name}`); setIsCourseProgDropdownOpen(false); }} />
                       ))}
-                    </FloatingPanel>
+                    </MenuPanel>
                   )}
                 </div>
               </div>
@@ -652,23 +688,12 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
                   </button>
                   {isAssignStaffDropdownOpen && (
-                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
+                    <MenuPanel>
                       {staff.map(s => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          onClick={() => {
-                            setAssignLecturerId(s.id.toString());
-                            setAssignLecturerLabel(`${s.name} (${s.staff_id})`);
-                            setIsAssignStaffDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-2 text-xs hover:bg-brand-blue hover:text-white flex flex-col border-b border-slate-100 last:border-0"
-                        >
-                          <span className="font-semibold text-slate-800 hover:text-white">{s.name}</span>
-                          <span className="text-[10px] text-slate-400 hover:text-white">{s.staff_id}</span>
-                        </button>
+                        <MenuOption key={s.id} primary={s.name} secondary={s.staff_id} selected={assignLecturerId === s.id.toString()}
+                          onSelect={() => { setAssignLecturerId(s.id.toString()); setAssignLecturerLabel(`${s.name} (${s.staff_id})`); setIsAssignStaffDropdownOpen(false); }} />
                       ))}
-                    </FloatingPanel>
+                    </MenuPanel>
                   )}
                 </div>
               </div>
@@ -692,23 +717,12 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
                   </button>
                   {isAssignCourseDropdownOpen && (
-                    <FloatingPanel className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-50">
+                    <MenuPanel>
                       {courses.map(c => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => {
-                            setAssignCourseId(c.id.toString());
-                            setAssignCourseLabel(`${c.course_code} - ${c.course_name}`);
-                            setIsAssignCourseDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-2.5 text-xs hover:bg-brand-blue hover:text-white flex flex-col border-b border-slate-100 last:border-0"
-                        >
-                          <span className="font-semibold text-brand-blue hover:text-white font-mono">{c.course_code}</span>
-                          <span className="text-[10px] text-slate-500 truncate hover:text-white">{c.course_name}</span>
-                        </button>
+                        <MenuOption key={c.id} mono primary={c.course_code} secondary={c.course_name} selected={assignCourseId === c.id.toString()}
+                          onSelect={() => { setAssignCourseId(c.id.toString()); setAssignCourseLabel(`${c.course_code} - ${c.course_name}`); setIsAssignCourseDropdownOpen(false); }} />
                       ))}
-                    </FloatingPanel>
+                    </MenuPanel>
                   )}
                 </div>
               </div>
@@ -730,21 +744,11 @@ export const AcademicManager: React.FC = () => {
                     <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
                   </button>
                   {isAssignRoleDropdownOpen && (
-                    <FloatingPanel className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50">
-                      {['Lecturer', 'Tutor', 'Practical'].map(r => (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => {
-                            setAssignRole(r as any);
-                            setIsAssignRoleDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-2.5 text-xs hover:bg-brand-blue hover:text-white border-b border-slate-100 last:border-0"
-                        >
-                          {r}
-                        </button>
+                    <MenuPanel>
+                      {(['Lecturer', 'Tutor', 'Practical'] as const).map(r => (
+                        <MenuOption key={r} primary={r} selected={assignRole === r} onSelect={() => { setAssignRole(r); setIsAssignRoleDropdownOpen(false); }} />
                       ))}
-                    </FloatingPanel>
+                    </MenuPanel>
                   )}
                 </div>
               </div>
@@ -784,39 +788,16 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isStudProgDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isStudProgDropdownOpen && (
-                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <MenuPanel>
                         {students.filter(s => s.programme_id === null || s.programme_id === undefined).length === 0 ? (
-                          <div className="px-4 py-3 text-xs text-slate-400 text-center">No unallocated students available</div>
+                          <div className="px-4 py-3 text-center text-xs text-slate-500 dark:text-slate-400">No unallocated students available</div>
                         ) : (
-                          students.filter(s => s.programme_id === null || s.programme_id === undefined).map(s => {
-                            const isSelected = String(s.id) === selectedStudentIdForProg;
-                            return (
-                              <button
-                                key={s.id}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedStudentIdForProg(String(s.id));
-                                  setSelectedStudentLabelForProg(`${s.name} (${s.student_code})`);
-                                  setIsStudProgDropdownOpen(false);
-                                }}
-                                className={`group w-full text-left px-3 py-2.5 text-xs flex items-center justify-between gap-3 rounded-lg transition-colors ${
-                                  isSelected
-                                    ? 'bg-brand-blue text-white'
-                                    : 'text-slate-900 hover:bg-blue-50 hover:text-brand-blue'
-                                }`}
-                              >
-                                <span className="min-w-0 flex flex-col">
-                                  <span className="font-bold truncate">{s.name}</span>
-                                  <span className={`text-[10px] font-mono truncate ${isSelected ? 'text-blue-100' : 'text-slate-600 group-hover:text-blue-700'}`}>
-                                    {s.student_code}
-                                  </span>
-                                </span>
-                                {isSelected && <Check className="h-4 w-4 shrink-0" />}
-                              </button>
-                            );
-                          })
+                          students.filter(s => s.programme_id === null || s.programme_id === undefined).map(s => (
+                            <MenuOption key={s.id} mono primary={s.name} secondary={s.student_code} selected={String(s.id) === selectedStudentIdForProg}
+                              onSelect={() => { chooseAllocationStudent(s); setIsStudProgDropdownOpen(false); }} />
+                          ))
                         )}
-                      </FloatingPanel>
+                      </MenuPanel>
                     )}
                   </div>
                 </div>
@@ -840,34 +821,13 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isProgSelectDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isProgSelectDropdownOpen && (
-                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setStudProgId('');
-                            setStudProgLabel('');
-                            setIsProgSelectDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-3 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg"
-                        >
-                          -- None / Remove Programme --
-                        </button>
+                      <MenuPanel>
+                        <MenuOption primary="-- None / Remove Programme --" selected={!studProgId} onSelect={() => { setStudProgId(''); setStudProgLabel(''); setIsProgSelectDropdownOpen(false); }} />
                         {programmes.map(p => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => {
-                              setStudProgId(p.id.toString());
-                              setStudProgLabel(`${p.code} - ${p.name}`);
-                              setIsProgSelectDropdownOpen(false);
-                            }}
-                            className="group w-full text-left px-3 py-2.5 text-xs text-slate-900 hover:bg-blue-50 hover:text-brand-blue flex flex-col rounded-lg transition-colors"
-                          >
-                            <span className="font-bold">{p.code}</span>
-                            <span className="text-[10px] text-slate-600 group-hover:text-blue-700 truncate">{p.name}</span>
-                          </button>
+                          <MenuOption key={p.id} primary={p.code} secondary={p.name} selected={studProgId === p.id.toString()}
+                            onSelect={() => { setStudProgId(p.id.toString()); setStudProgLabel(`${p.code} - ${p.name}`); setIsProgSelectDropdownOpen(false); }} />
                         ))}
-                      </FloatingPanel>
+                      </MenuPanel>
                     )}
                   </div>
                 </div>
@@ -901,47 +861,18 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isEnrolStudentDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isEnrolStudentDropdownOpen && (
-                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
-                        {students.filter(s => {
-                          if (!enrolCourseId) return true;
-                          return !enrolments.some(e => e.student_id === s.id && e.course_id.toString() === enrolCourseId);
-                        }).length === 0 ? (
-                          <div className="px-4 py-3 text-xs text-slate-400 text-center">
+                      <MenuPanel>
+                        {students.filter(s => !enrolCourseId || !enrolments.some(e => e.student_id === s.id && e.course_id.toString() === enrolCourseId)).length === 0 ? (
+                          <div className="px-4 py-3 text-center text-xs text-slate-500 dark:text-slate-400">
                             {!enrolCourseId ? 'No students available' : 'All students are already enrolled'}
                           </div>
                         ) : (
-                          students.filter(s => {
-                            if (!enrolCourseId) return true;
-                            return !enrolments.some(e => e.student_id === s.id && e.course_id.toString() === enrolCourseId);
-                          }).map(s => {
-                            const isSelected = String(s.id) === enrolStudentId;
-                            return (
-                              <button
-                                key={s.id}
-                                type="button"
-                                onClick={() => {
-                                  setEnrolStudentId(String(s.id));
-                                  setEnrolStudentLabel(`${s.name} (${s.student_code})`);
-                                  setIsEnrolStudentDropdownOpen(false);
-                                }}
-                                className={`group w-full text-left px-3 py-2.5 text-xs flex items-center justify-between gap-3 rounded-lg transition-colors ${
-                                  isSelected
-                                    ? 'bg-brand-blue text-white'
-                                    : 'text-slate-900 hover:bg-blue-50 hover:text-brand-blue'
-                                }`}
-                              >
-                                <span className="min-w-0 flex flex-col">
-                                  <span className="font-bold truncate">{s.name}</span>
-                                  <span className={`text-[10px] font-mono truncate ${isSelected ? 'text-blue-100' : 'text-slate-600 group-hover:text-blue-700'}`}>
-                                    {s.student_code}
-                                  </span>
-                                </span>
-                                {isSelected && <Check className="h-4 w-4 shrink-0" />}
-                              </button>
-                            );
-                          })
+                          students.filter(s => !enrolCourseId || !enrolments.some(e => e.student_id === s.id && e.course_id.toString() === enrolCourseId)).map(s => (
+                            <MenuOption key={s.id} primary={s.name} secondary={s.student_code} secondaryMono selected={String(s.id) === enrolStudentId}
+                              onSelect={() => { chooseAllocationStudent(s); setIsEnrolStudentDropdownOpen(false); }} />
+                          ))
                         )}
-                      </FloatingPanel>
+                      </MenuPanel>
                     )}
                   </div>
                 </div>
@@ -965,34 +896,24 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isEnrolCourseDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isEnrolCourseDropdownOpen && (
-                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-52 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <MenuPanel>
                         {courses.map(c => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => {
+                          <MenuOption key={c.id} mono primary={c.course_code} secondary={c.course_name} selected={enrolCourseId === c.id.toString()}
+                            onSelect={() => {
                               setEnrolCourseId(c.id.toString());
                               setEnrolCourseLabel(`${c.course_code} - ${c.course_name}`);
                               setIsEnrolCourseDropdownOpen(false);
                               // Auto-select first available non-full group
                               const availGroups = getAvailableGroupsForCourse(c.id.toString());
-                              const avail = availGroups.find(g => {
-                                const count = enrolments.filter(e => e.course_id === c.id && e.class_group === g.value).length;
-                                return count < 25;
-                              });
+                              const avail = availGroups.find(g => enrolments.filter(e => e.course_id === c.id && e.class_group === g.value).length < 25);
                               if (avail) {
                                 setEnrolGroup(avail.value);
                               } else if (availGroups.length > 0) {
                                 setEnrolGroup(availGroups[availGroups.length - 1].value);
                               }
-                            }}
-                            className="group w-full text-left px-3 py-2.5 text-xs text-slate-900 hover:bg-blue-50 hover:text-brand-blue flex flex-col rounded-lg transition-colors"
-                          >
-                            <span className="font-bold text-brand-blue font-mono">{c.course_code}</span>
-                            <span className="text-[10px] text-slate-600 truncate group-hover:text-blue-700">{c.course_name}</span>
-                          </button>
+                            }} />
                         ))}
-                      </FloatingPanel>
+                      </MenuPanel>
                     )}
                   </div>
                 </div>
@@ -1015,41 +936,22 @@ export const AcademicManager: React.FC = () => {
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isEnrolGroupDropdownOpen ? 'rotate-180 text-brand-blue' : 'text-slate-500'}`} />
                     </button>
                     {isEnrolGroupDropdownOpen && enrolCourseId && (
-                      <FloatingPanel className="absolute left-0 right-0 mt-1.5 max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-xl shadow-xl z-50 p-1.5">
+                      <MenuPanel footer={
+                        <button type="button" onClick={handleCreateNewGroup} className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-xs font-bold text-brand-blue transition-colors hover:bg-blue-50/90 dark:text-blue-400 dark:hover:bg-blue-500/10">
+                          <Plus className="h-3.5 w-3.5" />
+                          Create New Group
+                        </button>
+                      }>
                         {getAvailableGroupsForCourse(enrolCourseId).map(g => {
                           const count = enrolments.filter(e => e.course_id.toString() === enrolCourseId && e.class_group === g.value).length;
                           const isFull = count >= 25;
                           return (
-                            <button
-                              key={g.value}
-                              type="button"
-                              disabled={isFull}
-                              onClick={() => {
-                                setEnrolGroup(g.value);
-                                setIsEnrolGroupDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-4 py-2.5 text-xs flex justify-between items-center border-b border-slate-100 last:border-0 ${
-                                isFull 
-                                  ? 'bg-slate-50 text-slate-400 cursor-not-allowed'
-                                  : 'hover:bg-brand-blue hover:text-white text-slate-700'
-                              }`}
-                            >
-                              <span>{g.label}</span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${isFull ? 'bg-danger-red-light text-danger-red' : 'bg-slate-100 text-slate-500'}`}>
-                                {count} / 25 {isFull ? '(Full)' : ''}
-                              </span>
-                            </button>
+                            <MenuOption key={g.value} primary={g.label} label={`${g.label}, ${count} of 25${isFull ? ', full' : ''}`} disabled={isFull} selected={enrolGroup === g.value}
+                              aside={<span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${isFull ? 'bg-danger-red-light text-danger-red' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>{count} / 25 {isFull ? '(Full)' : ''}</span>}
+                              onSelect={() => { setEnrolGroup(g.value); setIsEnrolGroupDropdownOpen(false); }} />
                           );
                         })}
-                        <button
-                          type="button"
-                          onClick={handleCreateNewGroup}
-                          className="w-full text-center px-4 py-2.5 text-xs font-bold text-brand-blue hover:bg-brand-blue-light border-t border-slate-100 flex items-center justify-center gap-1.5 cursor-pointer"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          Create New Group
-                        </button>
-                      </FloatingPanel>
+                      </MenuPanel>
                     )}
                   </div>
                 </div>
@@ -1115,12 +1017,8 @@ export const AcademicManager: React.FC = () => {
               </div>
             </div>
 
-            {loading ? (
-              <div className="p-4">
-                <ShimmerTableSkeleton rows={4} showPagination={false} />
-              </div>
-            ) : (
-              <div className="overflow-y-auto max-h-[500px] pr-1 space-y-3">
+            {(
+              <div aria-busy={loading} className={`overflow-y-auto max-h-[500px] pr-1 space-y-3 transition-opacity ${loading ? 'opacity-60' : ''}`}>
                 {/* 1. Programmes Tab Ledger */}
                 {activeSubTab === 'programmes' && (
                   filteredProgrammes.length === 0 ? (
@@ -1264,7 +1162,7 @@ export const AcademicManager: React.FC = () => {
               </div>
             )}
 
-            {!loading && activeTotal > 0 && (
+            {activeTotal > 0 && (
               <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-[11px] font-semibold text-slate-500">
                   Showing {pageStart + 1}–{Math.min(pageStart + LEDGER_PAGE_SIZE, activeTotal)} of {activeTotal}

@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 
 from config import OPENROUTER_API_KEY, OPENROUTER_CHAT_FALLBACK_MODEL, OPENROUTER_CHAT_MODEL, OPENROUTER_EMBEDDING_MODEL
 from db.database import get_db
-from db.models import AIChatMessage, AIChatSession, AttendanceRecord, ClassSession, Course, CourseStaffAssignment, Enrolment, Lecturer, RiskScore, Student, User
+from db.models import AIChatMessage, AIChatSession, AttendanceRecord, ClassSession, Course, Enrolment, Lecturer, RiskScore, Student, User
 from domain.ai_assistant import AIPlan, apply_context, context_follow_up_plan, deterministic_plan, resolve_student, scoped_student_rates, student_course_rates
+from domain.timetable_access import teaching_course_ids
 from schemas import QueryRequest, QueryResponse
 from utils.security import require_lecturer
 from utils.timeutil import campus_now, local_offset
@@ -159,8 +160,8 @@ def _course_scope(db: Session, user: User) -> list[Course]:
     lecturer = db.query(Lecturer).filter(Lecturer.user_id == user.id).first()
     if not lecturer:
         return []
-    assigned = db.query(CourseStaffAssignment.course_id).filter(CourseStaffAssignment.lecturer_id == lecturer.id)
-    return db.query(Course).filter(or_(Course.lecturer_id == lecturer.id, Course.id.in_(assigned))).order_by(Course.course_code).all()
+    # Current-semester courses only, so an answer never presents an ended semester's data as current.
+    return db.query(Course).filter(Course.id.in_(teaching_course_ids(db, lecturer.id))).order_by(Course.course_code).all()
 
 
 def _match_course(courses: list[Course], hint: str | None) -> Course | None:
@@ -229,7 +230,7 @@ def chat_history(
     else:
         session = session_query.order_by(AIChatSession.updated_at.desc()).first()
     if not session:
-        return {"session_id": None, "messages": [], "has_more": False, "next_cursor": None}
+        return {"session_id": None, "messages": [], "has_more": False, "next_cursor": None, "suggestions": None}
     message_query = db.query(AIChatMessage).filter(AIChatMessage.session_id == session.id)
     if before:
         before_at, before_id = _parse_history_cursor(before)
@@ -248,8 +249,12 @@ def chat_history(
     has_more = len(newest_first) > limit
     page = newest_first[:limit]
     messages = _chronological_messages(page)
+    # The newest page restores exactly what the last answer showed, an intentionally empty list included.
+    # null means "no stored state" (an older chat, or an older page), which the client shows as starters.
+    stored = None if before else (session.context_state or {}).get("follow_ups")
     return {
         "session_id": session.id,
+        "suggestions": [text for text in stored if isinstance(text, str)][:4] if isinstance(stored, list) else None,
         "has_more": has_more,
         "next_cursor": _history_cursor(page[-1]) if has_more and page else None,
         "messages": [
@@ -282,19 +287,58 @@ def chat_sessions(before: str | None = None, limit: int = Query(20, ge=1, le=50)
             'next_cursor': f'{page[-1][0].updated_at.isoformat()}|{page[-1][0].id}' if len(rows) > limit else None}
 
 
-def _suggested_questions(plan):
-    # Only resolved entities, never guesses extracted from a user's sentence.
-    questions = []
-    if plan.get('resolved_student_name'):
-        name = plan['resolved_student_name']
-        questions.extend([f"Show {name}'s attendance history", f"Show {name}'s risk", f"Show {name}'s courses"])
-    code = plan.get('resolved_course_code')
-    if code:
-        questions.extend([f'List students enrolled in {code}', f'Show average attendance for {code}',
-                          f'Show timetable for {code}'])
-    questions.extend(['Show students below 80% attendance', 'Show average attendance across my courses',
-                      'List all enrolled students', 'Show my timetable'])
-    return list(dict.fromkeys(questions))[:8]
+# What adds something new after each kind of answer. Every phrase below is routed by the deterministic planner, so a chip never costs a model call.
+_FOLLOW_UPS = {
+    'risk_list': ('average', 'enrolled', 'timetable', 'absent'),
+    'course_average': ('below', 'enrolled', 'timetable', 'absent'),
+    'course_attendance': ('below', 'average', 'enrolled', 'timetable'),
+    'group_attendance': ('below', 'average', 'enrolled', 'timetable'),
+    'enrolment_list': ('below', 'average', 'timetable', 'absent'),
+    'course_students': ('below', 'average', 'timetable', 'absent'),
+    'present_count': ('absent', 'below', 'average', 'enrolled'),
+    'absent_count': ('present', 'below', 'average', 'enrolled'),
+    'timetable': ('average', 'below', 'enrolled', 'absent'),
+    'session_list': ('average', 'below', 'enrolled', 'absent'),
+    'session_attendance': ('average', 'below', 'enrolled', 'timetable'),
+}
+_STUDENT_KIND = {'student_attendance_rate': 'rate', 'student_attendance_history': 'history', 'student_sessions': 'history',
+                 'student_risk': 'risk', 'student_courses': 'courses'}
+
+
+def _follow_up_questions(plan: dict, asked=()) -> list[str]:
+    """Follow-ups for the answer just given, built only from entities the server resolved inside this lecturer's own scope.
+
+    No generic padding: an answer without context (greeting, refusal, failed lookup, error) yields nothing.
+    """
+    intent, course, group = plan.get('intent'), plan.get('resolved_course_code'), plan.get('group')
+    if (plan.get('course_code') or plan.get('course_hint')) and not course:
+        return []  # The course lookup failed, so there is no authorised context to build on.
+    if str(intent).startswith('student_'):
+        name = plan.get('resolved_student_name')
+        if not name:
+            return []
+        in_ = f' in {course}' if course else ''
+        texts = {'rate': f"Show {name}'s attendance rate{in_}", 'history': f"Show {name}'s attendance history{in_}",
+                 'risk': f"Show {name}'s risk{in_}", 'courses': f"Show {name}'s courses"}
+        questions = [text for kind, text in texts.items() if kind != _STUDENT_KIND.get(intent)]
+        if course:
+            questions.append(f'Show average attendance for {course}')
+    elif intent in _FOLLOW_UPS:
+        scope = f' in {course}' + (f' {group}' if group else '') if course else ''
+        texts = {
+            'below': f'Show students below 80% attendance{scope}',
+            'average': f'Show average attendance for {course}' + (f' {group}' if group else '') if course else 'Show average attendance across my courses',
+            'enrolled': f'List students enrolled{scope}' if course else 'List all enrolled students',
+            'timetable': f'Show timetable for {course}' if course else 'Show my timetable',
+            'absent': f'How many students were absent today{scope}',
+            'present': f'How many students were present today{scope}',
+        }
+        # Today's counts ignore the group, so they would silently widen a group-specific answer.
+        questions = [texts[kind] for kind in _FOLLOW_UPS[intent] if not (group and kind in {'absent', 'present'})]
+    else:
+        return []
+    seen = {text.strip().casefold() for text in asked}
+    return [text for text in dict.fromkeys(questions) if text.casefold() not in seen][:4]
 
 
 def _student_answer(db: Session, plan: dict, courses: list[Course]) -> tuple[str, int]:
@@ -379,7 +423,7 @@ def _answer_from_database(db: Session, plan: dict, courses: list[Course]) -> tup
         return "I could not find that course in your assigned courses.", 0
     scope = [course.id] if course else [c.id for c in courses]
     if not scope:
-        return "No assigned courses are available for this account.", 0
+        return "You have no courses in the current semester.", 0
     if intent in {"course_average", "course_attendance", "group_attendance"}:
         rates = scoped_student_rates(db, scope, plan.get("group"))
         if not rates:
@@ -393,12 +437,13 @@ def _answer_from_database(db: Session, plan: dict, courses: list[Course]) -> tup
         suffix = f"\n\nShowing {_MAX_ROWS} of {len(rates)} records." if len(rates) > _MAX_ROWS else ""
         return f"Attendance for {len(rates)} student course record{'s' if len(rates) != 1 else ''}:\n\n" + "\n".join(lines) + suffix, len(rates)
     if intent == "risk_list":
-        query = db.query(Student.name, Student.student_code, Course.course_code, RiskScore.attendance_rate).join(RiskScore, RiskScore.student_id == Student.id).join(Course, Course.id == RiskScore.course_id).filter(RiskScore.course_id.in_(scope))
+        # Joined to the current enrolment: a student the admin moved out of the course keeps a stored score but is not "currently" at risk there.
+        query = db.query(Student.name, Student.student_code, Course.course_code, RiskScore.attendance_rate).join(RiskScore, RiskScore.student_id == Student.id).join(Course, Course.id == RiskScore.course_id).join(
+            Enrolment,
+            (Enrolment.student_id == Student.id) & (Enrolment.course_id == Course.id),
+        ).filter(RiskScore.course_id.in_(scope))
         if plan.get("group"):
-            query = query.join(
-                Enrolment,
-                (Enrolment.student_id == Student.id) & (Enrolment.course_id == Course.id),
-            ).filter(func.lower(Enrolment.class_group) == str(plan["group"]).lower())
+            query = query.filter(func.lower(Enrolment.class_group) == str(plan["group"]).lower())
         threshold = min(100.0, max(0.0, float(plan.get("threshold") or 80)))
         rows = query.filter(RiskScore.attendance_rate < threshold / 100.0).order_by(RiskScore.attendance_rate.asc()).limit(_MAX_ROWS).all()
         if not rows:
@@ -469,7 +514,7 @@ async def _store_embedding(db: Session, message_id: str, content: str) -> None:
 
 @router.post("/natural", response_model=QueryResponse)
 async def natural_query(body: QueryRequest, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    started, row_count, plan = time.perf_counter(), 0, {}
+    started, row_count, plan, suggestions = time.perf_counter(), 0, {}, []
     _enforce_rate_limit(current_user.id)
     # Detached objects are request-local: temporary content is never added to the DB.
     session = AIChatSession(context_state=body.context_state.model_dump(mode='json', exclude_none=True)) if body.temporary else _owned_session(db, body.session_id, current_user.id)
@@ -518,6 +563,8 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
             if plan.get("group"):
                 next_context["group"] = plan["group"]
             next_context["intent"] = plan.get("intent")
+            asked = [message.content for message in recent if message.role == "user"] + [question]
+            suggestions = _follow_up_questions(plan, asked)
             session.context_state = next_context
         except SQLAlchemyError as exc:
             logger.error("AI database request failed type=%s", type(exc).__name__)
@@ -530,7 +577,10 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
             raise HTTPException(status_code=503, detail="The AI Assistant is temporarily unavailable. Please try again shortly.") from exc
     if body.temporary:
         return QueryResponse(answer=answer, success=answer != _INTERRUPTED_REPLY, row_count=row_count,
-                             context_state=session.context_state or {}, suggestions=_suggested_questions(plan))
+                             context_state=session.context_state or {}, suggestions=suggestions)
+    # Every saved answer records its own follow-ups (empty for greetings, refusals and errors) so a reopened chat matches the last reply;
+    # the rest of the entity context is kept. Temporary context is client-validated and never persisted.
+    session.context_state = {**(session.context_state or {}), "follow_ups": suggestions}
     user_message = AIChatMessage(id=str(uuid.uuid4()), session_id=session.id, role="user", content=question)
     db.add_all([user_message, AIChatMessage(id=str(uuid.uuid4()), session_id=session.id, role="assistant", content=answer)])
     session.updated_at = func.now()
@@ -541,7 +591,7 @@ async def natural_query(body: QueryRequest, db: Session = Depends(get_db), curre
     db.commit()
     logger.info("AI request completed model=%s duration_ms=%d", OPENROUTER_CHAT_MODEL, int((time.perf_counter()-started)*1000))
     return QueryResponse(answer=answer, success=answer != _INTERRUPTED_REPLY, row_count=row_count, session_id=session.id,
-                         suggestions=_suggested_questions(plan))
+                         suggestions=suggestions)
 
 
 @router.post('/temporary', response_model=QueryResponse)

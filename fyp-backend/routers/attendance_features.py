@@ -5,6 +5,7 @@ from domain.record_pages import RecordFilters
 import json
 import math
 from datetime import datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,7 +20,9 @@ from db.models import (
 )
 from domain.attendance import session_hours, require_session_enrolment
 from domain.scheduler import get_course_group_slots, session_checkin_state
+from domain import timetable_access
 from domain.announcements import visible_announcements
+from domain.timetable_access import NOT_CURRENT, teaching_course_ids
 from utils.db_helpers import my_course_ids, require_own_profile
 from utils.security import get_current_user, require_lecturer, require_student
 from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
@@ -54,7 +57,7 @@ def ensure_course_announcement_notifications(db: Session, user: User, student: S
         if code and group:
             groups.setdefault(code.upper(), set()).add(group)
     programmes = {student.programme.code} if getattr(student, "programme", None) else set()
-    for row in visible_announcements(db, "students", programmes, courses, groups):
+    for row in visible_announcements(db, "students", programmes, courses, groups, user.id):
         if not row.creator_user_id:
             continue
         add_notification(db, user.id, "course_announcement" if row.target_scope == "course" else "general_announcement", row.title,
@@ -127,7 +130,8 @@ def _request_dict(row: AttendanceRequest, course: Course, student: Student | Non
     }
 
 
-def _next_meeting(db: Session, student: Student):
+def _next_meeting(db: Session, student: Student, current_only: bool = False):
+    """The student's next class. With current_only, only courses of a semester running today, and only classes that start by its end date."""
     enrolments = db.query(Enrolment).filter(Enrolment.student_id == student.id).all()
     groups = {e.course_id: e.class_group for e in enrolments}
     meetings = db.query(ClassMeeting, Course).join(Course, Course.id == ClassMeeting.course_id).filter(
@@ -146,6 +150,9 @@ def _next_meeting(db: Session, student: Student):
             if ends < now:
                 starts += timedelta(days=7)
                 ends += timedelta(days=7)
+            if current_only and (not course.semester_id or course.semester is None or not course.semester.start_date <= starts.date() <= course.semester.end_date
+                                 or timetable_access.view_state(course.semester) != "current"):
+                continue
             candidates.append((starts, ends, meeting, course))
         except (ValueError, TypeError):
             continue
@@ -247,10 +254,17 @@ def student_requests(db: Session = Depends(get_db), current_user: User = Depends
 
 
 @router.get("/students/me/attendance-sessions")
-def student_attendance_sessions(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    """Closed assigned sessions, including absences that have no AttendanceRecord."""
+def student_attendance_sessions(scope: Literal["all", "current"] = Query("all"), db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    """Closed assigned sessions, including absences that have no AttendanceRecord.
+
+    scope=all (the default) is the full retained history. scope=current is the dashboard's view: only courses of a semester running today and only
+    classes held inside it. Nothing is deleted either way."""
     student = require_own_profile(db, Student, current_user.id, "Student")
     enrolments = db.query(Enrolment).filter(Enrolment.student_id == student.id).all()
+    semester_of = {}
+    if scope == "current":
+        semester_of = {course.id: timetable_access.current_semester(course) for course in db.query(Course).filter(Course.id.in_([row.course_id for row in enrolments])).all()}
+        enrolments = [row for row in enrolments if semester_of.get(row.course_id) is not None]
     groups = {row.course_id: row.class_group for row in enrolments}
     if not groups:
         return []
@@ -260,6 +274,7 @@ def student_attendance_sessions(db: Session = Depends(get_db), current_user: Use
     assigned_sessions = [
         (session, course) for session, course in sessions
         if session.class_group in ("All", groups[session.course_id])
+        and (scope != "current" or timetable_access.held_in_semester(semester_of[session.course_id], session.scheduled_start or session.opened_at))
     ]
     semester_start = None
     if assigned_sessions:
@@ -479,7 +494,7 @@ def lecturer_requests(status: str = "pending", db: Session = Depends(get_db), cu
     query = db.query(AttendanceRequest, Course, Student).join(Course, Course.id == AttendanceRequest.course_id).join(Student, Student.id == AttendanceRequest.student_id)
     if current_user.role != "admin":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        query = query.filter(AttendanceRequest.course_id.in_(my_course_ids(db, lecturer.id)))
+        query = query.filter(AttendanceRequest.course_id.in_(teaching_course_ids(db, lecturer.id)))
     if status != "all":
         query = query.filter(AttendanceRequest.status == status)
     return [_request_dict(row, course, student) for row, course, student in query.order_by(AttendanceRequest.created_at.desc()).all()]
@@ -499,6 +514,8 @@ def review_request(request_id: str, body: AttendanceRequestReview, db: Session =
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         if row.course_id not in my_course_ids(db, lecturer.id):
             raise HTTPException(403, "This request is outside your courses")
+        if row.course_id not in teaching_course_ids(db, lecturer.id):
+            raise HTTPException(403, NOT_CURRENT)
     review_attendance_request(db, row, decision, current_user.id, body.note)
     student = db.get(Student, row.student_id)
     course = db.get(Course, row.course_id)

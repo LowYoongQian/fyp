@@ -57,6 +57,38 @@ def seed_class_meetings() -> None:
         db.close()
 
 
+def reconcile_group_meetings(apply: bool = False) -> None:
+    """List, and with --apply create, the Tutor/Practical meetings that staff assignments and enrolled groups imply but class_meetings lacks.
+
+    Dry run unless applied. Additive: an existing meeting, including a customised one, is never changed. It does bring back a class
+    time an admin deliberately deleted, which is why this is an explicit command and not automatic."""
+    from db.models import Course, CourseStaffAssignment
+    from domain.scheduler import add_missing_meetings, groups_for_course
+
+    db = SessionLocal()
+    try:
+        total = 0
+        for course in db.query(Course).order_by(Course.course_code):
+            assignments = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == course.id).all()
+            for row in add_missing_meetings(db, course.id, assignments, groups_for_course(db, course.id)):
+                print(f"  {course.course_code}: {row.role} for {row.class_group} -> {row.day} {row.start}-{row.end} {row.room}")
+                total += 1
+        if apply:
+            db.commit()
+        else:
+            db.rollback()
+        print(f"{'Created' if apply else 'Would create'} {total} missing group meeting(s)." + ("" if apply else " Re-run with --apply to create them."))
+    except ValueError as error:   # the timetable is full: nothing is half-applied
+        db.rollback()
+        print(f"Nothing changed: {error}")
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
-    seed_security_settings()
-    seed_class_meetings()
+    import sys
+    if "reconcile-groups" in sys.argv:
+        reconcile_group_meetings(apply="--apply" in sys.argv)
+    else:
+        seed_security_settings()
+        seed_class_meetings()

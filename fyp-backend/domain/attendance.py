@@ -98,6 +98,11 @@ def build_attendance_sequence(course_sessions, present_set, student_id, class_gr
     return sequence, hours
 
 
+def completed_class_count(course_sessions, present_set, student_id, class_group) -> int:
+    """How many held classes the rate below is made of. 0 means no class has been held, where the rate is the placeholder 100.0 and clients show "no data"."""
+    return len(build_attendance_sequence(course_sessions, present_set, student_id, class_group)[0])
+
+
 def attendance_rate_percent(course_sessions, present_set, student_id, class_group) -> float:
     """Hours-weighted attendance rate as a 0-100 percentage, using the exact
     same code path as the risk model. Returns 100.0 when nothing is held yet."""

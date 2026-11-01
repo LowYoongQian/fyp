@@ -133,7 +133,7 @@ export const StaffManager: React.FC = () => {
       setTotalCount(res.total);
     } catch (err: any) {
       if (version !== requestVersion.current) return;
-      setError('Failed to fetch lecturer staff registry. Please ensure backend is running.');
+      setError('Could not load staff. Please try again.');
       console.error(err);
     } finally {
       if (version === requestVersion.current) setLoading(false);
@@ -223,7 +223,7 @@ export const StaffManager: React.FC = () => {
     if (mutationPending.current) return;
     const isConfirmed = await swalConfirmDelete(
       staffName,
-      'This will cascadingly delete all their courses, schedules, and active check-in sessions.'
+      'Their courses, schedules and active check-ins will also be deleted.'
     );
     if (!isConfirmed) return;
     try {
@@ -239,7 +239,7 @@ export const StaffManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {detailsStaff && <StaffDetailsDialog key={detailsStaff.id} staff={detailsStaff} onClose={() => setDetailsStaff(null)} />}
+      {detailsStaff && <StaffDetailsDialog key={detailsStaff.id} staff={detailsStaff} onClose={() => setDetailsStaff(null)} onChangePassword={() => { const target = detailsStaff; setDetailsStaff(null); handleOpenEdit(target); }} />}
       {formSubmitting && !isCreateOpen && !isEditOpen && <p role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-700">Saving changes… Pending server confirmation.</p>}
       {/* Top Header Card */}
       <div className="uipro-card bg-white/75 backdrop-blur-md relative overflow-hidden">

@@ -42,8 +42,9 @@ def ensure_unique(db: Session, model: Type, field, value, exclude_id=None,
 
 
 def require_email_domain(email: str, suffix: str, label: str) -> None:
-    """Raise 400 unless `email` ends with `suffix`."""
-    if not email.endswith(suffix):
+    """Raise 400 unless `email` is one well-formed address on exactly this domain (any letter case), so "a@b@student.school.edu" is no school account."""
+    from domain.personal_email import is_valid_format
+    if not email.strip().lower().endswith(suffix) or not is_valid_format(email.strip().lower()):
         raise HTTPException(status_code=400, detail=f"{label} email must end with {suffix}")
 
 

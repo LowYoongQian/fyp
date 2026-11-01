@@ -1,24 +1,23 @@
 import hashlib
-import html
 import os
 import secrets
 from datetime import timedelta
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import quote
 
-import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models import AuthAttempt, AuthLoginChallenge, Lecturer, Student, User
-from schemas import LoginRequest, RegisterRequest, TokenResponse, LoginChallengeResponse
+from schemas import LoginRequest, TokenResponse, LoginChallengeResponse
 from domain.account_security import (active, token_hash, lock_user, factor_for, check_factor_limit,
     verify_factor, new_session, revoke_all)
-from utils.db_helpers import ensure_unique, require_email_domain
+from domain import personal_email
+from integrations import resend_mail
 from utils.security import (
     create_access_token,
     get_current_user,
@@ -29,41 +28,11 @@ from utils.timeutil import iso_utc, utcnow
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-# User Registration Endpoint
-@router.post("/register", status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    user_code = body.code or body.class_group
-    if not user_code:
-        raise HTTPException(status_code=400, detail="Student code or Staff ID is required")
-
-    ensure_unique(db, User, User.email, body.email, detail="Email already registered")
-
-    if body.role == "student":
-        require_email_domain(body.email, "@student.school.edu", "Student")
-        ensure_unique(db, Student, Student.student_code, user_code, detail="Student code already exists")
-    elif body.role == "lecturer":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Lecturer accounts cannot be registered directly. They must be created by an administrator."
-        )
-    else:
-        raise HTTPException(status_code=400, detail="Invalid role")
-
-    hashed = hash_password(body.password)
-    user = User(email=body.email, password_hash=hashed, role=body.role)
-    db.add(user)
-    db.flush()
-
-    student = Student(user_id=str(user.id), name=body.name, student_code=user_code)
-    db.add(student)
-
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=400, detail="Registration database conflict")
-
-    return {"message": "Registration successful", "user_id": str(user.id)}
+# Accounts are created by an administrator from the approved student and staff records. A typed school-looking address is not proof of
+# being a student, so nobody can register themselves.
+@router.post("/register", status_code=403)
+def register():
+    raise HTTPException(status_code=403, detail="Accounts are created by an administrator.")
 
 # User Login Endpoint
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
@@ -84,19 +53,19 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(429, 'Too many login attempts. Try again in 15 minutes.')
 
     user = None
-    student = None
-    lecturer = None
 
     if "@" in raw:
-        user = db.query(User).filter(User.email == raw).first()
+        # Only the account's own sign-in email (the school address). recovery_email is never looked at here.
+        user = db.query(User).filter(func.lower(User.email) == raw.lower()).first()
     else:
-        student = db.query(Student).filter(Student.student_code == raw).first()
-        if student:
-            user = db.query(User).filter(User.id == str(student.user_id)).first()
-        else:
-            lecturer = db.query(Lecturer).filter(Lecturer.staff_id == raw).first()
-            if lecturer:
-                user = db.query(User).filter(User.id == str(lecturer.user_id)).first()
+        # A student has no ID sign-in: only staff sign in with their staff ID.
+        lecturer = db.query(Lecturer).filter(Lecturer.staff_id == raw).first()
+        if lecturer:
+            user = db.query(User).filter(User.id == str(lecturer.user_id)).first()
+
+    # A student account counts only with its approved school address and its Student record; otherwise it fails like a wrong password.
+    if user and user.role == "student" and not _approved_student(db, user):
+        user = None
 
     verified_hash = user.password_hash if user else None
     if not user or not verify_password(body.password, verified_hash):
@@ -146,6 +115,10 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         db.commit()
         return {'requires_two_factor': True, 'challenge_token': challenge, 'expires_in': 300}
     return _login_response(db, user, label)
+
+
+def _approved_student(db, user) -> bool:
+    return personal_email.is_student_identity(user.email) and db.query(Student.id).filter(Student.user_id == str(user.id)).first() is not None
 
 
 def _login_response(db, user, label):
@@ -212,6 +185,8 @@ def verify_login(body: MFALogin, db: Session = Depends(get_db)):
         raise HTTPException(401, 'Login verification expired. Sign in again.')
     if not user.two_factor_enabled:
         raise HTTPException(401, 'Account security changed. Sign in again.')
+    if user.role == "student" and not _approved_student(db, user):
+        raise HTTPException(401, 'Login verification expired. Sign in again.')
     verify_factor(db, factor_for(db, user.id), body.code)
     challenge.consumed_at = utcnow()
     return _login_response(db, user, challenge.device_label)
@@ -228,8 +203,20 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+PET_CHOICES = ("luna-techbot", "hoodie-cat")
+DEFAULT_PET = "luna-techbot"
+
+
+class PetPosition(BaseModel):
+    dx: int = Field(ge=0, le=10000)
+    dy: int = Field(ge=0, le=10000)
+
+
 class UserSettingsUpdate(BaseModel):
     recovery_prompt_dismissed: Optional[bool] = None
+    pet_visible: Optional[StrictBool] = None
+    pet_choice: Optional[Literal["luna-techbot", "hoodie-cat"]] = None
+    pet_position: Optional[PetPosition] = None
     theme_preference: Optional[str] = None
     font_size_preference: Optional[str] = None
     language_preference: Optional[str] = None
@@ -268,51 +255,65 @@ class ResetPasswordRequest(BaseModel):
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
-def _send_email(to: str, subject: str, html_body: str, idempotency_key: str):
-    api_key = os.getenv("RESEND_API_KEY")
-    sender = os.getenv("RESEND_FROM_EMAIL")
-    if not api_key or not sender:
-        raise HTTPException(status_code=503, detail="Email service is not configured")
-    response = httpx.post(
-        "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {api_key}", "Idempotency-Key": idempotency_key},
-        json={"from": sender, "to": [to], "subject": subject, "html": html_body},
-        timeout=10,
-    )
-    if response.status_code >= 400:
-        raise HTTPException(status_code=503, detail="Email could not be sent")
+RECOVERY_CODE_MINUTES, RECOVERY_RESEND_SECONDS, RECOVERY_VERIFY_TRIES = 10, 60, 5
+
+
+def _mail(to: str, subject: str, text: str, idempotency_key: str):
+    """Send one account email; a provider failure is a short 503, never a claim that it was sent."""
+    try:
+        resend_mail.send(to, subject, text, idempotency_key)
+    except resend_mail.EmailError:
+        raise HTTPException(status_code=503, detail="The email could not be sent. Please try again.")
+
 
 @router.post("/recovery-email/request")
 def request_recovery_email(body: RecoveryEmailRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    address = body.recovery_email.strip().lower()
     if user.role != "student":
         raise HTTPException(status_code=403, detail="Student account required")
-    if not address.endswith("@gmail.com"):
-        raise HTTPException(status_code=400, detail="Enter a Gmail address")
-    existing = db.query(User).filter(
-        func.lower(User.recovery_email) == address,
-        User.id != user.id,
-    ).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Gmail already in use")
+    address = personal_email.require_linkable(db, user, body.recovery_email)
+    if user.recovery_email_verified and personal_email.normalized(user.recovery_email) == address:
+        return {"message": "Already verified"}
+    issued = user.recovery_code_expires_at - timedelta(minutes=RECOVERY_CODE_MINUTES) if user.recovery_code_expires_at else None
+    if issued and (utcnow() - issued).total_seconds() < RECOVERY_RESEND_SECONDS:
+        raise HTTPException(status_code=429, detail="Please wait a minute before asking for another code.")
     code = f"{secrets.randbelow(1000000):06d}"
+    # The address stays PENDING (not verified) until its owner enters the code; a pending or replaced address is never a destination.
     user.recovery_email = address
     user.recovery_email_verified = False
     user.recovery_code_hash = _token_hash(code)
-    user.recovery_code_expires_at = utcnow() + timedelta(minutes=10)
+    user.recovery_code_expires_at = utcnow() + timedelta(minutes=RECOVERY_CODE_MINUTES)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Gmail already in use")
-    _send_email(address, "Verify your recovery email", f"<p>Your verification code is:</p><h1>{code}</h1><p>This code expires in 10 minutes.</p>", f"recovery-{user.id}-{code}")
+        raise HTTPException(status_code=409, detail="That email cannot be used.")
+    try:
+        _mail(address, "Verify your recovery email", f"Your verification code is {code}.\n\nIt expires in {RECOVERY_CODE_MINUTES} minutes.", f"recovery-{user.id}-{code}")
+    except HTTPException:
+        user.recovery_code_hash = user.recovery_code_expires_at = None   # nothing was sent: no code to guess, and an immediate retry is allowed
+        db.commit()
+        raise
     return {"message": "Code sent"}
 
 @router.post("/recovery-email/verify")
 def verify_recovery_email(body: RecoveryEmailVerify, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    key = _token_hash(f"recovery-verify:{user.id}")
+    tries = db.query(AuthAttempt).filter_by(key=key).first()
+    if tries and tries.blocked_until and tries.blocked_until > utcnow():
+        raise HTTPException(status_code=429, detail="Too many wrong codes. Ask for a new code later.")
     valid = user.recovery_code_hash and secrets.compare_digest(user.recovery_code_hash, _token_hash(body.code.strip()))
     if not valid or not user.recovery_code_expires_at or user.recovery_code_expires_at < utcnow():
+        # A six-digit code must not be guessable: after a few wrong tries it is destroyed.
+        tries = tries or AuthAttempt(key=key, failures=0, updated_at=utcnow())
+        db.add(tries)
+        tries.failures, tries.updated_at = (tries.failures or 0) + 1, utcnow()
+        if tries.failures >= RECOVERY_VERIFY_TRIES:
+            tries.failures, tries.blocked_until = 0, utcnow() + timedelta(minutes=15)
+            user.recovery_code_hash = user.recovery_code_expires_at = None
+        db.commit()
         raise HTTPException(status_code=400, detail="Code is invalid or expired")
+    if tries:
+        db.delete(tries)
     user.recovery_email_verified = True
     user.recovery_code_hash = None
     user.recovery_code_expires_at = None
@@ -325,16 +326,16 @@ def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
     student_code = raw_id if raw_id.startswith("ST") else f"ST{raw_id}"
     student = db.query(Student).filter(Student.student_code == student_code).first()
     user = db.query(User).filter(User.id == str(student.user_id)).first() if student else None
-    if user and user.email.lower() == body.school_email.strip().lower() and user.recovery_email_verified and user.recovery_email:
+    address = personal_email.deliverable_address(user) if user and _approved_student(db, user) else None
+    if user and address and user.email.lower() == body.school_email.strip().lower():
         token = secrets.token_urlsafe(32)
         user.password_reset_hash = _token_hash(token)
         user.password_reset_expires_at = utcnow() + timedelta(minutes=20)
         db.commit()
         base_url = os.getenv("WEB_APP_URL", "http://localhost:5173").rstrip("/")
         link = f"{base_url}/?reset_token={token}"
-        safe_link = html.escape(link, quote=True)
         try:
-            _send_email(user.recovery_email, "Reset your password", f'<p>Use this link to set a new password:</p><p><a href="{safe_link}">Reset password</a></p><p>This link expires in 20 minutes.</p>', f"reset-{user.id}-{token[:12]}")
+            _mail(address, "Reset your password", f"Open this link to set a new password for your school account:\n\n{link}\n\nThis link expires in 20 minutes.", f"reset-{user.id}-{token[:12]}")
         except HTTPException:
             # Keep the public response identical so this endpoint cannot reveal
             # whether the supplied student ID and school email matched an account.
@@ -400,6 +401,10 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "recovery_email": user.recovery_email,
         "recovery_email_verified": user.recovery_email_verified,
         "recovery_prompt_dismissed": bool(user.recovery_prompt_dismissed),
+        # Raw so the client can tell "never chosen" (null) from an explicit choice when carrying over an old browser-only setting.
+        "pet_visible": user.pet_visible,
+        "pet_choice": user.pet_choice if user.pet_choice in PET_CHOICES else DEFAULT_PET,
+        "pet_position": {"dx": user.pet_offset_x, "dy": user.pet_offset_y} if user.pet_offset_x is not None and user.pet_offset_y is not None else None,
     }
 
 @router.put("/me/settings")
@@ -416,6 +421,12 @@ def update_user_settings(body: UserSettingsUpdate, user: User = Depends(get_curr
         if user.role != "student":
             raise HTTPException(status_code=403, detail="Student account required")
         user.recovery_prompt_dismissed = body.recovery_prompt_dismissed
+    if body.pet_visible is not None:
+        user.pet_visible = body.pet_visible
+    if body.pet_choice is not None:
+        user.pet_choice = body.pet_choice
+    if body.pet_position is not None:
+        user.pet_offset_x, user.pet_offset_y = body.pet_position.dx, body.pet_position.dy
     if body.theme_preference is not None:
         user.theme_preference = body.theme_preference
     if body.font_size_preference is not None:

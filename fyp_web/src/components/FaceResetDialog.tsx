@@ -49,7 +49,7 @@ export function FaceResetDialog({ student, onClose, onSaved }: {
       const saved = await apiService.adminResetFace(student.id, password, version);
       resource.setData(() => saved);
       setPassword(''); setConfirmed(null);
-      setMessage('Face reset confirmed. The student must register again in the app; attendance history is unchanged.');
+      setMessage('Face reset. The student must register again in the app.');
       onSaved();
     } catch (failure) {
       setPassword(''); setConfirmed(null);
@@ -64,7 +64,7 @@ export function FaceResetDialog({ student, onClose, onSaved }: {
           <p className="text-xs text-slate-500 mt-1">{student.name} · {student.student_code}</p></div>
         <button type="button" aria-label="Close face reset" disabled={busy} onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100 disabled:opacity-50"><X className="h-4 w-4" /></button>
       </header>
-      <p className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-relaxed text-blue-800">Handle identity checks at the administration office before resetting. This removes the saved face signature and requires a new live registration in the app; it does not delete attendance history.</p>
+      <p className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-relaxed text-blue-800">Check the student&apos;s identity at the office first. They must register their face again in the app.</p>
       {resource.loading ? <div role="status" aria-label="Loading face registration"><ShimmerProfileModal /></div> : <>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs flex items-center justify-between gap-3">
           <span className="font-semibold text-slate-800">{resource.data ? registered ? 'Face registered · locked for student' : 'Registration required' : 'Status unavailable'}</span>
@@ -73,7 +73,7 @@ export function FaceResetDialog({ student, onClose, onSaved }: {
         {(error || resource.error) && <p role="alert" className="rounded-xl bg-red-50 border border-red-100 p-3 text-xs text-red-700">{error || resource.error}</p>}
         {message && <p role="status" className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs text-emerald-700">{message}</p>}
         {registered && <form className="space-y-4" onSubmit={event => { event.preventDefault(); void perform(); }}>
-          <label className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4 text-xs leading-relaxed text-slate-600"><input type="checkbox" checked={!!confirmed && confirmed === resource.data?.registration_version} disabled={busy} onChange={event => setConfirmed(event.target.checked ? resource.data?.registration_version ?? null : null)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-600" /><span>I confirm that this student's saved face should be reset after the office identity check.</span></label>
+          <label className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4 text-xs leading-relaxed text-slate-600"><input type="checkbox" checked={!!confirmed && confirmed === resource.data?.registration_version} disabled={busy} onChange={event => setConfirmed(event.target.checked ? resource.data?.registration_version ?? null : null)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-600" /><span>I checked the student&apos;s identity at the office.</span></label>
           <label className="block space-y-2 text-xs font-semibold text-slate-600"><span>Your current administrator password</span><input type="password" autoComplete="current-password" value={password} disabled={busy} onChange={event => setPassword(event.target.value)} required className="uipro-input w-full" /></label>
           <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 pt-4">
             <button type="button" onClick={onClose} disabled={busy} className="uipro-button uipro-button-secondary disabled:opacity-50">Cancel</button>

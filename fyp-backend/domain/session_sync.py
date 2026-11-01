@@ -83,6 +83,39 @@ def _sync_worker():
             sync_class_sessions(force=True)
 
 
+def materialize_upcoming(db: Session, now_utc: datetime, tz_offset: timedelta, schedule_map: dict, course_id=None) -> int:
+    """Give today's classes their 'scheduled' row from one hour before they start until they end, once each, so attendance lists
+    show them without anyone opening the staff Today list first. The row never opens check-in. Safe when two requests race:
+    the (meeting, start) unique constraint keeps one row and the loser simply skips. Returns how many rows were added."""
+    today = (now_utc + tz_offset).date()
+    added = 0
+    for slot in schedule_map.values():
+        if course_id is not None and str(slot["course_id"]) != str(course_id):
+            continue
+        if slot.get("day") != today.strftime("%A") or not slot.get("meeting_id") or not within_semester(slot.get("semester"), today):
+            continue
+        start_utc = datetime.combine(today, datetime.strptime(slot["start"], "%H:%M").time()) - tz_offset
+        end_utc = datetime.combine(today, datetime.strptime(slot["end"], "%H:%M").time()) - tz_offset
+        if not (start_utc - timedelta(hours=1) <= now_utc < end_utc):
+            continue
+        if slot.get("effective_from") and start_utc < slot["effective_from"]:
+            continue
+        if db.query(ClassSession.id).filter(ClassSession.meeting_id == slot["meeting_id"], ClassSession.scheduled_start == start_utc).first():
+            continue
+        try:
+            with db.begin_nested():
+                db.add(ClassSession(
+                    course_id=slot["course_id"], meeting_id=slot["meeting_id"], scheduled_start=start_utc, scheduled_end=end_utc,
+                    status="scheduled", is_open=False, opened_at=None,
+                    class_group="All" if slot["role"] == "Lecture" else slot["class_group"], room=slot["room"],
+                    semester=slot["semester"]["name"] if slot.get("semester") else None,
+                ))
+            added += 1
+        except IntegrityError:
+            pass   # another request created the same class a moment earlier
+    return added
+
+
 def _sync_class_sessions_now(db: Session):
     """Advance classes from the timetable without ever inventing attendance.
 
@@ -101,7 +134,8 @@ def _sync_class_sessions_now(db: Session):
 
         now_local = now_utc + tz_offset
         schedule_map = calculate_schedule(db)
-        
+        materialize_upcoming(db, now_utc, tz_offset, schedule_map)
+
         # Fetch existing dated classes once; scheduled_start is authoritative for
         # new rows, while opened_at keeps legacy rows visible during migration.
         min_date_utc = datetime.combine(now_local - timedelta(days=7), time(0, 0, 0)) - tz_offset
@@ -132,6 +166,8 @@ def _sync_class_sessions_now(db: Session):
                 end_utc = datetime.combine(date_check, datetime.strptime(slot["end"], "%H:%M").time()) - tz_offset
                 if now_utc < end_utc:
                     continue
+                if slot.get("effective_from") and start_utc < slot["effective_from"]:
+                    continue   # this occurrence began before the slot existed: it was never owed, so it is not a missed class
                 key = (str(slot["meeting_id"]), start_utc)
                 session = sessions_by_key.get(key)
                 if not session:

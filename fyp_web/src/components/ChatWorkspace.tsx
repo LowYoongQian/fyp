@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { History, MessageSquarePlus, PanelLeftClose, PanelLeftOpen, Plus, Shield, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Check, History, MessageSquarePlus, PanelLeftClose, PanelLeftOpen, Plus, Settings, Shield, X } from 'lucide-react';
 import { apiService } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { usePetPreferences } from '../hooks/usePetPreferences';
+import { PET_IDS, type PetPreferences } from '../utils/petPreference';
+import { PET_SHEETS } from './petSheets';
+import { CustomSwitch } from './CustomSwitch';
+import { FloatingPanel } from './FloatingPanel';
 
 export type ChatTab = { id: string; title: string; temporary: boolean; sessionId?: string; restoreLatest?: boolean };
 type SavedChat = { id: string; title: string; updated_at: string };
@@ -10,17 +16,25 @@ const newTab = (temporary = false, restoreLatest = false): ChatTab => ({
 });
 
 export function ChatWorkspace({ renderThread }: {
-  renderThread: (tab: ChatTab, active: boolean, questions: string[], update: (title: string, sessionId?: string, question?: string) => void) => ReactNode;
+  renderThread: (tab: ChatTab, active: boolean, update: (title: string, sessionId?: string) => void) => ReactNode;
 }) {
   const [tabs, setTabs] = useState(() => [newTab(new URLSearchParams(location.search).get('chat') === 'temporary', true)]);
   const [activeId, setActiveId] = useState(tabs[0].id);
-  const [questions, setQuestions] = useState<Record<string, string[]>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [saved, setSaved] = useState<SavedChat[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { user } = useAuth();
+  const pets = usePetPreferences(user?.user_id);
+  const [petNotice, setPetNotice] = useState('');
+  const savePet = async (patch: Partial<PetPreferences>) => {
+    setPetNotice('Saving…');
+    const saved = await pets.save(patch);
+    if (mounted.current) setPetNotice(saved ? 'Saved.' : 'Could not save. Try again.');
+  };
   const mounted = useRef(false);
   const historyBusyRef = useRef(false);
   const active = tabs.find(tab => tab.id === activeId)!;
@@ -29,7 +43,7 @@ export function ChatWorkspace({ renderThread }: {
     mounted.current = true;
     const reset = () => {
       const tab = newTab(true);
-      setTabs([tab]); setActiveId(tab.id); setQuestions({}); setSaved([]); setHistoryOpen(false);
+      setTabs([tab]); setActiveId(tab.id); setSaved([]); setHistoryOpen(false);
     };
     // Back/forward cache must not revive a temporary conversation after exit.
     const restored = (event: PageTransitionEvent) => { if (event.persisted) reset(); };
@@ -39,7 +53,7 @@ export function ChatWorkspace({ renderThread }: {
   }, []);
 
   const add = (tab: ChatTab) => {
-    if (tabs.length >= 8) { setNotice('Up to 8 chats can be open; close a tab to open another. Saved chats remain available.'); return; }
+    if (tabs.length >= 8) { setNotice('You can open up to 8 chats. Close one to open another.'); return; }
     setTabs(current => [...current, tab]); setActiveId(tab.id); setNotice(''); setHistoryOpen(false);
     if (!window.matchMedia('(min-width: 1024px)').matches) setSidebarExpanded(false);
   };
@@ -47,7 +61,6 @@ export function ChatWorkspace({ renderThread }: {
     const remaining = tabs.filter(item => item.id !== tab.id);
     if (!remaining.length) remaining.push(newTab(tab.temporary));
     setTabs(remaining);
-    setQuestions(current => { const next = { ...current }; delete next[tab.id]; return next; });
     if (activeId === tab.id) setActiveId(remaining[Math.min(tabs.indexOf(tab), remaining.length - 1)].id);
   };
   const loadSaved = async (more = false) => {
@@ -61,6 +74,10 @@ export function ChatWorkspace({ renderThread }: {
     } catch { if (mounted.current) setNotice('Saved chats could not be loaded. Open Saved chats again to retry.'); }
     finally { historyBusyRef.current = false; if (mounted.current) setHistoryBusy(false); }
   };
+  // The menu is portaled out of the sidebar, so Tab would not reach it: move focus to its switch as it opens (its panel is placed before this runs).
+  useLayoutEffect(() => {
+    if (settingsOpen) document.querySelector<HTMLElement>('[data-floating-panel] [role="switch"]')?.focus();
+  }, [settingsOpen]);
   const actionClass = `flex w-full items-center gap-3 rounded-xl px-3 py-3 text-xs font-semibold transition-colors hover:bg-slate-200/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-blue dark:hover:bg-slate-800 ${sidebarExpanded ? '' : 'justify-center'}`;
   return <div className="relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-white dark:bg-slate-950">
     <div className={`w-14 shrink-0 ${sidebarExpanded ? 'lg:w-56' : ''}`}>
@@ -85,6 +102,30 @@ export function ChatWorkspace({ renderThread }: {
           }}><MessageSquarePlus className="h-3.5 w-3.5 shrink-0 text-slate-400" /><span className="truncate">{row.title}</span></button>)}
           {cursor && <button className="w-full rounded-lg p-3 text-xs font-semibold text-brand-blue hover:bg-blue-50" disabled={historyBusy} onClick={() => void loadSaved(true)}>Load more saved chats</button>}
         </div>}
+        <div className="mt-auto shrink-0 border-t border-slate-200 pt-3 dark:border-slate-800">
+          <button aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-expanded={settingsOpen} className={`${actionClass} ${settingsOpen ? 'bg-blue-50 text-brand-blue dark:bg-blue-950' : ''}`} onClick={() => { setSettingsOpen(open => !open); setPetNotice(''); }}>
+            <Settings className="h-4 w-4 shrink-0" />{sidebarExpanded && <span>Settings</span>}
+          </button>
+          {settingsOpen && <FloatingPanel data-chat-settings role="dialog" aria-label="Chat settings" onDismiss={() => setSettingsOpen(false)} className="w-60 rounded-2xl border border-slate-200 bg-white p-2 text-xs shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-3 rounded-xl px-3 py-2">
+              <span className="font-semibold text-slate-700 dark:text-slate-200">Show pet</span>
+              <CustomSwitch ariaLabel="Show pet" checked={pets.visible} disabled={!pets.ready} onChange={visible => void savePet({ visible })} />
+            </div>
+            <div role="radiogroup" aria-label="Choose pet" className="grid grid-cols-2 gap-2 px-1 pb-1 pt-1">
+              {PET_IDS.map(id => {
+                const selected = pets.pet === id;
+                return <button key={id} type="button" role="radio" aria-checked={selected} disabled={!pets.ready}
+                  onClick={() => { if (!selected) void savePet({ pet: id }); }}
+                  className={`relative flex flex-col items-center gap-1 rounded-xl border p-2 font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-blue disabled:opacity-50 ${selected ? 'border-brand-blue bg-blue-50 text-brand-blue dark:bg-blue-950' : 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'}`}>
+                  <span aria-hidden="true" className="h-[52px] w-12" style={{ backgroundImage: `url(${PET_SHEETS[id].sheet})`, backgroundSize: '800% 1100%', backgroundPosition: `${(6 / 7) * 100}% 0%`, backgroundRepeat: 'no-repeat' }} />
+                  <span className="text-[11px]">{PET_SHEETS[id].name}</span>
+                  {selected && <Check aria-hidden="true" className="absolute right-1.5 top-1.5 h-3.5 w-3.5" />}
+                </button>;
+              })}
+            </div>
+            <p role="status" className="min-h-4 px-3 pb-1 text-[11px] text-slate-500 dark:text-slate-400">{pets.ready ? petNotice : 'Loading your settings…'}</p>
+          </FloatingPanel>}
+        </div>
       </aside>
     </div>
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -106,9 +147,8 @@ export function ChatWorkspace({ renderThread }: {
       {notice && <p role="status" className="px-4 pb-2 text-xs text-amber-700 dark:text-amber-300">{notice}</p>}
     </div>
     {tabs.map(tab => <div key={tab.id} id={`chat-panel-${tab.id}`} role="tabpanel" aria-labelledby={`chat-tab-${tab.id}`} hidden={tab.id !== activeId} className={tab.id === activeId ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'hidden'}>
-      {renderThread(tab, tab.id === activeId, Object.values(questions).flat(), (title, sessionId, question) => {
+      {renderThread(tab, tab.id === activeId, (title, sessionId) => {
         setTabs(current => current.map(item => item.id === tab.id ? { ...item, title: item.temporary ? `Temporary: ${title.slice(0, 35)}` : title.slice(0, 45), sessionId } : item));
-        if (question) setQuestions(current => ({ ...current, [tab.id]: [...(current[tab.id] || []), question].slice(-20) }));
       })}
     </div>)}
     </div>

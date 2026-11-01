@@ -1,21 +1,27 @@
+import { hasTimetableParams, resetTimetableRoute, TIMETABLE_PARAMS } from './utils/semesterRoute';
 import React, { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MainLayout } from './components/MainLayout';
 import {
   ShimmerPage,
   ShimmerTimetable,
+  ShimmerAcademics,
   ShimmerDashboard,
+  ShimmerStudentDashboard,
+  ShimmerLogin,
   ShimmerAttendance,
   ShimmerAnalytics,
   ShimmerAtRisk,
   ShimmerChatbot,
   ShimmerAdminPanel,
+  ShimmerCampusNetwork,
   ShimmerProfileModal,
   ShimmerSettingsModal
 } from './components/Shimmer';
 import './App.css';
 import { applyThemePreference, getAccountThemePreference, resetThemeOnLogout } from './theme/themePreference';
 import { recordRecentStaffPage } from './utils/staffRecentPages';
+import { ROUTE_EVENT, surfaceFor } from './utils/publicRoute';
 
 // Keep the login screen and role pages out of the first download. Each screen is
 // fetched only when it is needed, so students do not download admin and staff code.
@@ -41,6 +47,9 @@ const StudentMC = lazy(() => import('./pages/student/StudentMC').then(module => 
 const StudentContact = lazy(() => import('./pages/student/StudentContact').then(module => ({ default: module.StudentContact })));
 const UserProfilePage = lazy(() => import('./components/UserProfilePage').then(module => ({ default: module.UserProfilePage })));
 const UserSettingsPage = lazy(() => import('./components/UserSettingsPage').then(module => ({ default: module.UserSettingsPage })));
+// Public pages (information page, portal choice, page not found) are separate downloads, so signed-in pages never load their scenes.
+const PublicHome = lazy(() => import('./pages/public/PublicHome').then(module => ({ default: module.PublicHome })));
+const PortalChoice = lazy(() => import('./pages/public/PortalChoice').then(module => ({ default: module.PortalChoice })));
 const ACCOUNT_TABS = ['profile', 'profile_security', 'settings'];
 
 const TAB_ROUTES: Record<string, string> = {
@@ -92,10 +101,16 @@ function tabFromLocation(): string | null {
   return ROUTE_TABS[route] || null;
 }
 
+const TIMETABLE_TABS = new Set(['timetable', 'student_timetable', 'admin_timetable']);
+
 function writeTabLocation(tab: string, replace = false) {
   const route = TAB_ROUTES[tab];
   if (!route) return;
-  const nextUrl = `/${route}${window.location.search}`;
+  // A chosen programme, course or semester belongs to its own timetable page only; any other destination starts clean.
+  const params = new URLSearchParams(window.location.search);
+  if (tabFromLocation() !== tab) TIMETABLE_PARAMS.forEach(key => params.delete(key));
+  const search = params.toString();
+  const nextUrl = `/${route}${search ? `?${search}` : ''}`;
   window.history[replace ? 'replaceState' : 'pushState']({ tab }, '', nextUrl);
 }
 
@@ -135,8 +150,9 @@ const DashboardContent: React.FC = () => {
         : DEFAULT_TABS[user.role];
       setCurrentTab(nextTab);
       writeTabLocation(nextTab, true);
-    } else if (!loading && window.location.pathname !== '/') {
-      window.history.replaceState({}, '', '/');
+    } else if (!loading && window.location.pathname !== '/login') {
+      // Signed out on an app page: the address becomes the sign-in page ("/" is the public information page now).
+      window.history.replaceState({}, '', '/login');
     }
   }, [loading, user]);
 
@@ -179,7 +195,11 @@ const DashboardContent: React.FC = () => {
   // Resolves true once `tab` is the current tab, false when navigation was refused or cancelled (e.g. unsaved-form guard).
   const handleTabChange = async (tab: string): Promise<boolean> => {
     if (!user || !ROLE_TABS[user.role].has(tab) || navigating.current) return false;
-    if (tab === currentTab) return true;
+    if (tab === currentTab) {
+      // The sidebar's Timetable always starts again (an admin's programme and course choice included), even from inside a semester.
+      if (TIMETABLE_TABS.has(tab) && hasTimetableParams()) resetTimetableRoute();
+      return true;
+    }
     navigating.current = true;
     const allowed = !leaveGuard.current || await leaveGuard.current();
     navigating.current = false;
@@ -190,45 +210,12 @@ const DashboardContent: React.FC = () => {
     return true;
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex bg-slate-50 overflow-hidden relative">
-        {/* Sidebar Skeleton */}
-        <aside className="w-72 border-r border-slate-200/50 bg-white/95 p-6 space-y-6 flex flex-col justify-between shrink-0">
-          <div className="space-y-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl shimmer-placeholder shrink-0" />
-              <div className="space-y-2 flex-grow min-w-0">
-                <div className="w-2/3 h-4 shimmer-placeholder rounded" />
-                <div className="w-1/3 h-2.5 shimmer-placeholder rounded" />
-              </div>
-            </div>
-            <div className="space-y-3 pt-6">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="w-full h-10 rounded-xl shimmer-placeholder" />
-              ))}
-            </div>
-          </div>
-          <div className="w-full h-16 rounded-xl shimmer-placeholder" />
-        </aside>
-        
-        {/* Main Content Skeleton */}
-        <div className="flex-grow flex flex-col min-w-0 overflow-y-auto">
-          <header className="h-20 border-b border-slate-100 bg-white/50 px-8 flex items-center justify-between shrink-0">
-            <div className="w-32 h-3.5 shimmer-placeholder rounded" />
-            <div className="w-28 h-6 rounded-full shimmer-placeholder" />
-          </header>
-          <main className="p-8 max-w-7xl w-full mx-auto">
-            <ShimmerDashboard />
-          </main>
-        </div>
-      </div>
-    );
-  }
+  // Checking a saved session: the sign-in shape, never the signed-in app's sidebar, header or dashboard cards.
+  if (loading) return <ShimmerLogin />;
 
   if (!isAuthenticated) {
     return (
-      <Suspense fallback={<ShimmerPage />}>
+      <Suspense fallback={<ShimmerLogin />}>
         <Login />
       </Suspense>
     );
@@ -238,12 +225,13 @@ const DashboardContent: React.FC = () => {
     if (tabLoading) {
       switch (currentTab) {
         case 'dashboard':
-        case 'student_dashboard':
           return <ShimmerDashboard />;
+        case 'student_dashboard':
+          return <ShimmerStudentDashboard />;
         case 'timetable':
         case 'student_timetable':
         case 'admin_timetable':
-          return <ShimmerTimetable />;
+          return <ShimmerTimetable admin={user?.role === 'admin'} />;
         case 'attendance':
           return <ShimmerAttendance />;
         case 'analytics':
@@ -257,13 +245,15 @@ const DashboardContent: React.FC = () => {
         case 'student_mc':
         case 'student_contact':
           return <ShimmerPage />;
-        case 'admin_dashboard':
         case 'admin_academic':
+          return <ShimmerAcademics />;
+        case 'admin_network':
+          return <ShimmerCampusNetwork />;
+        case 'admin_dashboard':
         case 'admin_attendance':
         case 'admin_students':
         case 'admin_staff':
         case 'admin_announcements':
-        case 'admin_network':
         case 'admin_reports':
         case 'admin_reports_feedback':
         case 'admin_reports_mc':
@@ -335,7 +325,7 @@ const DashboardContent: React.FC = () => {
       setCurrentTab={handleTabChange}
       isLoading={tabLoading}
     >
-      <Suspense fallback={ACCOUNT_TABS.includes(currentTab) ? <div role="status" aria-label="Loading account page" aria-busy="true" className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">{currentTab === 'settings' ? <ShimmerSettingsModal /> : <ShimmerProfileModal />}</div> : <ShimmerPage />}>
+      <Suspense fallback={ACCOUNT_TABS.includes(currentTab) ? <div role="status" aria-label="Loading account page" aria-busy="true" className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">{currentTab === 'settings' ? <ShimmerSettingsModal /> : <ShimmerProfileModal />}</div> : currentTab === 'chatbot' ? <ShimmerChatbot /> : currentTab === 'risk' ? <ShimmerAtRisk /> : currentTab === 'student_dashboard' ? <ShimmerStudentDashboard /> : currentTab === 'admin_network' ? <ShimmerCampusNetwork /> : <ShimmerPage />}>
         {renderActiveTab()}
       </Suspense>
     </MainLayout>
@@ -343,12 +333,43 @@ const DashboardContent: React.FC = () => {
 };
 
 import { DialogProvider } from './context/DialogContext';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { ErrorPage } from './pages/public/ErrorPage';
+
+/** "/" is the public information page, "/portal" the Student or Staff choice, "/login" and every app page the existing app, anything else not found. */
+function useSurface() {
+  const read = () => surfaceFor(window.location.pathname, window.location.hash, ROUTE_TABS);
+  const [surface, setSurface] = useState(read);
+  useEffect(() => {
+    const update = () => setSurface(read());
+    window.addEventListener('popstate', update);
+    window.addEventListener(ROUTE_EVENT, update);
+    return () => { window.removeEventListener('popstate', update); window.removeEventListener(ROUTE_EVENT, update); };
+  }, []);
+  return surface;
+}
+
+const PublicFallback = () => <div role="status" aria-label="Loading" className="min-h-screen bg-slate-50" />;
+
+function Shell() {
+  const surface = useSurface();
+  // Read by the sign-in/sign-out code, which must not move the address while a public page is showing.
+  useEffect(() => { document.documentElement.dataset.surface = surface; }, [surface]);
+  if (surface === 'app') return <DashboardContent />;
+  return (
+    <Suspense fallback={<PublicFallback />}>
+      {surface === 'public' ? <PublicHome /> : surface === 'portal' ? <PortalChoice /> : surface === 'error' ? <ErrorPage code={Number(window.location.pathname.split('/').pop())} /> : <ErrorPage code={404} />}
+    </Suspense>
+  );
+}
 
 function App() {
   return (
     <AuthProvider>
       <DialogProvider>
-        <DashboardContent />
+        <AppErrorBoundary>
+          <Shell />
+        </AppErrorBoundary>
       </DialogProvider>
     </AuthProvider>
   );
