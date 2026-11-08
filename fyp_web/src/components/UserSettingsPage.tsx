@@ -2,6 +2,7 @@ import { AccountSecurityPanel } from './AccountSecurityPanel';
 import { PushQuietHours } from './PushQuietHours';
 import { minutesOf, timeOf, quietHoursError } from '../utils/quietHours';
 import { CustomSwitch } from './CustomSwitch';
+import { ThemeModePreview } from './ThemeModePreview';
 import { FloatingPanel } from './FloatingPanel';
 import { TextInput } from './LimitedTextField';
 import { ModalLayer } from './ModalLayer';
@@ -9,14 +10,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import { swalSuccess, swalError } from '../utils/swal';
 import {
-  Settings, Moon, Sun, Monitor, Bell, Globe, Search, ChevronDown,
+  Settings, Moon, Sun, SunMoon, Monitor, Bell, Globe, Search, ChevronDown,
   Loader2, Save, AlertTriangle, Check, ArrowLeft
 } from 'lucide-react';
 import { RecordsStatus } from './RecordsStatus';
 import { ShimmerSettingsModal } from './Shimmer';
 import { useAccountProfile } from '../hooks/useAccountProfile';
 import { THEME_TOKENS } from '../theme/themeTokens';
-import { applyThemePreference, saveThemePreference, getAccountThemePreference } from '../theme/themePreference';
+import { applyThemePreference, saveThemePreference, getAccountThemePreference, type ThemePreference } from '../theme/themePreference';
 import { useAuth } from '../context/AuthContext';
 import { cacheRecoveryReminder, recoveryReminderPreference } from '../utils/recoveryReminder';
 import { setActiveLanguage } from '../i18n/i18n';
@@ -34,11 +35,12 @@ const CustomSegmentedThemeControl: React.FC<{
   const options = [
     { id: 'light', label: 'Light', icon: Sun },
     { id: 'dark', label: 'Dark', icon: Moon },
+    { id: 'cycle', label: 'Day/Night', icon: SunMoon },
     { id: 'system', label: 'System', icon: Monitor },
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-2 p-1.5 rounded-xl border bg-slate-100 border-slate-200">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1.5 rounded-xl border bg-slate-100 border-slate-200">
       {options.map((opt) => {
         const Icon = opt.icon;
         const isSelected = selected === opt.id;
@@ -260,7 +262,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
   };
 
   const applyLiveTheme = (mode: string) => {
-    applyThemePreference(mode as 'light' | 'dark' | 'system');
+    applyThemePreference(mode as ThemePreference);
   };
   const applyLiveFontSize = (size: string) => {
     const root = document.documentElement;
@@ -418,7 +420,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
 
       if (!isCurrentAccount(userId)) return;
       if (user?.role === 'student' && userId) cacheRecoveryReminder(userId, recoveryPromptDismissed);
-      saveThemePreference(themeMode as 'light' | 'dark' | 'system', userId);
+      saveThemePreference(themeMode as ThemePreference, userId);
       localStorage.setItem(`font_size_preference_${userId}`, fontSize);
       localStorage.setItem(`language_preference_${userId}`, language);
 
@@ -518,6 +520,7 @@ export const UserSettingsPage: React.FC<UserSettingsPageProps> = ({
                     selected={themeMode}
                     onChange={handleThemeChange}
                   />
+                  <ThemeModePreview mode={themeMode} />
                 </div>
 
                 <div className="space-y-2 pt-1">

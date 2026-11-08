@@ -1,8 +1,12 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
+import 'i18n/tr.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +20,7 @@ import 'services/server_discovery_service.dart';
 import 'services/user_service.dart';
 import 'services/account_security.dart';
 import 'services/mobile_push.dart';
+import 'services/day_cycle.dart';
 import 'screens/system/notifications_screen.dart';
 import 'config/app_config.dart';
 import 'widgets/aurora_background.dart';
@@ -27,6 +32,10 @@ import 'screens/student/face_registration_required.dart';
 import 'screens/system/home_screen.dart';
 import 'screens/system/settings_screen.dart';
 import 'widgets/shimmer_loading.dart';
+import 'widgets/startup_intro.dart';
+import 'widgets/recovery_email_dialog.dart';
+import 'widgets/mobile_theme.dart';
+import 'widgets/offline_queue_sheet.dart';
 import 'i18n/app_localizations.dart';
 
 Future<void> main() async {
@@ -46,8 +55,17 @@ class MainApp extends StatefulWidget {
   State<MainApp> createState() => MainAppState();
 }
 
-class MainAppState extends State<MainApp> {
+class MainAppState extends State<MainApp> with SingleTickerProviderStateMixin {
   ThemeMode _themeMode = ThemeMode.light;
+  // 'light', 'dark', 'system' or 'cycle' (Day/Night: light by day, dark at night, by campus time like the web sky).
+  String _themePreference = 'light';
+  Timer? _cycleTimer;
+  final GlobalKey _screenKey = GlobalKey();
+  ui.Image? _fadeFrom;
+  late final AnimationController
+  _fade; // made in initState: a lazy one would first be built inside dispose()
+
+  String get themePreference => _themePreference;
   String _languageCode = 'en';
   Map<String, dynamic> _translations = const {
     'en': {
@@ -68,138 +86,319 @@ class MainAppState extends State<MainApp> {
     },
   };
 
-  static final ThemeData _lightThemeData = ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.light,
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: const Color(0xFF2563EB),
-      primary: const Color(0xFF2563EB),
+  static final ThemeData _lightThemeData = mobileTheme(
+    ThemeData(
+      useMaterial3: true,
       brightness: Brightness.light,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF2563EB),
+        primary: const Color(0xFF2563EB),
+        brightness: Brightness.light,
+      ),
+      textTheme: GoogleFonts.interTextTheme(ThemeData.light().textTheme),
     ),
-    textTheme: GoogleFonts.interTextTheme(ThemeData.light().textTheme),
   );
 
-  static final ThemeData _darkThemeData = ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.dark,
-    scaffoldBackgroundColor: const Color(0xFF121212),
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: const Color(0xFF2563EB),
-      primary: const Color(0xFF2563EB),
-      surface: const Color(0xFF1E1E1E),
+  static final ThemeData _darkThemeData = mobileTheme(
+    ThemeData(
+      useMaterial3: true,
       brightness: Brightness.dark,
+      // The web's dark theme greys (--theme-bg #181818, surface #222222, elevated #2d2d2d, border #333333, secondary text #a0a0a0).
+      // A blue seed alone tints every Material surface navy, so the neutral roles are set explicitly and elevation adds no blue tint.
+      scaffoldBackgroundColor: const Color(0xFF181818),
+      colorScheme:
+          ColorScheme.fromSeed(
+            seedColor: const Color(0xFF2563EB),
+            primary: const Color(0xFF2563EB),
+            brightness: Brightness.dark,
+          ).copyWith(
+            onPrimary: Colors
+                .white, // primary is the brand blue #2563EB, which needs white text (the seed's dark default is navy)
+            surface: const Color(0xFF222222),
+            surfaceDim: const Color(0xFF181818),
+            surfaceBright: const Color(0xFF333333),
+            surfaceContainerLowest: const Color(0xFF181818),
+            surfaceContainerLow: const Color(0xFF1E1E1E),
+            surfaceContainer: const Color(0xFF222222),
+            surfaceContainerHigh: const Color(0xFF2D2D2D),
+            surfaceContainerHighest: const Color(0xFF333333),
+            onSurface: Colors.white,
+            onSurfaceVariant: const Color(0xFFA0A0A0),
+            outline: const Color(0xFF4A4A4A),
+            outlineVariant: const Color(0xFF333333),
+            secondaryContainer: const Color(0xFF2D2D2D),
+            onSecondaryContainer: Colors.white,
+            surfaceTint: Colors.transparent,
+          ),
+      textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
     ),
-    textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
   );
 
   @override
   void initState() {
     super.initState();
+    _fade = AnimationController(vsync: this);
     _loadThemeMode();
+    _loadFontSize();
     _loadLanguage();
   }
 
   Future<void> _loadThemeMode() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final modeStr = prefs.getString('theme_mode') ?? 'light';
-      setState(() {
-        if (modeStr == 'dark') {
-          _themeMode = ThemeMode.dark;
-        } else if (modeStr == 'system') {
-          _themeMode = ThemeMode.system;
-        } else {
-          _themeMode = ThemeMode.light;
-        }
-      });
+      if (mounted) {
+        _applyThemePreference(
+          prefs.getString('theme_mode') ?? 'light',
+          animate: false,
+        );
+      }
     } catch (e) {
       debugPrint("Failed to load theme mode: $e");
     }
   }
 
-  Future<void> updateThemeMode(ThemeMode mode) async {
+  static ThemeMode _modeFor(String preference) => switch (preference) {
+    'dark' => ThemeMode.dark,
+    'system' => ThemeMode.system,
+    'cycle' => skyAt(campusHour()).isDark ? ThemeMode.dark : ThemeMode.light,
+    _ => ThemeMode.light,
+  };
+
+  void _applyThemePreference(
+    String preference, {
+    bool animate = true,
+    Duration fade = const Duration(milliseconds: 450),
+  }) {
+    final cycle = preference == 'cycle';
+    dayCycleOn.value = cycle;
+    _cycleTimer?.cancel();
+    // While Day/Night is on, look at the clock each half minute; the theme turns at dusk and dawn with a slow cross-fade.
+    if (cycle) {
+      _cycleTimer = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) => _checkCycle(),
+      );
+    }
+    final mode = _modeFor(preference);
+    if (preference == _themePreference && mode == _themeMode) return;
+    _switchTheme(
+      () {
+        _themePreference = preference;
+        _themeMode = mode;
+      },
+      animate: animate,
+      fade: fade,
+    );
+  }
+
+  void _checkCycle() {
+    if (!mounted || _themePreference != 'cycle') return;
+    final mode = _modeFor('cycle');
+    if (mode != _themeMode) {
+      _switchTheme(
+        () => _themeMode = mode,
+        fade: const Duration(milliseconds: 1400),
+      );
+    }
+  }
+
+  /// Changes the theme in one frame, then fades a still picture of the old look away over the new one. Only that picture
+  /// animates, so the switch is smooth without rebuilding the app for every frame of the fade (which is what caused lag).
+  void _switchTheme(
+    VoidCallback change, {
+    bool animate = true,
+    Duration fade = const Duration(milliseconds: 450),
+  }) {
+    ui.Image? before;
+    final boundary = _screenKey.currentContext?.findRenderObject();
+    final reduceMotion = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .accessibilityFeatures
+        .disableAnimations;
+    if (animate &&
+        !reduceMotion &&
+        boundary is RenderRepaintBoundary &&
+        boundary.hasSize) {
+      try {
+        before = boundary.toImageSync(
+          pixelRatio: View.of(context).devicePixelRatio,
+        );
+      } catch (_) {
+        before = null; // no picture (not painted yet): switch without the fade
+      }
+    }
     setState(() {
-      _themeMode = mode;
+      change();
+      _fadeFrom?.dispose();
+      _fadeFrom = before;
     });
+    if (before == null) return;
+    _fade.duration = fade;
+    _fade.forward(from: 0).whenComplete(() {
+      if (!mounted || _fadeFrom != before) return;
+      setState(() {
+        _fadeFrom?.dispose();
+        _fadeFrom = null;
+      });
+    });
+  }
+
+  /// The Font Size setting: 'small', 'medium' or 'large', the same steps as the web (14 / 16 / 18 px).
+  String _fontSize = 'medium';
+  static double fontScaleFor(String size) => switch (size) {
+    'small' => .875,
+    'large' => 1.125,
+    _ => 1.0,
+  };
+
+  Future<void> _loadFontSize() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() => _fontSize = prefs.getString('font_size') ?? 'medium');
+    }
+  }
+
+  /// Settings calls this; every screen's text resizes at once.
+  Future<void> updateFontSize(String size) async {
+    setState(() => _fontSize = size);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('font_size', size);
+  }
+
+  /// Settings calls this with 'light', 'dark', 'system' or 'cycle'.
+  Future<void> updateThemePreference(String preference) async {
+    _applyThemePreference(preference);
     try {
       final prefs = await SharedPreferences.getInstance();
-      String modeStr = 'light';
-      if (mode == ThemeMode.dark) {
-        modeStr = 'dark';
-      } else if (mode == ThemeMode.system) {
-        modeStr = 'system';
-      }
-      await prefs.setString('theme_mode', modeStr);
+      await prefs.setString('theme_mode', preference);
     } catch (e) {
       debugPrint("Failed to save theme mode: $e");
     }
   }
 
+  @override
+  void dispose() {
+    _cycleTimer?.cancel();
+    _fade.dispose();
+    _fadeFrom?.dispose();
+    super.dispose();
+  }
+
+  /// The languages the app's own text is translated into (the same list as Settings).
+  static const supportedLanguages = [
+    'en',
+    'ms',
+    'zh',
+    'ta',
+    'ja',
+    'ko',
+    'es',
+    'fr',
+    'de',
+    'ar',
+  ];
+
+  void _setLanguage(String code) {
+    final normalised = code == 'zh_CN' || code == 'zh_TW' ? 'zh' : code;
+    _languageCode = supportedLanguages.contains(normalised) ? normalised : 'en';
+    AppLanguage.code = _languageCode;
+  }
+
+  /// Redraws every screen already built (including ones under the current page) in the new language, in place.
+  void _redrawInNewLanguage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) AppLanguage.rebuildAll(context);
+    });
+  }
+
   Future<void> _loadLanguage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedLanguage = prefs.getString('language') ?? 'en';
-      final catalogue = await UserService.fetchSystemLanguages();
       if (!mounted) return;
-      setState(() {
-        _languageCode = savedLanguage;
-        final remoteTranslations = catalogue?['translations'];
-        if (remoteTranslations is Map) {
-          _translations = Map<String, dynamic>.from(remoteTranslations);
-        }
-      });
+      // Apply the saved language straight away; the server catalogue (older key-based labels) follows when it arrives.
+      setState(() => _setLanguage(prefs.getString('language') ?? 'en'));
+      _redrawInNewLanguage();
+      await _refreshCatalogue();
     } catch (e) {
       debugPrint('Failed to load app language: $e');
     }
   }
 
-  Future<void> updateLanguage(String languageCode) async {
+  Future<void> _refreshCatalogue() async {
     final catalogue = await UserService.fetchSystemLanguages();
-    if (!mounted) return;
-    setState(() {
-      _languageCode = languageCode == 'zh_CN' || languageCode == 'zh_TW'
-          ? 'zh'
-          : languageCode;
-      final remoteTranslations = catalogue?['translations'];
-      if (remoteTranslations is Map) {
-        _translations = Map<String, dynamic>.from(remoteTranslations);
-      }
-    });
+    final remoteTranslations = catalogue?['translations'];
+    if (!mounted || remoteTranslations is! Map) return;
+    setState(
+      () => _translations = Map<String, dynamic>.from(remoteTranslations),
+    );
+  }
+
+  Future<void> updateLanguage(String languageCode) async {
+    setState(() => _setLanguage(languageCode));
+    _redrawInNewLanguage();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language', _languageCode);
+    await _refreshCatalogue();
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Smart Attendance Portal',
+      title: tr('Smart Attendance Portal'),
       debugShowCheckedModeBanner: false,
       locale: Locale(_languageCode),
+      // Flutter's own words (date and time pickers, OK / Cancel, Back, Paste) in the same language.
+      supportedLocales: [for (final code in supportedLanguages) Locale(code)],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: _lightThemeData,
       darkTheme: _darkThemeData,
       themeMode: _themeMode,
+      // Switch in one frame: blending two themes rebuilt the whole app (every card blurring the live sky) on each frame and caused the lag.
+      themeAnimationDuration: Duration.zero,
       builder: (context, child) {
-        final isDarkMode =
-            _themeMode == ThemeMode.dark ||
-            (_themeMode == ThemeMode.system &&
-                MediaQuery.platformBrightnessOf(context) == Brightness.dark);
-        return AppLocalizations(
-          languageCode: _languageCode,
-          translations: _translations,
-          child: Directionality(
-            textDirection: _languageCode == 'ar'
-                ? TextDirection.rtl
-                : TextDirection.ltr,
-            child: AnimatedTheme(
-              data: isDarkMode ? _darkThemeData : _lightThemeData,
-              duration: const Duration(milliseconds: 350),
-              curve: Curves.easeInOut,
-              child: child ?? const AppRoot(),
+        // The chosen size multiplies the phone's own text size, so accessibility scaling is kept.
+        final media = MediaQuery.of(context);
+        return MediaQuery(
+          data: media.copyWith(
+            textScaler: TextScaler.linear(
+              media.textScaler.scale(1) * fontScaleFor(_fontSize),
+            ),
+          ),
+          child: AppLocalizations(
+            languageCode: _languageCode,
+            translations: _translations,
+            child: Directionality(
+              textDirection: _languageCode == 'ar'
+                  ? TextDirection.rtl
+                  : TextDirection.ltr,
+              child: Stack(
+                children: [
+                  RepaintBoundary(
+                    key: _screenKey,
+                    child: child ?? const AppRoot(),
+                  ),
+                  if (_fadeFrom != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: FadeTransition(
+                          opacity: ReverseAnimation(
+                            CurvedAnimation(
+                              parent: _fade,
+                              curve: Curves.easeInOut,
+                            ),
+                          ),
+                          child: RawImage(image: _fadeFrom, fit: BoxFit.fill),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         );
       },
-      home: const AppRoot(),
+      home: const StartupIntro(child: AppRoot()),
     );
   }
 }
@@ -282,6 +481,18 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   String studentAuthToken = "";
   String staffAuthToken = "";
   bool isSyncing = false;
+  // The portal being signed in to ('student' / 'staff'), so its sign-in shows that portal's skeleton even when the
+  // other portal is already signed in (the old check hid the skeleton as soon as either account was signed in).
+  String? _signingInPortal;
+
+  /// A login page is busy only while it is signing in itself, or while the app starts and nobody is signed in.
+  /// The shared isSyncing flag is also set by the other portal's background refresh, which must not lock this form.
+  bool _portalBusy(String portal) =>
+      _signingInPortal == portal ||
+      (_signingInPortal == null &&
+          isSyncing &&
+          !isStudentLoggedIn &&
+          !isStaffLoggedIn);
   bool isDatabaseOffline = false;
 
   // Student State
@@ -322,9 +533,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     _initApp();
     AccountSecurity.endedToken.addListener(_sessionEnded);
     MobilePush.onOpen = (notifications, token) {
-      if (!mounted || (token != studentAuthToken && token != staffAuthToken)) return;
-      Navigator.push(context, MaterialPageRoute(builder: (_) => NotificationsScreen(authToken: token,
-        apiBaseUrl: ApiConfig.getEffectiveUrl(), initialNotifications: notifications)));
+      if (!mounted || (token != studentAuthToken && token != staffAuthToken)) {
+        return;
+      }
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NotificationsScreen(
+            authToken: token,
+            apiBaseUrl: ApiConfig.getEffectiveUrl(),
+            initialNotifications: notifications,
+          ),
+        ),
+      );
     };
   }
 
@@ -339,7 +560,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) { unawaited(_syncOffline()); unawaited(_checkSessions()); }
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_syncOffline());
+      unawaited(_checkSessions());
+    }
   }
 
   void _sessionEnded() {
@@ -349,7 +573,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       handleStudentLogout();
     } else if (token == staffAuthToken) {
       handleStaffLogout();
-    } else { return; }
+    } else {
+      return;
+    }
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
@@ -357,43 +583,80 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     if (_checkingSessions) return;
     _checkingSessions = true;
     try {
-      for (final token in [studentAuthToken, staffAuthToken].where((value) => value.isNotEmpty).toList()) {
-        final response = await http.get(Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/me'),
-          headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 12));
+      for (final token in [
+        studentAuthToken,
+        staffAuthToken,
+      ].where((value) => value.isNotEmpty).toList()) {
+        final response = await http
+            .get(
+              Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/me'),
+              headers: {'Authorization': 'Bearer $token'},
+            )
+            .timeout(const Duration(seconds: 12));
         if (!mounted) continue;
         if (response.statusCode == 200 && token == studentAuthToken) {
-          try { await refreshStudentFaceStatus(); } catch (_) {}
+          try {
+            await refreshStudentFaceStatus();
+          } catch (_) {}
         }
         if (![401, 403].contains(response.statusCode)) continue;
         if (token == studentAuthToken) {
           handleStudentLogout();
         } else if (token == staffAuthToken) {
           handleStaffLogout();
-        } else { continue; }
+        } else {
+          continue;
+        }
         Navigator.of(context).popUntil((route) => route.isFirst);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Your session ended. Please sign in again.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(tr('Your session ended. Please sign in again.')),
+          ),
+        );
       }
-    } catch (_) { /* Offline does not falsely suspend an account. */ }
-    finally { _checkingSessions = false; }
+    } catch (_) {
+      /* Offline does not falsely suspend an account. */
+    } finally {
+      _checkingSessions = false;
+    }
   }
 
   void _selectPortal(int index) {
     setState(() => selectedTab = index);
     final token = index == 2 ? staffAuthToken : studentAuthToken;
-    if (token.isNotEmpty) unawaited(MobilePush.bind(token, ApiConfig.getEffectiveUrl()));
+    if (token.isNotEmpty) {
+      unawaited(MobilePush.bind(token, ApiConfig.getEffectiveUrl()));
+    }
   }
 
   void _openSettings() {
-    final staff = selectedTab == 2 || (studentAuthToken.isEmpty && staffAuthToken.isNotEmpty);
-    Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(
-      authToken: staff ? staffAuthToken : studentAuthToken, apiBaseUrl: ApiConfig.getEffectiveUrl())));
+    final staff =
+        selectedTab == 2 ||
+        (studentAuthToken.isEmpty && staffAuthToken.isNotEmpty);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SettingsScreen(
+          authToken: staff ? staffAuthToken : studentAuthToken,
+          apiBaseUrl: ApiConfig.getEffectiveUrl(),
+        ),
+      ),
+    );
   }
 
   Future<void> _syncOffline() async {
-    if (_offlineBusy || !isStudentLoggedIn || _studentUserId.isEmpty || kIsWeb) return;
+    if (_offlineBusy || !isStudentLoggedIn || _studentUserId.isEmpty || kIsWeb) {
+      return;
+    }
     _offlineBusy = true;
-    final owner = _studentUserId, token = studentAuthToken, server = ApiConfig.getEffectiveUrl();
-    bool current() => mounted && owner == _studentUserId && token == studentAuthToken && server == ApiConfig.getEffectiveUrl();
+    final owner = _studentUserId,
+        token = studentAuthToken,
+        server = ApiConfig.getEffectiveUrl();
+    bool current() =>
+        mounted &&
+        owner == _studentUserId &&
+        token == studentAuthToken &&
+        server == ApiConfig.getEffectiveUrl();
     final client = http.Client();
     bool recorded = false;
     try {
@@ -401,11 +664,25 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       if (current()) setState(() => _offlineRows = rows);
       for (final row in rows) {
         if (!current()) break;
-        if (row['owner'] != owner || !['pending', 'needs_review'].contains(row['status'])) continue;
-        final result = await syncOfflineCheckIn(client: client, server: server, token: token,
-          row: row, stillCurrent: current,
-          networkFacts: () async => (await NetworkInfoService.collect()).toPayload());
-        await LocalCacheService.updateCheckIn(row['id'] as int, owner, result.status, result.message);
+        if (row['owner'] != owner ||
+            !['pending', 'needs_review'].contains(row['status'])) {
+          continue;
+        }
+        final result = await syncOfflineCheckIn(
+          client: client,
+          server: server,
+          token: token,
+          row: row,
+          stillCurrent: current,
+          networkFacts: () async =>
+              (await NetworkInfoService.collect()).toPayload(),
+        );
+        await LocalCacheService.updateCheckIn(
+          row['id'] as int,
+          owner,
+          result.status,
+          result.message,
+        );
         recorded = recorded || result.status == 'synced';
         if (result.status == 'pending') break;
       }
@@ -421,17 +698,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   String _offlineLabel(Map<String, Object?> row) {
-    return switch (row['status']) {
-      'synced' => 'Attendance recorded',
-      'excused' => 'Approved leave already recorded',
-      'needs_review' => 'Pending lecturer review — not marked present',
-      'approved' => 'Request approved — refresh attendance',
-      'rejected' => 'Attendance request rejected',
-      'cancelled' => 'Attendance request cancelled',
-      'failed' => 'Needs attention: ${row['last_error']}',
-      'legacy' => '${row['last_error']}',
-      _ => 'Waiting for sync — attendance not confirmed',
-    };
+    return offlineStatus(row['status']);
   }
 
   Future<void> _initApp() async {
@@ -592,7 +859,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     String portalType,
     BuildContext context,
   ) async {
-    setState(() => isSyncing = true);
+    setState(() {
+      isSyncing = true;
+      _signingInPortal = portalType;
+    });
     try {
       final String rawInput = emailOrId.trim();
 
@@ -636,7 +906,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       var authData = jsonDecode(response.body);
       if (authData['requires_two_factor'] == true) {
         if (!context.mounted) return;
-        final verified = await AccountSecurity.verifyLogin(context, apiUrl, authData['challenge_token']);
+        final verified = await AccountSecurity.verifyLogin(
+          context,
+          apiUrl,
+          authData['challenge_token'],
+        );
         if (verified == null) return;
         authData = verified;
       }
@@ -699,7 +973,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         // Authentication is complete: reveal the cached/empty dashboard now and
         // refresh its data in the background. A slow endpoint must not trap the
         // user behind the full-screen login skeleton.
-        setState(() => isSyncing = false);
+        setState(() {
+          isSyncing = false;
+          _signingInPortal = null;
+        });
         if (authData['recovery_email_verified'] != true) {
           await _setupRecoveryEmail(context, token);
         }
@@ -709,135 +986,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     } catch (e) {
       showErrorDialog(_friendlyError(e), context);
     } finally {
-      setState(() => isSyncing = false);
+      setState(() {
+        isSyncing = false;
+        _signingInPortal = null;
+      });
     }
   }
 
-  Future<void> _setupRecoveryEmail(BuildContext context, String token) async {
-    final emailController = TextEditingController();
-    final codeController = TextEditingController();
-    String? error;
-    bool codeSent = false;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: Text(codeSent ? 'Check your email' : 'Add a recovery email'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                codeSent
-                    ? 'Enter the 6-digit code we sent.'
-                    : 'Notices and password resets go here; sign-in stays your school email.',
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: codeSent ? codeController : emailController,
-                keyboardType: codeSent
-                    ? TextInputType.number
-                    : TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  labelText: codeSent ? 'Verification code' : 'Personal email',
-                  hintText: codeSent ? '000000' : 'yourname@example.com',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-              if (error != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  error!,
-                  style: const TextStyle(
-                    color: Color(0xFFDC2626),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                final leave = await showDialog<bool>(
-                  context: dialogContext,
-                  barrierDismissible: false,
-                  builder: (warningContext) => AlertDialog(
-                    icon: const Icon(
-                      Icons.warning_amber_rounded,
-                      color: Color(0xFFDC2626),
-                      size: 44,
-                    ),
-                    title: const Text('Account recovery is not set'),
-                    content: const Text(
-                      'Without a verified personal email, you cannot reset your password if you lose it. Add one as soon as possible.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(warningContext, false),
-                        child: const Text('Go Back'),
-                      ),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Color(0xFFDC2626),
-                        ),
-                        onPressed: () => Navigator.pop(warningContext, true),
-                        child: const Text('Skip for Now'),
-                      ),
-                    ],
-                  ),
-                );
-                if (leave == true && dialogContext.mounted) {
-                  Navigator.pop(dialogContext);
-                }
-              },
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                try {
-                  if (!codeSent) {
-                    final email = emailController.text.trim().toLowerCase();
-                    if (email.length > 254 ||
-                        email.split('@').first.length > 64 ||
-                        !RegExp(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$").hasMatch(email)) {
-                      throw Exception('Enter a valid email address.');
-                    }
-                    if (RegExp(r'@([^@]+\.)?school\.edu$').hasMatch(email)) {
-                      throw Exception('Use a personal email, not a school address.');
-                    }
-                    await UserService.requestRecoveryEmail(email, token);
-                    setDialogState(() {
-                      codeSent = true;
-                      error = null;
-                    });
-                  } else {
-                    final code = codeController.text.trim();
-                    if (!RegExp(r'^\d{6}$').hasMatch(code)) {
-                      throw Exception('Enter the 6-digit code.');
-                    }
-                    await UserService.verifyRecoveryEmail(code, token);
-                    if (dialogContext.mounted) Navigator.pop(dialogContext);
-                  }
-                } catch (e) {
-                  setDialogState(
-                    () => error = e.toString().replaceAll('Exception: ', ''),
-                  );
-                }
-              },
-              child: Text(codeSent ? 'Verify Email' : 'Send Code'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Future<void> _setupRecoveryEmail(BuildContext context, String token) =>
+      showRecoveryEmailDialog(
+        context,
+        request: (email) => UserService.requestRecoveryEmail(email, token),
+        verify: (code) => UserService.verifyRecoveryEmail(code, token),
+      );
 
   /// Extract a backend error `detail` string, or fall back to [fallback].
   String _detailOf(http.Response r, String fallback) {
@@ -968,9 +1129,24 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final token = studentAuthToken;
     if (token.isEmpty) return;
     final response = await _apiGet('/students/me/attendance', context);
-    if (!mounted || studentAuthToken != token || response.statusCode != 200) return;
+    if (!mounted || studentAuthToken != token || response.statusCode != 200) {
+      return;
+    }
     final rows = jsonDecode(response.body) as List;
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     bool checkedIn = false;
     final history = rows.map((r) {
       final marked = DateTime.tryParse(r['marked_at'] ?? '')?.toLocal();
@@ -980,29 +1156,57 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       if (status == 'absent' && detail != null && detail.isNotEmpty) {
         label = detail;
       } else if (marked != null) {
-        final today = marked.year == ApiConfig.now.year && marked.month == ApiConfig.now.month && marked.day == ApiConfig.now.day;
+        final today =
+            marked.year == ApiConfig.now.year &&
+            marked.month == ApiConfig.now.month &&
+            marked.day == ApiConfig.now.day;
         final hour = marked.hour % 12 == 0 ? 12 : marked.hour % 12;
-        final time = '$hour:${marked.minute.toString().padLeft(2, '0')} ${marked.hour >= 12 ? 'PM' : 'AM'}';
-        label = today ? 'Today, $time' : '${months[marked.month - 1]} ${marked.day}, ${marked.year}, $time';
+        final time =
+            '$hour:${marked.minute.toString().padLeft(2, '0')} ${marked.hour >= 12 ? 'PM' : 'AM'}';
+        label = today
+            ? tr('Today, {time}', {'time': time})
+            : '${tr(months[marked.month - 1])} ${marked.day}, ${marked.year}, $time';
         if (today) checkedIn = true;
       }
-      return <String, dynamic>{'courseCode': r['course_code'] ?? 'Unknown', 'courseName': r['course_name'] ?? 'Unknown',
-        'group': r['class_group'] ?? '-', 'date': label, 'status': historyStatus(status),
-        'wifiVerified': r['network_verified'] ?? false, 'faceVerified': r['liveness_passed'] == true};
+      return <String, dynamic>{
+        'courseCode': r['course_code'] ?? 'Unknown',
+        'courseName': r['course_name'] ?? 'Unknown',
+        'group': r['class_group'] ?? '-',
+        'date': label,
+        'status': historyStatus(status),
+        'wifiVerified': r['network_verified'] ?? false,
+        'faceVerified': r['liveness_passed'] == true,
+      };
     }).toList();
-    setState(() { attendanceHistory = history; isCheckedInToday = checkedIn; });
-    if (studentAuthToken == token) await LocalCacheService.saveAttendanceCache(rows.map((row) => Map<String, dynamic>.from(row)).toList());
+    setState(() {
+      attendanceHistory = history;
+      isCheckedInToday = checkedIn;
+    });
+    if (studentAuthToken == token) {
+      await LocalCacheService.saveAttendanceCache(
+        rows.map((row) => Map<String, dynamic>.from(row)).toList(),
+      );
+    }
   }
 
   Future<void> refreshStudentAnnouncements() async {
     final token = studentAuthToken;
     if (token.isEmpty) return;
     final response = await _apiGet('/students/me/announcements', context);
-    if (!mounted || studentAuthToken != token || response.statusCode != 200) return;
-    final notices = (jsonDecode(response.body) as List).map((row) => Map<String, dynamic>.from(row)).toList();
+    if (!mounted || studentAuthToken != token || response.statusCode != 200) {
+      return;
+    }
+    final notices = (jsonDecode(response.body) as List)
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
     setState(() => studentAnnouncements = notices);
     final prefs = await SharedPreferences.getInstance();
-    if (studentAuthToken == token) await prefs.setString('cached_student_announcements', jsonEncode(notices));
+    if (studentAuthToken == token) {
+      await prefs.setString(
+        'cached_student_announcements',
+        jsonEncode(notices),
+      );
+    }
   }
 
   Future<void> syncData(BuildContext context) async {
@@ -1055,8 +1259,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           final timeStr =
               "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
           dateLabel = isToday
-              ? 'Today, $timeStr'
-              : "${months[markedAt.month - 1]} ${markedAt.day}, ${markedAt.year}, $timeStr";
+              ? tr('Today, {time}', {'time': timeStr})
+              : "${tr(months[markedAt.month - 1])} ${markedAt.day}, ${markedAt.year}, $timeStr";
           if (isToday) checkedIn = true;
         }
         mappedHistory.add({
@@ -1152,7 +1356,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         throw Exception(
           _detailOf(
             attendanceRes,
-            'Could not load attendance (${attendanceRes.statusCode}).',
+            tr('Could not load attendance ({code}).', {
+              'code': attendanceRes.statusCode,
+            }),
           ),
         );
       }
@@ -1160,7 +1366,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         throw Exception(
           _detailOf(
             coursesRes,
-            'Could not load timetable (${coursesRes.statusCode}).',
+            tr('Could not load timetable ({code}).', {
+              'code': coursesRes.statusCode,
+            }),
           ),
         );
       }
@@ -1168,7 +1376,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         throw Exception(
           _detailOf(
             announcementsRes,
-            'Could not load announcements (${announcementsRes.statusCode}).',
+            tr('Could not load announcements ({code}).', {
+              'code': announcementsRes.statusCode,
+            }),
           ),
         );
       }
@@ -1213,8 +1423,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           final timeStr =
               "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
           dateLabel = isToday
-              ? 'Today, $timeStr'
-              : "${months[markedAt.month - 1]} ${markedAt.day}, ${markedAt.year}, $timeStr";
+              ? tr('Today, {time}', {'time': timeStr})
+              : "${tr(months[markedAt.month - 1])} ${markedAt.day}, ${markedAt.year}, $timeStr";
           if (isToday) checkedIn = true;
         }
 
@@ -1290,7 +1500,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         if (!hasCachedData && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("Working Offline: ${_friendlyError(e)}"),
+              content: Text(
+                tr('Working Offline: {v}', {'v': _friendlyError(e)}),
+              ),
               backgroundColor: const Color(0xFFDC2626),
             ),
           );
@@ -1319,10 +1531,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     int? challengeMs,
     Map<String, dynamic>? extraDetails,
   }) async {
-    final owner = _studentUserId, token = studentAuthToken, server = ApiConfig.getEffectiveUrl();
+    final owner = _studentUserId,
+        token = studentAuthToken,
+        server = ApiConfig.getEffectiveUrl();
     final requestId = newCheckInId();
     final capturedAt = DateTime.now().toUtc();
-    bool current() => mounted && owner == _studentUserId && token == studentAuthToken;
+    bool current() =>
+        mounted && owner == _studentUserId && token == studentAuthToken;
     setState(() => isSyncing = true);
     try {
       // 1. Collect live network facts for location corroboration.
@@ -1362,15 +1577,25 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             )
             .timeout(const Duration(seconds: 45));
       } on TimeoutException {
-        await LocalCacheService.enqueueCheckIn(owner, server, sessionId, requestId, capturedAt, checkInPayload);
+        await LocalCacheService.enqueueCheckIn(
+          owner,
+          server,
+          sessionId,
+          requestId,
+          capturedAt,
+          checkInPayload,
+          classLabel: '$courseCode — $courseName',
+        );
         if (current()) {
           _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
           if (!current()) return;
           setState(() {});
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(
-                "Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.",
+                tr(
+                  'Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.',
+                ),
               ),
               backgroundColor: Color(0xFFF59E0B),
             ),
@@ -1378,15 +1603,25 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         }
         return;
       } on http.ClientException {
-        await LocalCacheService.enqueueCheckIn(owner, server, sessionId, requestId, capturedAt, checkInPayload);
+        await LocalCacheService.enqueueCheckIn(
+          owner,
+          server,
+          sessionId,
+          requestId,
+          capturedAt,
+          checkInPayload,
+          classLabel: '$courseCode — $courseName',
+        );
         if (current()) {
           _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
           if (!current()) return;
           setState(() {});
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(
-                "Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.",
+                tr(
+                  'Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.',
+                ),
               ),
               backgroundColor: Color(0xFFF59E0B),
             ),
@@ -1401,15 +1636,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         try {
           error = jsonDecode(response.body)['detail'] ?? error;
         } catch (_) {
-          error = 'Server error ${response.statusCode}.';
+          error = tr('Server error {code}.', {'code': response.statusCode});
         }
         if (response.statusCode == 400 &&
             error.toLowerCase().contains('already registered')) {
           await syncData(context);
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("You're already checked in for this class."),
+            SnackBar(
+              content: Text(tr('You\'re already checked in for this class.')),
               backgroundColor: Color(0xFF3B82F6),
             ),
           );
@@ -1423,13 +1658,24 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         resJson = jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {}
 
-      for (final row in await LocalCacheService.pendingCheckIns(owner, server)) {
-        if (row['owner'] == owner && row['session_id'].toString() == sessionId.toString()) {
-          await LocalCacheService.updateCheckIn(row['id'] as int, owner, 'synced', 'Attendance recorded.');
+      for (final row in await LocalCacheService.pendingCheckIns(
+        owner,
+        server,
+      )) {
+        if (row['owner'] == owner &&
+            row['session_id'].toString() == sessionId.toString()) {
+          await LocalCacheService.updateCheckIn(
+            row['id'] as int,
+            owner,
+            'synced',
+            'Attendance recorded.',
+          );
         }
       }
       if (!current()) return;
-      try { await refreshStudentFaceStatus(); } catch (_) {}
+      try {
+        await refreshStudentFaceStatus();
+      } catch (_) {}
       await syncData(context);
 
       if (!mounted) return;
@@ -1454,12 +1700,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         livenessPassed: liveVerified,
       );
     } catch (e) {
-      if (current()) showErrorDialog(e.toString().replaceAll("Exception: ", ""), context);
+      if (current()) {
+        // Red result with the reason; Try again reopens the scan when the dashboard passed a way to do so.
+        final retry = extraDetails?['retry'];
+        showCheckInFailedDialog(
+          context,
+          message: _friendlyStudentError(e.toString().replaceAll("Exception: ", "")),
+          onRetry: retry is Future<void> Function() ? () => retry() : null,
+        );
+      }
     } finally {
       if (mounted) setState(() => isSyncing = false);
     }
   }
-
 
   // Register facial signature via the backend (no direct DB).
   //
@@ -1476,12 +1729,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     setState(() => _registeringFace = true);
     final ownerToken = studentAuthToken;
     final ownerServer = ApiConfig.getEffectiveUrl();
-    bool current() => mounted && studentAuthToken == ownerToken && isStudentLoggedIn && ApiConfig.getEffectiveUrl() == ownerServer;
+    bool current() =>
+        mounted &&
+        studentAuthToken == ownerToken &&
+        isStudentLoggedIn &&
+        ApiConfig.getEffectiveUrl() == ownerServer;
     try {
       await refreshStudentFaceStatus();
       if (!current()) return;
       if (isFaceRegistered) {
-        showErrorDialog('Your face is already registered and cannot be changed in the app. Visit the administration office if you need a reset.', context);
+        showErrorDialog(
+          'Your face is already registered and cannot be changed in the app. Visit the administration office if you need a reset.',
+          context,
+        );
         return;
       }
     } catch (error) {
@@ -1494,94 +1754,133 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final registrationVersion = _faceRegistrationVersion;
     setState(() => _registeringFace = true);
     try {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => FaceScannerScreen(
-          title: "Face Registration",
-          onScanComplete: (imageBase64, livenessPassed, {int? challengeMs, String? challengeToken}) async {
-            if (!current()) return;
-            if (imageBase64 == null || imageBase64.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    "Face registration cancelled: no selfie captured.",
-                  ),
-                  backgroundColor: Color(0xFFDC2626),
-                ),
-              );
-              return;
-            }
-            if (!livenessPassed) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    "Liveness check not completed. Please try the gesture challenge again.",
-                  ),
-                  backgroundColor: Color(0xFFDC2626),
-                ),
-              );
-              return;
-            }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FaceScannerScreen(
+            title: tr('Face Registration'),
+            onScanComplete:
+                (
+                  imageBase64,
+                  livenessPassed, {
+                  int? challengeMs,
+                  String? challengeToken,
+                }) async {
+                  if (!current()) return;
+                  if (imageBase64 == null || imageBase64.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          tr(
+                            'Face registration cancelled: no selfie captured.',
+                          ),
+                        ),
+                        backgroundColor: Color(0xFFDC2626),
+                      ),
+                    );
+                    return;
+                  }
+                  if (!livenessPassed) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          tr(
+                            'Liveness check not completed. Please try the gesture challenge again.',
+                          ),
+                        ),
+                        backgroundColor: Color(0xFFDC2626),
+                      ),
+                    );
+                    return;
+                  }
 
-            setState(() { _savingFace = true; isSyncing = true; });
-            try {
-              // Registration is confirmed only after the server verifies the live face.
-              final apiUrl = ownerServer;
-              final http.Response response;
-              try {
-                response = await http
-                    .post(
-                      Uri.parse('$apiUrl/students/me/face'),
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer $ownerToken',
-                      },
-                      body: jsonEncode({'image_base64': imageBase64, 'registration_version': registrationVersion}),
-                    )
-                    .timeout(const Duration(seconds: 45));
-              } on TimeoutException {
-                throw Exception(
-                  "The server took too long to respond. Please try again.",
-                );
-              } catch (_) {
-                throw Exception(
-                  "Cannot reach the server. Make sure the backend is running.",
-                );
-              }
+                  setState(() {
+                    _savingFace = true;
+                    isSyncing = true;
+                  });
+                  try {
+                    // Registration is confirmed only after the server verifies the live face.
+                    final apiUrl = ownerServer;
+                    final http.Response response;
+                    try {
+                      response = await http
+                          .post(
+                            Uri.parse('$apiUrl/students/me/face'),
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': 'Bearer $ownerToken',
+                            },
+                            body: jsonEncode({
+                              'image_base64': imageBase64,
+                              'registration_version': registrationVersion,
+                            }),
+                          )
+                          .timeout(const Duration(seconds: 45));
+                    } on TimeoutException {
+                      throw Exception(
+                        "The server took too long to respond. Please try again.",
+                      );
+                    } catch (_) {
+                      throw Exception(
+                        "Cannot reach the server. Make sure the backend is running.",
+                      );
+                    }
 
-              if (response.statusCode != 200) {
-                throw Exception(
-                  _detailOf(
-                    response,
-                    'Face registration failed (${response.statusCode}).',
-                  ),
-                );
-              }
+                    if (response.statusCode != 200) {
+                      throw Exception(
+                        _detailOf(
+                          response,
+                          tr('Face registration failed ({code}).', {
+                            'code': response.statusCode,
+                          }),
+                        ),
+                      );
+                    }
 
-              if (!current()) return;
-              final result = jsonDecode(response.body) as Map<String, dynamic>;
-              if (result['is_face_registered'] != true) throw StateError('Registration was not confirmed. Refresh and try again.');
-              setState(() { _faceStatusGeneration++; isFaceRegistered = true; _faceRegistrationVersion = result['registration_version'] as String?; });
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Face registered successfully. Only the administration office can reset it.'),
-                  backgroundColor: Color(0xFF10B981),
-                ),
-              );
-            } catch (e) {
-              // A timed-out POST may have committed; fetch truth before allowing retry.
-              if (current()) {
-                try { await refreshStudentFaceStatus(); } catch (_) {}
-              }
-              if (current()) showErrorDialog(_friendlyError(e), context);
-            } finally {
-              if (current()) setState(() { _savingFace = false; isSyncing = false; });
-            }
-          },
+                    if (!current()) return;
+                    final result =
+                        jsonDecode(response.body) as Map<String, dynamic>;
+                    if (result['is_face_registered'] != true) {
+                      throw StateError(
+                        'Registration was not confirmed. Refresh and try again.',
+                      );
+                    }
+                    setState(() {
+                      _faceStatusGeneration++;
+                      isFaceRegistered = true;
+                      _faceRegistrationVersion =
+                          result['registration_version'] as String?;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          tr(
+                            'Face registered successfully. Only the administration office can reset it.',
+                          ),
+                        ),
+                        backgroundColor: Color(0xFF10B981),
+                      ),
+                    );
+                  } catch (e) {
+                    // A timed-out POST may have committed; fetch truth before allowing retry.
+                    if (current()) {
+                      try {
+                        await refreshStudentFaceStatus();
+                      } catch (_) {}
+                    }
+                    if (current()) showErrorDialog(_friendlyError(e), context);
+                  } finally {
+                    if (current()) {
+                      setState(() {
+                        _savingFace = false;
+                        isSyncing = false;
+                      });
+                    }
+                  }
+                },
+          ),
         ),
-      ),
-    );
+      );
     } finally {
       if (current()) setState(() => _registeringFace = false);
     }
@@ -1593,27 +1892,61 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     if (token.isEmpty) return;
     final generation = ++_faceStatusGeneration;
     // Do not reuse the path-only GET cache across account/server switches.
-    final response = await http.get(Uri.parse('$server/students/me/face/status'),
-      headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 12));
-    if (!mounted || generation != _faceStatusGeneration || token != studentAuthToken || server != ApiConfig.getEffectiveUrl()) return;
-    if (response.statusCode != 200) throw StateError(_detailOf(response, 'Unable to load face registration status.'));
-    final result = jsonDecode(response.body) as Map<String, dynamic>;
-    if (result['is_face_registered'] is! bool || !result.containsKey('registration_version')) {
-      throw StateError('Face registration status could not be confirmed. Please refresh and try again.');
+    final response = await http
+        .get(
+          Uri.parse('$server/students/me/face/status'),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 12));
+    if (!mounted ||
+        generation != _faceStatusGeneration ||
+        token != studentAuthToken ||
+        server != ApiConfig.getEffectiveUrl()) {
+      return;
     }
-    setState(() { isFaceRegistered = result['is_face_registered'] == true; _faceRegistrationVersion = result['registration_version'] as String?; });
+    if (response.statusCode != 200) {
+      throw StateError(
+        _detailOf(response, 'Unable to load face registration status.'),
+      );
+    }
+    final result = jsonDecode(response.body) as Map<String, dynamic>;
+    if (result['is_face_registered'] is! bool ||
+        !result.containsKey('registration_version')) {
+      throw StateError(
+        'Face registration status could not be confirmed. Please refresh and try again.',
+      );
+    }
+    setState(() {
+      isFaceRegistered = result['is_face_registered'] == true;
+      _faceRegistrationVersion = result['registration_version'] as String?;
+    });
   }
 
   Future<void> _endServerSession(String token) async {
     if (token.isEmpty) return;
     // Request revocation immediately, independently of device unregistration.
     unawaited(MobilePush.unbind(token));
-    try { await AccountSecurity.request(ApiConfig.getEffectiveUrl(), token, '/auth/logout', body: {}); }
-    catch (failure) { if (failure is SecurityFailure && [401, 403].contains(failure.status)) return;
+    try {
+      await AccountSecurity.request(
+        ApiConfig.getEffectiveUrl(),
+        token,
+        '/auth/logout',
+        body: {},
+      );
+    } catch (failure) {
+      if (failure is SecurityFailure && [401, 403].contains(failure.status)) {
+        return;
+      }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Signed out locally; server sign-out could not be confirmed.')));
-      } }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              tr('Signed out locally; server sign-out could not be confirmed.'),
+            ),
+          ),
+        );
+      }
+    }
   }
 
   void handleStudentLogout() {
@@ -1712,8 +2045,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
           ),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-          title: const Row(
+          backgroundColor: isDark ? const Color(0xFF222222) : Colors.white,
+          title: Row(
             children: [
               Icon(
                 Icons.error_outline_rounded,
@@ -1722,13 +2055,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               ),
               SizedBox(width: 10),
               Text(
-                "Verification Failed",
+                tr('Verification Failed'),
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
               ),
             ],
           ),
           content: Text(
-            friendlyMsg,
+            tr(friendlyMsg),
             style: TextStyle(
               fontSize: 13,
               height: 1.4,
@@ -1745,8 +2078,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 ),
               ),
               onPressed: () => Navigator.pop(ctx),
-              child: const Text(
-                "Got It",
+              child: Text(
+                tr('Got It'),
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -1771,61 +2104,66 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       case 1: // Student Portal
         bodyContent = isStudentLoggedIn
             ? !isFaceRegistered
-              ? FaceRegistrationRequired(
-                  studentName: studentName,
-                  busy: _registeringFace || _savingFace || isSyncing,
-                  onRegister: () => registerFace(context),
-                  onLogout: handleStudentLogout,
-                  onRefresh: () async {
-                    try { await refreshStudentFaceStatus(); }
-                    catch (error) { if (mounted) showErrorDialog(_friendlyError(error), context); }
-                  },
-                )
-              : MainScreen(
-                studentId: studentId,
-                studentName: studentName,
-                studentCode: studentCode,
-                studentEmail: studentEmail,
-                authToken: studentAuthToken,
-                isFaceRegistered: isFaceRegistered,
-                isCheckedInToday: isCheckedInToday,
-                attendanceHistory: attendanceHistory,
-                studentSchedule: studentSchedule,
-                announcements: studentAnnouncements,
-                isDatabaseOffline: isDatabaseOffline,
-                isSyncing: isSyncing,
-                onLogout: handleStudentLogout,
-                onSyncRequested: () => syncData(context),
-                onTimetableRefresh: refreshStudentTimetable,
-                onAttendanceRefresh: refreshStudentAttendance,
-                onAnnouncementsRefresh: refreshStudentAnnouncements,
-                onCheckInComplete:
-                    (
-                      sessId,
-                      ssid,
-                      courseCode,
-                      courseName,
-                      imageBase64,
-                      livenessPassed, {
-                      int? challengeMs,
-                      Map<String, dynamic>? extraDetails,
-                    }) => submitAttendance(
-                      sessId,
-                      ssid,
-                      courseCode,
-                      courseName,
-                      imageBase64,
-                      livenessPassed,
-                      context,
-                      challengeMs: challengeMs,
-                      extraDetails: extraDetails,
-                    ),
-                onRegisterFace: () => registerFace(context),
-                onFaceStatusRefresh: refreshStudentFaceStatus,
-              )
+                  ? FaceRegistrationRequired(
+                      studentName: studentName,
+                      busy: _registeringFace || _savingFace || isSyncing,
+                      onRegister: () => registerFace(context),
+                      onLogout: handleStudentLogout,
+                      onRefresh: () async {
+                        try {
+                          await refreshStudentFaceStatus();
+                        } catch (error) {
+                          if (mounted) {
+                            showErrorDialog(_friendlyError(error), context);
+                          }
+                        }
+                      },
+                    )
+                  : MainScreen(
+                      studentId: studentId,
+                      studentName: studentName,
+                      studentCode: studentCode,
+                      studentEmail: studentEmail,
+                      authToken: studentAuthToken,
+                      isFaceRegistered: isFaceRegistered,
+                      isCheckedInToday: isCheckedInToday,
+                      attendanceHistory: attendanceHistory,
+                      studentSchedule: studentSchedule,
+                      announcements: studentAnnouncements,
+                      isDatabaseOffline: isDatabaseOffline,
+                      isSyncing: isSyncing,
+                      onLogout: handleStudentLogout,
+                      onSyncRequested: () => syncData(context),
+                      onTimetableRefresh: refreshStudentTimetable,
+                      onAttendanceRefresh: refreshStudentAttendance,
+                      onAnnouncementsRefresh: refreshStudentAnnouncements,
+                      onCheckInComplete:
+                          (
+                            sessId,
+                            ssid,
+                            courseCode,
+                            courseName,
+                            imageBase64,
+                            livenessPassed, {
+                            int? challengeMs,
+                            Map<String, dynamic>? extraDetails,
+                          }) => submitAttendance(
+                            sessId,
+                            ssid,
+                            courseCode,
+                            courseName,
+                            imageBase64,
+                            livenessPassed,
+                            context,
+                            challengeMs: challengeMs,
+                            extraDetails: extraDetails,
+                          ),
+                      onRegisterFace: () => registerFace(context),
+                      onFaceStatusRefresh: refreshStudentFaceStatus,
+                    )
             : LoginScreen(
                 portalType: 'student',
-                isSyncing: isSyncing,
+                isSyncing: _portalBusy('student'),
                 onLogin: (emailOrId, pass, portal) =>
                     handleLogin(emailOrId, pass, portal, context),
                 onBackPressed: () => setState(() => selectedTab = 0),
@@ -1849,7 +2187,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               )
             : LoginScreen(
                 portalType: 'staff',
-                isSyncing: isSyncing,
+                isSyncing: _portalBusy('staff'),
                 onLogin: (emailOrId, pass, portal) =>
                     handleLogin(emailOrId, pass, portal, context),
                 onBackPressed: () => setState(() => selectedTab = 0),
@@ -1882,50 +2220,76 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           ),
 
           // Loading Overlay (Shimmer Skeleton Screen)
-          if (isSyncing && !isStudentLoggedIn && !isStaffLoggedIn)
+          if (_signingInPortal != null ||
+              (isSyncing && !isStudentLoggedIn && !isStaffLoggedIn))
             Positioned.fill(
               child: Container(
                 color: isDarkMode
-                    ? const Color(0xFF121212)
+                    ? const Color(0xFF181818)
                     : const Color(0xFFF8FAFC),
-                child: const SafeArea(
+                child: SafeArea(
                   child: ShimmerLoading(
                     isLoading: true,
-                    child: ShimmerSkeleton(),
+                    // Each portal previews its own dashboard while signing in.
+                    child:
+                        (_signingInPortal ??
+                                (selectedTab == 2 ? 'staff' : 'student')) ==
+                            'staff'
+                        ? const ShimmerStaffSkeleton()
+                        : const ShimmerSkeleton(),
                   ),
                 ),
               ),
             ),
         ],
       ),
-      bottomNavigationBar: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.isNotEmpty)
-          SafeArea(top: false, child: ListTile(
-            leading: const Icon(Icons.sync),
-            title: Text('Saved attendance attempts (${_offlineRows.length})'),
-            subtitle: Text(_offlineRows.map(_offlineLabel).toSet().join(' · '), maxLines: 2),
-            onTap: () => showModalBottomSheet(context: context, builder: (ctx) => ListView(
-              children: [for (final row in _offlineRows) ListTile(
-                title: Text('Class ${row['session_id']}'),
-                subtitle: Text('${_offlineLabel(row)}\n${row['queued_at']}\n${row['last_error']}'),
-              ), TextButton(onPressed: () { Navigator.pop(ctx); unawaited(_syncOffline()); }, child: const Text('Retry / refresh'))],
-            )),
-          )),
-        _buildBottomNavigationBar(),
-      ]),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.isNotEmpty)
+            SafeArea(
+              top: false,
+              child: ListTile(
+                leading: const Icon(Icons.sync),
+                title: Text(
+                  tr('Saved attendance attempts ({_offlineRowsCount})', {
+                    '_offlineRowsCount': _offlineRows.length,
+                  }),
+                ),
+                subtitle: Text(
+                  tr(_offlineRows.map(_offlineLabel).toSet().join(' · ')),
+                  maxLines: 2,
+                ),
+                onTap: () => showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  useSafeArea: true,
+                  builder: (ctx) => OfflineQueueSheet(
+                    rows: _offlineRows,
+                    onRefresh: () async {
+                      await _syncOffline();
+                      return _offlineRows;
+                    },
+                  ),
+                ),
+              ),
+            ),
+          _buildBottomNavigationBar(),
+        ],
+      ),
     );
   }
 
   Widget _buildBottomNavigationBar() {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final surfaceColor = isDarkMode ? const Color(0xFF1E293B) : Colors.white;
+    final surfaceColor = isDarkMode ? const Color(0xFF222222) : Colors.white;
     return Container(
       decoration: BoxDecoration(
         color: surfaceColor,
         border: Border(
           top: BorderSide(
             color: isDarkMode
-                ? const Color(0xFF334155)
+                ? const Color(0xFF333333)
                 : const Color(0xFFE2E8F0),
             width: 1,
           ),
@@ -1951,17 +2315,17 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             backgroundColor: surfaceColor,
             elevation: 0,
             type: BottomNavigationBarType.fixed,
-            selectedFontSize: 10,
-            unselectedFontSize: 10,
+            selectedFontSize: 12,
+            unselectedFontSize: 12,
             selectedItemColor: const Color(0xFF2563EB),
             unselectedItemColor: isDarkMode
-                ? const Color(0xFF64748B)
-                : const Color(0xFF94A3B8),
+                ? const Color(0xFFCBD5E1)
+                : const Color(0xFF475569),
             selectedLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.bold),
             unselectedLabelStyle: GoogleFonts.inter(
               fontWeight: FontWeight.w500,
             ),
-            items: const [
+            items: [
               BottomNavigationBarItem(
                 icon: Icon(Icons.home_outlined, size: 18),
                 activeIcon: Icon(
@@ -1969,7 +2333,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   size: 18,
                   color: Color(0xFF2563EB),
                 ),
-                label: 'Home',
+                label: tr('Home'),
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.person_outline, size: 18),
@@ -1978,7 +2342,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   size: 18,
                   color: Color(0xFF2563EB),
                 ),
-                label: 'Student',
+                label: tr('Student'),
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.people_outline, size: 18),
@@ -1987,7 +2351,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   size: 18,
                   color: Color(0xFF2563EB),
                 ),
-                label: 'Staff',
+                label: tr('Staff'),
               ),
             ],
           ),

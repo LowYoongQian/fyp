@@ -1,4 +1,6 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
+import '../../i18n/tr.dart';
+import '../../widgets/brand_refresh.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -12,6 +14,8 @@ import '../system/profile_screen.dart';
 import 'attendance_request_screen.dart';
 import '../../services/live_updates.dart';
 import '../../services/academic_calendar.dart';
+import '../../services/user_service.dart';
+import '../../widgets/avatar_image.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 3: Lecturer/Staff Dashboard widget
@@ -80,6 +84,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
   DateTime _lastRefresh = DateTime.now();
   final Set<String> _pendingTopics = {};
 
+  String? _avatarUrl;
+
   String get _timetableCacheKey => 'cached_staff_${widget.staffId}_timetable';
   String get _coursesCacheKey => 'cached_staff_${widget.staffId}_courses';
 
@@ -87,6 +93,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
   void initState() {
     super.initState();
     loadLecturerData();
+    _loadAvatar();
     _startLive();
     _poller = Timer.periodic(const Duration(seconds: 10), (_) {
       if (_live?.foreground != false && (_live?.connected != true || DateTime.now().difference(_lastRefresh).inSeconds >= 60)) {
@@ -134,6 +141,12 @@ class _StaffDashboardState extends State<StaffDashboard> {
         });
       }
     }
+  }
+
+  /// The profile photo saved on the account, so the header shows the same picture as the web.
+  Future<void> _loadAvatar() async {
+    final profile = await UserService.fetchUserProfile(authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl);
+    if (mounted && profile != null) setState(() => _avatarUrl = profile['avatar_url']?.toString());
   }
 
   Future<bool> _loadCachedLecturerData() async {
@@ -248,9 +261,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
     if (response.statusCode == 200) {
       await Future.wait([fetchTodayClasses(), fetchActiveSessions()]);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Class opened. Sign-in follows the scheduled class time.',
+            tr('Class opened. Sign-in follows the scheduled class time.'),
           ),
           backgroundColor: Color(0xFF059669),
         ),
@@ -259,7 +272,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
       final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error['detail'] ?? 'Could not open class.'),
+          content: Text(tr(error['detail'] ?? 'Could not open class.')),
           backgroundColor: const Color(0xFFDC2626),
         ),
       );
@@ -271,18 +284,18 @@ class _StaffDashboardState extends State<StaffDashboard> {
     final reason = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Cancel class'),
+        title: Text(tr('Cancel class')),
         content: TextField(
           controller: controller,
           minLines: 3,
           maxLines: 5,
           maxLength: 1000,
-          decoration: const InputDecoration(labelText: 'Reason'),
+          decoration: InputDecoration(labelText: tr('Reason')),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Back'),
+            child: Text(tr('Back')),
           ),
           FilledButton(
             onPressed: () {
@@ -292,7 +305,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFFDC2626),
             ),
-            child: const Text('Cancel class'),
+            child: Text(tr('Cancel class')),
           ),
         ],
       ),
@@ -314,17 +327,17 @@ class _StaffDashboardState extends State<StaffDashboard> {
       final addReplacement = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Class cancelled'),
-          content: const Text('Add a replacement class now?'),
+          title: Text(tr('Class cancelled')),
+          content: Text(tr('Add a replacement class now?')),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Done'),
+              child: Text(tr('Done')),
             ),
             FilledButton.icon(
               onPressed: () => Navigator.pop(dialogContext, true),
               icon: const Icon(Icons.event_repeat),
-              label: const Text('Add Replacement'),
+              label: Text(tr('Add Replacement')),
             ),
           ],
         ),
@@ -335,7 +348,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     } else {
       final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error['detail'] ?? 'Could not cancel class.')),
+        SnackBar(content: Text(tr(error['detail'] ?? 'Could not cancel class.'))),
       );
     }
   }
@@ -344,19 +357,19 @@ class _StaffDashboardState extends State<StaffDashboard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Class held?'),
-        content: const Text(
-          'This completes the class and lets you correct student attendance.',
+        title: Text(tr('Class held?')),
+        content: Text(
+          tr('This completes the class and lets you correct student attendance.'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Back'),
+            child: Text(tr('Back')),
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(dialogContext, true),
             icon: const Icon(Icons.check_circle_outline),
-            label: const Text('Class Held'),
+            label: Text(tr('Class Held')),
           ),
         ],
       ),
@@ -370,9 +383,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
     if (response.statusCode == 200) {
       await Future.wait([fetchTodayClasses(), fetchClassesNeedingAttention()]);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Class completed. Open Attendance to correct student records.',
+            tr('Class completed. Open Attendance to correct student records.'),
           ),
           backgroundColor: Color(0xFF059669),
         ),
@@ -381,7 +394,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
       final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error['detail'] ?? 'Could not resolve class.'),
+          content: Text(tr(error['detail'] ?? 'Could not resolve class.')),
           backgroundColor: const Color(0xFFDC2626),
         ),
       );
@@ -425,7 +438,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     );
     if (!end.isAfter(start)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('End time must be after start time.')),
+        SnackBar(content: Text(tr('End time must be after start time.'))),
       );
       return;
     }
@@ -433,23 +446,23 @@ class _StaffDashboardState extends State<StaffDashboard> {
     final room = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Replacement room'),
+        title: Text(tr('Replacement room')),
         content: TextField(
           controller: roomController,
           maxLength: 200,
-          decoration: const InputDecoration(labelText: 'Room'),
+          decoration: InputDecoration(labelText: tr('Room')),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Back'),
+            child: Text(tr('Back')),
           ),
           FilledButton(
             onPressed: () {
               final value = roomController.text.trim();
               if (value.isNotEmpty) Navigator.pop(dialogContext, value);
             },
-            child: const Text('Arrange class'),
+            child: Text(tr('Arrange class')),
           ),
         ],
       ),
@@ -472,9 +485,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
     if (response.statusCode == 201) {
       await fetchTodayClasses();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Replacement class arranged. Students and administrators were notified.',
+            tr('Replacement class arranged. Students and administrators were notified.'),
           ),
           backgroundColor: Color(0xFF059669),
         ),
@@ -484,22 +497,164 @@ class _StaffDashboardState extends State<StaffDashboard> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            error['detail'] ?? 'Could not arrange replacement class.',
+            tr(error['detail'] ?? 'Could not arrange replacement class.'),
           ),
         ),
       );
     }
   }
 
+  Widget _staffHero(bool isDarkMode) {
+    final name = widget.staffName.trim();
+    final initials = (name.isEmpty ? 'S' : name.substring(0, name.length >= 2 ? 2 : name.length)).toUpperCase();
+    final hour = ApiConfig.now.hour;
+    final greeting = hour < 12 ? 'Good morning' : (hour < 18 ? 'Good afternoon' : 'Good evening');
+    final photo = avatarImage(_avatarUrl);
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
+    final mutedColor = isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B);
+    final lineColor = isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0);
+    final accent = isDarkMode ? const Color(0xFF60A5FA) : const Color(0xFF2563EB);
+    Widget pill(String text, IconData icon) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: isDarkMode ? const Color(0xFF2D2D2D) : const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 12, color: mutedColor),
+            const SizedBox(width: 4),
+            Text(tr(text), style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: textColor)),
+          ]),
+        );
+    Widget stat(int value, String label, IconData icon, Color color) => Expanded(
+          child: Semantics(
+            label: '$value $label',
+            excludeSemantics: true,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+              decoration: BoxDecoration(
+                color: isDarkMode ? const Color(0xFF2D2D2D) : const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: lineColor),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Container(
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: isDarkMode ? 0.18 : 0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(icon, size: 14, color: color),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('$value', style: GoogleFonts.spaceGrotesk(fontSize: 17, height: 1.1, fontWeight: FontWeight.w800, color: textColor)),
+                ]),
+                const SizedBox(height: 6),
+                Text(tr(label), maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: mutedColor)),
+              ]),
+            ),
+          ),
+        );
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDarkMode ? const Color(0xFF222222) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: lineColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDarkMode ? 0.16 : 0.05),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: accent.withValues(alpha: 0.45), width: 2)),
+            child: CircleAvatar(
+              radius: 25,
+              backgroundColor: isDarkMode ? const Color(0xFF2D2D2D) : const Color(0xFFEFF6FF),
+              backgroundImage: photo,
+              onBackgroundImageError: photo == null ? null : (error, stack) {},
+              child: photo == null
+                  ? Text(tr(initials), style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.w800, color: accent))
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr(greeting), style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: mutedColor)),
+              Text(tr(widget.staffName), maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.spaceGrotesk(fontSize: 19, fontWeight: FontWeight.w800, color: textColor)),
+              Text(tr(widget.staffEmail), maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(fontSize: 11.5, color: mutedColor)),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          pill(widget.staffRole, Icons.badge_outlined),
+          pill(tr('Staff ID {code}', {'code': widget.staffCode}), Icons.tag_rounded),
+        ]),
+        const SizedBox(height: 14),
+        Divider(height: 1, color: lineColor),
+        const SizedBox(height: 14),
+        Row(children: [
+          stat(todayClasses.length, 'Today', Icons.today_rounded, const Color(0xFF2563EB)),
+          const SizedBox(width: 8),
+          stat(classesNeedingAttention.length, 'To review', Icons.pending_actions_rounded, const Color(0xFFD97706)),
+          const SizedBox(width: 8),
+          stat(myActiveSessions.length, 'Live gates', Icons.sensors_rounded, const Color(0xFF10B981)),
+        ]),
+      ]),
+    );
+  }
+
+  /// One section heading style for the whole dashboard: a tinted icon chip, the title, and an optional action.
+  Widget _sectionTitle(String title, IconData icon, Color color, Color textColor, bool isDarkMode, {Widget? trailing}) {
+    return Row(children: [
+      Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: isDarkMode ? 0.18 : 0.12),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Icon(icon, size: 16, color: color),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(tr(title), style: GoogleFonts.spaceGrotesk(fontSize: 15, fontWeight: FontWeight.bold, color: textColor)),
+      ),
+      ?trailing,
+    ]);
+  }
+
+  /// Label and colour for a class status, used by the status pill on each class card.
+  (String, Color) _statusLook(String status) => switch (status) {
+        'open' => ('Sign-in open', const Color(0xFF10B981)),
+        'completed' => ('Completed', const Color(0xFF64748B)),
+        'needs_attention' => ('Needs review', const Color(0xFFD97706)),
+        'cancelled' => ('Cancelled', const Color(0xFFDC2626)),
+        _ => ('Scheduled', const Color(0xFF2563EB)),
+      };
+
   Widget _dashboardTabs(bool isDarkMode) {
     return Container(
       height: 44,
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        color: isDarkMode ? const Color(0xFF222222) : const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          color: isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0),
         ),
       ),
       child: LayoutBuilder(
@@ -517,7 +672,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                 child: Container(
                   decoration: BoxDecoration(
                     color: isDarkMode
-                        ? const Color(0xFF800000)
+                        ? const Color(0xFF333333)
                         : Colors.white,
                     borderRadius: BorderRadius.circular(8),
                     boxShadow: [
@@ -621,7 +776,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
               Icon(icon, size: 16, color: selected ? const Color(0xFF2563EB) : const Color(0xFF94A3B8)),
               const SizedBox(width: 7),
               Text(
-                label,
+                tr(label),
                 style: GoogleFonts.inter(
                   fontSize: 11,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
@@ -645,33 +800,36 @@ class _StaffDashboardState extends State<StaffDashboard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                "Today's Classes",
-                style: GoogleFonts.spaceGrotesk(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: primaryTextColor,
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: 'Refresh classes',
-              onPressed: fetchTodayClasses,
-              icon: const Icon(Icons.refresh, size: 18),
-            ),
-          ],
+        _sectionTitle(
+          "Today's Classes",
+          Icons.today_rounded,
+          const Color(0xFF2563EB),
+          primaryTextColor,
+          isDarkMode,
+          trailing: IconButton(
+            tooltip: tr('Refresh classes'),
+            onPressed: fetchTodayClasses,
+            icon: const Icon(Icons.refresh, size: 18),
+          ),
         ),
         const SizedBox(height: 6),
         if (todayClasses.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              'No classes scheduled today.',
-              style: GoogleFonts.inter(fontSize: 12, color: secondaryTextColor),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+            decoration: BoxDecoration(
+              color: isDarkMode ? const Color(0xFF222222) : Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0)),
             ),
+            child: Column(children: [
+              Icon(Icons.free_breakfast_outlined, size: 26, color: secondaryTextColor),
+              const SizedBox(height: 8),
+              Text(
+                tr('No classes scheduled today.'),
+                style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.w600, color: secondaryTextColor),
+              ),
+            ]),
           )
         else
           ...todayClasses.map((raw) {
@@ -686,65 +844,113 @@ class _StaffDashboardState extends State<StaffDashboard> {
             final time = start == null || end == null
                 ? ''
                 : '${TimeOfDay.fromDateTime(start).format(context)} - ${TimeOfDay.fromDateTime(end).format(context)}';
+            final (statusLabel, statusColor) = _statusLook(status);
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                color: isDarkMode ? const Color(0xFF222222) : Colors.white,
                 border: Border.all(
                   color: isDarkMode
-                      ? const Color(0xFF334155)
+                      ? const Color(0xFF333333)
                       : const Color(0xFFE2E8F0),
                 ),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDarkMode ? 0.12 : 0.04),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          '${lesson['course_code']} · ${lesson['role']} ${lesson['class_group'] == 'All' ? '' : lesson['class_group']}',
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: primaryTextColor,
-                          ),
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: statusColor.withValues(alpha: isDarkMode ? 0.18 : 0.10),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Icon(
+                          lesson['role'] == 'Lecture' ? Icons.co_present_outlined : Icons.groups_outlined,
+                          size: 19,
+                          color: statusColor,
                         ),
                       ),
-                      Text(
-                        status.replaceAll('_', ' ').toUpperCase(),
-                        style: GoogleFonts.inter(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: secondaryTextColor,
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${lesson['course_code']} · ${tr(lesson['role'])} ${lesson['class_group'] == 'All' ? '' : lesson['class_group']}',
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: primaryTextColor,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${lesson['course_name']}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: secondaryTextColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: statusColor.withValues(alpha: isDarkMode ? 0.2 : 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          tr(statusLabel),
+                          style: GoogleFonts.inter(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.bold,
+                            color: isDarkMode ? Color.lerp(statusColor, Colors.white, 0.35) : statusColor,
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${lesson['course_name']}',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: primaryTextColor,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '$time · ${lesson['room'] ?? 'Room TBA'}',
-                    style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: secondaryTextColor,
-                    ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 4,
+                    children: [
+                      if (time.isNotEmpty)
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.schedule_rounded, size: 14, color: secondaryTextColor),
+                          const SizedBox(width: 4),
+                          Text(tr(time), style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: secondaryTextColor)),
+                        ]),
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.room_outlined, size: 14, color: secondaryTextColor),
+                        const SizedBox(width: 4),
+                        Text('${lesson['room'] ?? 'Room TBA'}', style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: secondaryTextColor)),
+                      ]),
+                    ],
                   ),
                   if (lesson['cancel_reason'] != null) ...[
                     const SizedBox(height: 4),
                     Text(
                       '${lesson['cancel_reason']}',
                       style: GoogleFonts.inter(
-                        fontSize: 10,
+                        fontSize: 11,
                         color: const Color(0xFFDC2626),
                       ),
                     ),
@@ -758,13 +964,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         FilledButton.icon(
                           onPressed: () => _openTodayClass(lesson),
                           icon: const Icon(Icons.play_arrow, size: 16),
-                          label: const Text('Open Class'),
+                          label: Text(tr('Open Class')),
                         ),
                       if (status == 'scheduled' || status == 'needs_attention')
                         OutlinedButton.icon(
                           onPressed: () => _cancelTodayClass(lesson),
                           icon: const Icon(Icons.event_busy, size: 16),
-                          label: const Text('Cancel Class'),
+                          label: Text(tr('Cancel Class')),
                         ),
                       if (status == 'needs_attention')
                         FilledButton.icon(
@@ -773,18 +979,14 @@ class _StaffDashboardState extends State<StaffDashboard> {
                             Icons.check_circle_outline,
                             size: 16,
                           ),
-                          label: const Text('Class Held'),
+                          label: Text(tr('Class Held')),
                         ),
                       if (status == 'cancelled')
                         OutlinedButton.icon(
                           onPressed: () => _arrangeReplacement(lesson),
                           icon: const Icon(Icons.event_repeat, size: 16),
-                          label: const Text('Arrange Replacement'),
+                          label: Text(tr('Arrange Replacement')),
                         ),
-                      if (status == 'open')
-                        const Chip(label: Text('Sign-in open')),
-                      if (status == 'completed')
-                        const Chip(label: Text('Completed')),
                     ],
                   ),
                 ],
@@ -849,9 +1051,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
         height: 44,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
-          color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+          color: isDarkMode ? const Color(0xFF222222) : const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(11),
-          border: Border.all(color: isDarkMode ? const Color(0xFF475569) : const Color(0xFFE2E8F0)),
+          border: Border.all(color: isDarkMode ? const Color(0xFF404040) : const Color(0xFFE2E8F0)),
         ),
         child: Row(
           children: [
@@ -862,10 +1064,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
                 child: DropdownButton<String>(
                   value: value,
                   isExpanded: true,
-                  dropdownColor: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                  dropdownColor: isDarkMode ? const Color(0xFF222222) : Colors.white,
                   icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
-                  style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w600, color: primaryTextColor),
-                  items: items.map((item) => DropdownMenuItem(value: item, child: Text(label(item), overflow: TextOverflow.ellipsis))).toList(),
+                  style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: primaryTextColor),
+                  items: items.map((item) => DropdownMenuItem(value: item, child: Text(tr(label(item)), overflow: TextOverflow.ellipsis))).toList(),
                   onChanged: onChanged,
                 ),
               ),
@@ -878,9 +1080,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDarkMode ? const Color(0xFF111827) : Colors.white,
+        color: isDarkMode ? const Color(0xFF222222) : Colors.white,
         border: Border.all(
-          color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          color: isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0),
         ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
@@ -915,7 +1117,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Classes to review',
+                      tr('Classes to review'),
                       style: GoogleFonts.spaceGrotesk(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
@@ -924,8 +1126,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${filteredReviews.length} pending confirmation',
-                      style: GoogleFonts.inter(fontSize: 10, color: secondaryTextColor),
+                      tr('{filteredReviewsCount} pending confirmation', {'filteredReviewsCount': filteredReviews.length}),
+                      style: GoogleFonts.inter(fontSize: 11, color: secondaryTextColor),
                     ),
                   ],
                 ),
@@ -938,14 +1140,14 @@ class _StaffDashboardState extends State<StaffDashboard> {
                 ),
                 child: Text(
                   '${reviews.length}',
-                  style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFFD97706)),
+                  style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFFD97706)),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 8),
           Text(
-            'Confirm classes that happened, or cancel those that did not.',
+            tr('Confirm classes that happened, or cancel those that did not.'),
             style: GoogleFonts.inter(fontSize: 11, color: secondaryTextColor),
           ),
           const SizedBox(height: 12),
@@ -993,11 +1195,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
               margin: const EdgeInsets.only(top: 8),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                color: isDarkMode ? const Color(0xFF222222) : const Color(0xFFF8FAFC),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: isDarkMode
-                      ? const Color(0xFF475569)
+                      ? const Color(0xFF404040)
                       : const Color(0xFFE2E8F0),
                 ),
               ),
@@ -1008,7 +1210,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                     children: [
                       Expanded(
                         child: Text(
-                          '${lesson['course_code']} · ${lesson['role']} ${lesson['class_group'] == 'All' ? '' : lesson['class_group']}',
+                          '${lesson['course_code']} · ${tr(lesson['role'])} ${lesson['class_group'] == 'All' ? '' : lesson['class_group']}',
                           style: GoogleFonts.inter(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
@@ -1024,9 +1226,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
-                            'OVERDUE',
+                            tr('OVERDUE'),
                             style: GoogleFonts.inter(
-                              fontSize: 8,
+                              fontSize: 10,
                               fontWeight: FontWeight.bold,
                               color: const Color(0xFFDC2626),
                             ),
@@ -1038,7 +1240,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                   Text(
                     '${start == null ? 'Previous class' : MaterialLocalizations.of(context).formatMediumDate(start)} · ${lesson['room'] ?? 'Room TBA'}',
                     style: GoogleFonts.inter(
-                      fontSize: 10,
+                      fontSize: 11,
                       color: secondaryTextColor,
                     ),
                   ),
@@ -1049,7 +1251,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         child: FilledButton.icon(
                           onPressed: () => _markClassHeld(lesson),
                           icon: const Icon(Icons.check_circle_outline, size: 15),
-                          label: const Text('Class Held'),
+                          label: Text(tr('Class Held')),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -1057,7 +1259,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         child: OutlinedButton.icon(
                           onPressed: () => _cancelTodayClass(lesson),
                           icon: const Icon(Icons.event_busy, size: 15),
-                          label: const Text('Cancel Class'),
+                          label: Text(tr('Cancel Class')),
                         ),
                       ),
                     ],
@@ -1071,18 +1273,18 @@ class _StaffDashboardState extends State<StaffDashboard> {
             Row(
               children: [
                 Text(
-                  '${safePage * _reviewPageSize + 1}-${(safePage * _reviewPageSize + pageReviews.length)} of ${filteredReviews.length}',
-                  style: GoogleFonts.inter(fontSize: 10, color: secondaryTextColor),
+                  tr('{v}-{v2} of {filteredReviewsCount}', {'v': safePage * _reviewPageSize + 1, 'v2': (safePage * _reviewPageSize + pageReviews.length), 'filteredReviewsCount': filteredReviews.length}),
+                  style: GoogleFonts.inter(fontSize: 11, color: secondaryTextColor),
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Previous page',
+                  tooltip: tr('Previous page'),
                   onPressed: safePage > 0 ? () => setState(() => _reviewPage = safePage - 1) : null,
                   icon: const Icon(Icons.chevron_left, size: 18),
                 ),
-                Text('${safePage + 1} / $pageCount', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold)),
+                Text('${safePage + 1} / $pageCount', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold)),
                 IconButton(
-                  tooltip: 'Next page',
+                  tooltip: tr('Next page'),
                   onPressed: safePage + 1 < pageCount ? () => setState(() => _reviewPage = safePage + 1) : null,
                   icon: const Icon(Icons.chevron_right, size: 18),
                 ),
@@ -1295,7 +1497,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     if (!(status['canStart'] as bool)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(status['hintText'] as String),
+          content: Text(tr(status['hintText'] as String)),
           backgroundColor: const Color(0xFFDC2626),
         ),
       );
@@ -1319,7 +1521,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text("Attendance gate successfully opened for $group!"),
+              content: Text(tr('Attendance gate successfully opened for {group}!', {'group': group})),
               backgroundColor: const Color(0xFF059669),
             ),
           );
@@ -1330,7 +1532,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(err['detail'] ?? "Failed to open attendance gate"),
+              content: Text(tr(err['detail'] ?? "Failed to open attendance gate")),
               backgroundColor: const Color(0xFFDC2626),
             ),
           );
@@ -1340,7 +1542,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Network error opening session: $e"),
+            content: Text(tr('Network error opening session: {e}', {'e': e})),
             backgroundColor: const Color(0xFFDC2626),
           ),
         );
@@ -1385,9 +1587,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              "Could not initialize session roster. Please try opening gate first.",
+              tr('Could not initialize session roster. Please try opening gate first.'),
             ),
             backgroundColor: Color(0xFFDC2626),
           ),
@@ -1405,7 +1607,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "Cannot open gate yet. Session opens 1 hour before class (${startDt.hour.toString().padLeft(2, '0')}:${startDt.minute.toString().padLeft(2, '0')}).",
+            tr('Cannot open gate yet. Session opens 1 hour before class ({v}:{v2}).', {'v': startDt.hour.toString().padLeft(2, '0'), 'v2': startDt.minute.toString().padLeft(2, '0')}),
           ),
           backgroundColor: const Color(0xFFDC2626),
         ),
@@ -1437,7 +1639,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                data['message'] ?? "Attendance gate successfully opened!",
+                tr(data['message'] ?? "Attendance gate successfully opened!"),
               ),
               backgroundColor: const Color(0xFF059669),
             ),
@@ -1449,7 +1651,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(err['detail'] ?? "Failed to open attendance gate"),
+              content: Text(tr(err['detail'] ?? "Failed to open attendance gate")),
               backgroundColor: const Color(0xFFDC2626),
             ),
           );
@@ -1459,7 +1661,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Network error: $e"),
+            content: Text(tr('Network error: {e}', {'e': e})),
             backgroundColor: const Color(0xFFDC2626),
           ),
         );
@@ -1513,7 +1715,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         return {
           'canStart': true,
           'statusText': '🟢 Class in Progress',
-          'hintText': 'Class is currently active until $endTimeStr.',
+          'hintText': tr('Class is currently active until {time}.', {'time': endTimeStr}),
         };
       }
 
@@ -1522,22 +1724,22 @@ class _StaffDashboardState extends State<StaffDashboard> {
           'canStart': true,
           'statusText': '🟢 Ready to Launch',
           'hintText':
-              'Starts in ${diff.inMinutes}m. Gate unlocked for check-in.',
+              tr('Starts in {n}m. Gate unlocked for check-in.', {'n': diff.inMinutes}),
         };
       }
 
       if (diff.inMinutes > 60) {
         String countStr = diff.inDays > 0
-            ? "${diff.inDays}d ${diff.inHours % 24}h"
+            ? tr('{d}d {h}h', {'d': diff.inDays, 'h': diff.inHours % 24})
             : (diff.inHours > 0
-                  ? "${diff.inHours}h ${diff.inMinutes % 60}m"
-                  : "${diff.inMinutes}m");
+                  ? tr('{h}h {m}m', {'h': diff.inHours, 'm': diff.inMinutes % 60})
+                  : tr('{m}m', {'m': diff.inMinutes}));
 
         return {
           'canStart': false,
           'statusText': '🔒 Locked',
           'hintText':
-              'Time Remaining: Starts in $countStr (Opens 1h before class).',
+              tr('Time Remaining: Starts in {time} (Opens 1h before class).', {'time': countStr}),
         };
       }
     }
@@ -1770,7 +1972,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
-                          "$studentName marked as ${nextStatus.toUpperCase()}",
+                          tr('{studentName} marked as {v}', {'studentName': studentName, 'v': nextStatus.toUpperCase()}),
                         ),
                         duration: const Duration(seconds: 2),
                         backgroundColor: nextStatus == 'present'
@@ -1783,8 +1985,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Failed to update attendance status"),
+                    SnackBar(
+                      content: Text(tr('Failed to update attendance status')),
                     ),
                   );
                 }
@@ -1807,7 +2009,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
             return Container(
               height: MediaQuery.of(context).size.height * 0.82,
               decoration: BoxDecoration(
-                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                color: isDarkMode ? const Color(0xFF222222) : Colors.white,
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(24),
                 ),
@@ -1823,7 +2025,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            "$courseCode - Student Attendance",
+                            tr('{courseCode} - Student Attendance', {'courseCode': courseCode}),
                             style: GoogleFonts.spaceGrotesk(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -1832,9 +2034,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            "Check & take attendance manually for students",
+                            tr('Check & take attendance manually for students'),
                             style: GoogleFonts.inter(
-                              fontSize: 10,
+                              fontSize: 11,
                               color: const Color(0xFF64748B),
                             ),
                           ),
@@ -1867,7 +2069,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          "Present: $presentCount",
+                          tr('Present: {presentCount}', {'presentCount': presentCount}),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
@@ -1888,7 +2090,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          "Absent: ${totalCount - presentCount}",
+                          tr('Absent: {v}', {'v': totalCount - presentCount}),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
@@ -1909,7 +2111,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          "Total: $totalCount",
+                          tr('Total: {totalCount}', {'totalCount': totalCount}),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
@@ -1927,7 +2129,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                       color: primaryTextColor,
                     ),
                     decoration: InputDecoration(
-                      hintText: "Search student name or ID...",
+                      hintText: tr('Search student name or ID...'),
                       hintStyle: GoogleFonts.inter(
                         fontSize: 11,
                         color: const Color(0xFF94A3B8),
@@ -1943,13 +2145,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
                       ),
                       filled: true,
                       fillColor: isDarkMode
-                          ? const Color(0xFF0F172A)
+                          ? const Color(0xFF181818)
                           : const Color(0xFFF8FAFC),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide(
                           color: isDarkMode
-                              ? const Color(0xFF334155)
+                              ? const Color(0xFF333333)
                               : const Color(0xFFE2E8F0),
                         ),
                       ),
@@ -1957,7 +2159,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide(
                           color: isDarkMode
-                              ? const Color(0xFF334155)
+                              ? const Color(0xFF333333)
                               : const Color(0xFFE2E8F0),
                         ),
                       ),
@@ -1970,7 +2172,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         : fetchError != null
                         ? Center(
                             child: Text(
-                              fetchError!,
+                              tr(fetchError!),
                               style: TextStyle(
                                 color: isDarkMode
                                     ? Colors.white70
@@ -1981,7 +2183,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         : filtered.isEmpty
                         ? Center(
                             child: Text(
-                              "No students found.",
+                              tr('No students found.'),
                               style: TextStyle(
                                 color: isDarkMode
                                     ? Colors.white70
@@ -1993,7 +2195,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                             itemCount: filtered.length,
                             separatorBuilder: (c, i) => Divider(
                               color: isDarkMode
-                                  ? const Color(0xFF334155)
+                                  ? const Color(0xFF333333)
                                   : const Color(0xFFE2E8F0),
                             ),
                             itemBuilder: (c, idx) {
@@ -2026,7 +2228,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                   ),
                                 ),
                                 title: Text(
-                                  sName,
+                                  tr(sName),
                                   style: GoogleFonts.spaceGrotesk(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 13,
@@ -2034,9 +2236,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                   ),
                                 ),
                                 subtitle: Text(
-                                  "ID: $sCode · Status: ${student['status']?.toUpperCase() ?? 'ABSENT'}",
+                                  tr('ID: {sCode} · Status: {v}', {'sCode': sCode, 'v': tr(student['status']?.toUpperCase() ?? 'ABSENT')}),
                                   style: GoogleFonts.inter(
-                                    fontSize: 10,
+                                    fontSize: 11,
                                     color: isPresent
                                         ? const Color(0xFF10B981)
                                         : const Color(0xFFEF4444),
@@ -2056,7 +2258,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                     size: 14,
                                   ),
                                   label: Text(
-                                    isPresent ? "Mark Absent" : "Mark Present",
+                                    tr(isPresent ? "Mark Absent" : "Mark Present"),
                                   ),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: isPresent
@@ -2071,7 +2273,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     textStyle: GoogleFonts.inter(
-                                      fontSize: 10,
+                                      fontSize: 11,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
@@ -2100,16 +2302,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
         : const Color(0xFF64748B);
 
     // High Contrast Theme Colors for Staff Dashboard
-    final Color primaryColor = isDarkMode
-        ? const Color(0xFFF87171)
-        : const Color(
-            0xFF800000,
-          ); // Bright Rose/Coral in Dark Mode, Maroon in Light Mode
+    // The web staff theme: one blue accent (no maroon), slightly brighter on the dark greys.
+    final Color primaryColor = isDarkMode ? const Color(0xFF3B82F6) : const Color(0xFF2563EB);
     final Color headerButtonBg = isDarkMode
-        ? const Color(0xFF1E293B)
+        ? const Color(0xFF222222)
         : primaryColor.withValues(alpha: 0.1);
     final Color headerButtonIconColor = isDarkMode
-        ? const Color(0xFFF87171)
+        ? const Color(0xFF60A5FA)
         : primaryColor;
 
     return SafeArea(
@@ -2126,23 +2325,14 @@ class _StaffDashboardState extends State<StaffDashboard> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
+                    Expanded(
+                      child: Row(
                       children: [
                         Container(
                           height: 36,
                           width: 36,
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: isDarkMode
-                                  ? [
-                                      const Color(0xFFEF4444),
-                                      const Color(0xFFDC2626),
-                                    ]
-                                  : [
-                                      const Color(0xFF800000),
-                                      const Color(0xFFAA0000),
-                                    ],
-                            ),
+                            color: const Color(0xFF2563EB),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Center(
@@ -2154,29 +2344,36 @@ class _StaffDashboardState extends State<StaffDashboard> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        Column(
+                        Flexible(
+                          child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              "Staff Portal",
+                              tr('Staff Portal'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.spaceGrotesk(
-                                fontSize: 14,
+                                fontSize: 15,
                                 fontWeight: FontWeight.bold,
                                 color: primaryTextColor,
                               ),
                             ),
                             Text(
-                              "MANAGEMENT & REGISTRY",
+                              tr('MANAGEMENT & REGISTRY'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.inter(
-                                fontSize: 8,
+                                fontSize: 10.5,
                                 fontWeight: FontWeight.w600,
                                 color: secondaryTextColor,
-                                letterSpacing: 1.0,
+                                letterSpacing: 0.8,
                               ),
                             ),
                           ],
                         ),
+                        ),
                       ],
+                    ),
                     ),
                     Row(
                       children: [
@@ -2190,8 +2387,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                   apiBaseUrl: widget.apiBaseUrl,
                                 ),
                               ),
-                            );
+                            ).then((_) => _loadAvatar());
                           },
+                          tooltip: tr('My profile'),
                           icon: Icon(
                             Icons.person_rounded,
                             color: headerButtonIconColor,
@@ -2204,7 +2402,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                               borderRadius: BorderRadius.circular(10),
                               side: BorderSide(
                                 color: isDarkMode
-                                    ? const Color(0xFF334155)
+                                    ? const Color(0xFF333333)
                                     : Colors.transparent,
                               ),
                             ),
@@ -2235,7 +2433,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                               borderRadius: BorderRadius.circular(10),
                               side: BorderSide(
                                 color: isDarkMode
-                                    ? const Color(0xFF334155)
+                                    ? const Color(0xFF333333)
                                     : Colors.transparent,
                               ),
                             ),
@@ -2295,9 +2493,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          loadError!,
+                          tr(loadError!),
                           style: GoogleFonts.inter(
-                            fontSize: 9,
+                            fontSize: 10.5,
                             fontWeight: FontWeight.w600,
                             color: isDarkMode
                                 ? const Color(0xFFFECDD3)
@@ -2307,10 +2505,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
                       ),
                       TextButton(
                         onPressed: loadLecturerData,
-                        child: const Text(
-                          "Retry",
+                        child: Text(
+                          tr('Retry'),
                           style: TextStyle(
-                            fontSize: 10,
+                            fontSize: 11,
                             color: Color(0xFFF43F5E),
                           ),
                         ),
@@ -2326,15 +2524,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         isLoading: true,
                         child: ShimmerSkeleton(),
                       )
-                    : RefreshIndicator(
+                    : BrandRefresh(
                         onRefresh: () async {
                           widget.onSyncRequested();
                           await loadLecturerData();
                         },
-                        color: primaryColor,
-                        backgroundColor: isDarkMode
-                            ? const Color(0xFF1E293B)
-                            : Colors.white,
                         child: SingleChildScrollView(
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: const EdgeInsets.all(16.0),
@@ -2347,87 +2541,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                              // Profile Card
-                              GlassCard(
-                                child: Row(
-                                  children: [
-                                    CircleAvatar(
-                                      radius: 24,
-                                      backgroundColor: isDarkMode
-                                          ? const Color(0xFF334155)
-                                          : primaryColor.withValues(alpha: 0.1),
-                                      child: Text(
-                                        widget.staffName
-                                            .substring(
-                                              0,
-                                              widget.staffName.length >= 2
-                                                  ? 2
-                                                  : widget.staffName.length,
-                                            )
-                                            .toUpperCase(),
-                                        style: GoogleFonts.spaceGrotesk(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.bold,
-                                          color: primaryColor,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            widget.staffName,
-                                            style: GoogleFonts.spaceGrotesk(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
-                                              color: primaryTextColor,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 2,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: primaryColor.withValues(
-                                                alpha: 0.12,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(6),
-                                              border: Border.all(
-                                                color: primaryColor.withValues(
-                                                  alpha: 0.25,
-                                                ),
-                                              ),
-                                            ),
-                                            child: Text(
-                                              "Role: ${widget.staffRole}",
-                                              style: GoogleFonts.inter(
-                                                fontSize: 9.5,
-                                                fontWeight: FontWeight.bold,
-                                                color: primaryColor,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            "Staff ID: ${widget.staffCode} · ${widget.staffEmail}",
-                                            style: GoogleFonts.inter(
-                                              fontSize: 10,
-                                              color: secondaryTextColor,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                              _staffHero(isDarkMode),
                               const SizedBox(height: 16),
                               _dashboardTabs(isDarkMode),
                               const SizedBox(height: 20),
@@ -2488,13 +2602,12 @@ class _StaffDashboardState extends State<StaffDashboard> {
                               const SizedBox(height: 20),
 
                               // Upcoming Class Check-In Card Header
-                              Text(
+                              _sectionTitle(
                                 "Upcoming Class Check-In",
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryTextColor,
-                                ),
+                                Icons.how_to_reg_outlined,
+                                const Color(0xFF8B5CF6),
+                                primaryTextColor,
+                                isDarkMode,
                               ),
                               const SizedBox(height: 8),
                               Builder(
@@ -2508,7 +2621,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                         ),
                                         child: Center(
                                           child: Text(
-                                            "No upcoming classes found in your timetable.",
+                                            tr('No upcoming classes found in your timetable.'),
                                             style: GoogleFonts.inter(
                                               fontSize: 11,
                                               color: secondaryTextColor,
@@ -2558,44 +2671,44 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                       .difference(now);
                                   String endCountdownStr =
                                       timeRemainingUntilEnd.inHours > 0
-                                      ? "${timeRemainingUntilEnd.inHours}h ${timeRemainingUntilEnd.inMinutes % 60}m"
-                                      : "${timeRemainingUntilEnd.inMinutes}m";
+                                      ? tr('{h}h {m}m', {'h': timeRemainingUntilEnd.inHours, 'm': timeRemainingUntilEnd.inMinutes % 60})
+                                      : tr('{m}m', {'m': timeRemainingUntilEnd.inMinutes});
 
                                   if (isAlreadyOpen) {
                                     hintText =
-                                        "Attendance gate is live ($endCountdownStr remaining until class ends).";
+                                        tr('Attendance gate is live ({time} remaining until class ends).', {'time': endCountdownStr});
                                     buttonText =
-                                        "Gate is Live ($endCountdownStr Left)";
+                                        tr('Gate is Live ({time} Left)', {'time': endCountdownStr});
                                     buttonEnabled = false;
                                   } else if (isCurrentlyActive) {
                                     hintText =
-                                        "Class is in progress ($endCountdownStr remaining until ${upcomingSlot['endTime']}).";
+                                        tr('Class is in progress ({time} remaining until {end}).', {'time': endCountdownStr, 'end': upcomingSlot['endTime']});
                                     buttonText =
-                                        "Class in Progress ($endCountdownStr Left)";
+                                        tr('Class in Progress ({time} Left)', {'time': endCountdownStr});
                                     buttonEnabled = false;
                                   } else if (isOpenWindow) {
                                     final diff = startDt.difference(now);
                                     hintText =
-                                        "Class starts in ${diff.inMinutes}m. Check-in gate can be opened now.";
+                                        tr('Class starts in {n}m. Check-in gate can be opened now.', {'n': diff.inMinutes});
                                     buttonText =
-                                        "Open Attendance Gate (Starts in ${diff.inMinutes}m)";
+                                        tr('Open Attendance Gate (Starts in {n}m)', {'n': diff.inMinutes});
                                     buttonEnabled = true;
                                   } else {
                                     final diff = startDt.difference(now);
                                     String countdownStr = "";
                                     if (diff.inDays > 0) {
                                       countdownStr =
-                                          "${diff.inDays}d ${diff.inHours % 24}h";
+                                          tr('{d}d {h}h', {'d': diff.inDays, 'h': diff.inHours % 24});
                                     } else if (diff.inHours > 0) {
                                       countdownStr =
-                                          "${diff.inHours}h ${diff.inMinutes % 60}m";
+                                          tr('{h}h {m}m', {'h': diff.inHours, 'm': diff.inMinutes % 60});
                                     } else {
-                                      countdownStr = "${diff.inMinutes}m";
+                                      countdownStr = tr('{m}m', {'m': diff.inMinutes});
                                     }
                                     hintText =
-                                        "Time Remaining: Starts in $countdownStr (Unlocks 1h before class).";
+                                        tr('Time Remaining: Starts in {time} (Unlocks 1h before class).', {'time': countdownStr});
                                     buttonText =
-                                        "Locked (Opens in $countdownStr)";
+                                        tr('Locked (Opens in {time})', {'time': countdownStr});
                                     buttonEnabled = false;
                                   }
 
@@ -2616,7 +2729,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                   ),
                                               decoration: BoxDecoration(
                                                 color: isDarkMode
-                                                    ? const Color(0xFF334155)
+                                                    ? const Color(0xFF333333)
                                                     : primaryColor.withValues(
                                                         alpha: 0.1,
                                                       ),
@@ -2624,19 +2737,18 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                     BorderRadius.circular(6),
                                               ),
                                               child: Text(
-                                                (upcomingSlot['role'] as String)
-                                                    .toUpperCase(),
+                                                tr(upcomingSlot['role'] as String).toUpperCase(),
                                                 style: GoogleFonts.inter(
-                                                  fontSize: 8,
+                                                  fontSize: 10,
                                                   fontWeight: FontWeight.bold,
                                                   color: primaryColor,
                                                 ),
                                               ),
                                             ),
                                             Text(
-                                              "${upcomingSlot['day']} · ${upcomingSlot['startTime']} - ${upcomingSlot['endTime']}",
+                                              "${tr(upcomingSlot['day'])} · ${upcomingSlot['startTime']} - ${upcomingSlot['endTime']}",
                                               style: GoogleFonts.inter(
-                                                fontSize: 9.5,
+                                                fontSize: 11,
                                                 color: secondaryTextColor,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -2666,9 +2778,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                             ),
                                             const SizedBox(width: 4),
                                             Text(
-                                              upcomingSlot['room'] as String,
+                                              tr(upcomingSlot['room'] as String),
                                               style: GoogleFonts.inter(
-                                                fontSize: 10.5,
+                                                fontSize: 11.5,
                                                 fontWeight: FontWeight.w600,
                                                 color: secondaryTextColor,
                                               ),
@@ -2698,7 +2810,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                               ))
                                                       : (isDarkMode
                                                             ? const Color(
-                                                                0xFF1E293B,
+                                                                0xFF222222,
                                                               )
                                                             : const Color(
                                                                 0xFFF1F5F9,
@@ -2719,7 +2831,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                           )
                                                         : (isDarkMode
                                                               ? const Color(
-                                                                  0xFF334155,
+                                                                  0xFF333333,
                                                                 )
                                                               : const Color(
                                                                   0xFFE2E8F0,
@@ -2748,7 +2860,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                   ))
                                                           : (isDarkMode
                                                                 ? const Color(
-                                                                    0xFF94A3B8,
+                                                                    0xFFA0A0A0,
                                                                   )
                                                                 : const Color(
                                                                     0xFF64748B,
@@ -2757,9 +2869,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                               const SizedBox(width: 8),
                                               Expanded(
                                                 child: Text(
-                                                  hintText,
+                                                  tr(hintText),
                                                   style: GoogleFonts.inter(
-                                                    fontSize: 10,
+                                                    fontSize: 11,
                                                     fontWeight: FontWeight.w600,
                                                     color: isAlreadyOpen
                                                         ? (isDarkMode
@@ -2806,25 +2918,25 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                 : Icons.add_circle_outline,
                                             size: 15,
                                           ),
-                                          label: Text(buttonText),
+                                          label: Text(tr(buttonText)),
                                           style: ElevatedButton.styleFrom(
                                             backgroundColor: buttonEnabled
                                                 ? primaryColor
                                                 : (isDarkMode
-                                                      ? const Color(0xFF1E293B)
+                                                      ? const Color(0xFF222222)
                                                       : Colors.white),
                                             foregroundColor: buttonEnabled
                                                 ? Colors.white
                                                 : (isDarkMode
-                                                      ? const Color(0xFF94A3B8)
+                                                      ? const Color(0xFFA0A0A0)
                                                       : const Color(
                                                           0xFF64748B,
                                                         )),
                                             disabledBackgroundColor: isDarkMode
-                                                ? const Color(0xFF1E293B)
+                                                ? const Color(0xFF222222)
                                                 : Colors.white,
                                             disabledForegroundColor: isDarkMode
-                                                ? const Color(0xFF94A3B8)
+                                                ? const Color(0xFFA0A0A0)
                                                 : const Color(0xFF64748B),
                                             elevation: buttonEnabled ? 1 : 0,
                                             padding: const EdgeInsets.symmetric(
@@ -2838,7 +2950,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                     ? Colors.transparent
                                                     : (isDarkMode
                                                           ? const Color(
-                                                              0xFF475569,
+                                                              0xFF404040,
                                                             )
                                                           : const Color(
                                                               0xFFCBD5E1,
@@ -2861,13 +2973,12 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
                               if (_dashboardTabIndex == 1) ...[
                               // Course Sessions & Attendance History Section
-                              Text(
+                              _sectionTitle(
                                 "Course Sessions & Attendance History",
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryTextColor,
-                                ),
+                                Icons.history_edu_outlined,
+                                const Color(0xFF2563EB),
+                                primaryTextColor,
+                                isDarkMode,
                               ),
                               const SizedBox(height: 8),
                               Builder(
@@ -2893,7 +3004,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                               MainAxisAlignment.spaceBetween,
                                           children: [
                                             Text(
-                                              "Select Course",
+                                              tr('Select Course'),
                                               style: GoogleFonts.inter(
                                                 fontSize: 11,
                                                 fontWeight: FontWeight.bold,
@@ -2912,14 +3023,14 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                           ),
                                           decoration: BoxDecoration(
                                             color: isDarkMode
-                                                ? const Color(0xFF1E293B)
+                                                ? const Color(0xFF222222)
                                                 : const Color(0xFFF8FAFC),
                                             borderRadius: BorderRadius.circular(
                                               12,
                                             ),
                                             border: Border.all(
                                               color: isDarkMode
-                                                  ? const Color(0xFF334155)
+                                                  ? const Color(0xFF333333)
                                                   : const Color(0xFFCBD5E1),
                                             ),
                                             boxShadow: [
@@ -2943,14 +3054,14 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                 size: 22,
                                               ),
                                               hint: Text(
-                                                "Select Course",
+                                                tr('Select Course'),
                                                 style: TextStyle(
                                                   color: secondaryTextColor,
                                                   fontSize: 12,
                                                 ),
                                               ),
                                               dropdownColor: isDarkMode
-                                                  ? const Color(0xFF1E293B)
+                                                  ? const Color(0xFF222222)
                                                   : Colors.white,
                                               borderRadius:
                                                   BorderRadius.circular(12),
@@ -2987,9 +3098,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                             ),
                                                           ),
                                                           child: Text(
-                                                            c['code']!,
+                                                            tr(c['code']!),
                                                             style: GoogleFonts.inter(
-                                                              fontSize: 10,
+                                                              fontSize: 11,
                                                               fontWeight:
                                                                   FontWeight
                                                                       .bold,
@@ -3003,7 +3114,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                         ),
                                                         Expanded(
                                                           child: Text(
-                                                            c['name']!,
+                                                            tr(c['name']!),
                                                             style: GoogleFonts.spaceGrotesk(
                                                               fontSize: 12,
                                                               fontWeight:
@@ -3042,7 +3153,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                               MainAxisAlignment.spaceBetween,
                                           children: [
                                             Text(
-                                              "Class Sessions (Current & Past)",
+                                              tr('Class Sessions (Current & Past)'),
                                               style: GoogleFonts.inter(
                                                 fontSize: 11,
                                                 fontWeight: FontWeight.bold,
@@ -3081,21 +3192,21 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                             ),
                                             decoration: BoxDecoration(
                                               color: isDarkMode
-                                                  ? const Color(0xFF1E293B)
+                                                  ? const Color(0xFF222222)
                                                   : const Color(0xFFF8FAFC),
                                               borderRadius:
                                                   BorderRadius.circular(10),
                                               border: Border.all(
                                                 color: isDarkMode
-                                                    ? const Color(0xFF334155)
+                                                    ? const Color(0xFF333333)
                                                     : const Color(0xFFE2E8F0),
                                               ),
                                             ),
                                             child: Center(
                                               child: Text(
-                                                "No class sessions recorded yet for this course.",
+                                                tr('No class sessions recorded yet for this course.'),
                                                 style: GoogleFonts.inter(
-                                                  fontSize: 10.5,
+                                                  fontSize: 11.5,
                                                   color: secondaryTextColor,
                                                 ),
                                                 textAlign: TextAlign.center,
@@ -3170,7 +3281,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                         decoration: BoxDecoration(
                                                           color: isDarkMode
                                                               ? const Color(
-                                                                  0xFF1E293B,
+                                                                  0xFF222222,
                                                                 )
                                                               : const Color(
                                                                   0xFFF8FAFC,
@@ -3188,7 +3299,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                   )
                                                                 : (isDarkMode
                                                                       ? const Color(
-                                                                          0xFF334155,
+                                                                          0xFF333333,
                                                                         )
                                                                       : const Color(
                                                                           0xFFE2E8F0,
@@ -3238,7 +3349,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                             ),
                                                           ),
                                                           title: Text(
-                                                            "Session: $openedAtStr",
+                                                            tr('Session: {openedAtStr}', {'openedAtStr': openedAtStr}),
                                                             style: GoogleFonts.spaceGrotesk(
                                                               fontSize: 11.5,
                                                               fontWeight:
@@ -3249,9 +3360,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                             ),
                                                           ),
                                                           subtitle: Text(
-                                                            "Group: $groupStr · Status: ${isOpen ? 'LIVE GATE' : 'COMPLETED SESSION'}",
+                                                            tr('Group: {groupStr} · Status: {v}', {'groupStr': groupStr, 'v': isOpen ? tr('LIVE GATE') : tr('COMPLETED SESSION')}),
                                                             style: GoogleFonts.inter(
-                                                              fontSize: 9.5,
+                                                              fontSize: 11,
                                                               fontWeight:
                                                                   FontWeight
                                                                       .w600,
@@ -3286,9 +3397,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                               size: 12,
                                                             ),
                                                             label: Text(
-                                                              isOpen
+                                                              tr(isOpen
                                                                   ? "Current Roster"
-                                                                  : "Past Roster",
+                                                                  : "Past Roster"),
                                                             ),
                                                             style: ElevatedButton.styleFrom(
                                                               backgroundColor:
@@ -3338,7 +3449,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                       decoration: BoxDecoration(
                                                         color: isDarkMode
                                                             ? const Color(
-                                                                0xFF1E293B,
+                                                                0xFF222222,
                                                               )
                                                             : const Color(
                                                                 0xFFF8FAFC,
@@ -3350,7 +3461,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                         border: Border.all(
                                                           color: isDarkMode
                                                               ? const Color(
-                                                                  0xFF334155,
+                                                                  0xFF333333,
                                                                 )
                                                               : const Color(
                                                                   0xFFE2E8F0,
@@ -3364,9 +3475,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                         children: [
                                                           Flexible(
                                                             child: Text(
-                                                              "Showing ${startIndex + 1}–$endIndex of $totalItems",
+                                                              tr('Showing {v}–{endIndex} of {totalItems}', {'v': startIndex + 1, 'endIndex': endIndex, 'totalItems': totalItems}),
                                                               style: GoogleFonts.inter(
-                                                                fontSize: 9.5,
+                                                                fontSize: 11,
                                                                 fontWeight:
                                                                     FontWeight
                                                                         .w600,
@@ -3420,7 +3531,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                             1
                                                                         ? (isDarkMode
                                                                               ? const Color(
-                                                                                  0xFF334155,
+                                                                                  0xFF333333,
                                                                                 )
                                                                               : const Color(
                                                                                   0xFFE2E8F0,
@@ -3484,7 +3595,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                               ? primaryColor
                                                                               : (isDarkMode
                                                                                     ? const Color(
-                                                                                        0xFF1E293B,
+                                                                                        0xFF222222,
                                                                                       )
                                                                                     : const Color(
                                                                                         0xFFF1F5F9,
@@ -3499,7 +3610,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                                 ? primaryColor
                                                                                 : (isDarkMode
                                                                                       ? const Color(
-                                                                                          0xFF334155,
+                                                                                          0xFF333333,
                                                                                         )
                                                                                       : const Color(
                                                                                           0xFFCBD5E1,
@@ -3557,7 +3668,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                                             totalPages
                                                                         ? (isDarkMode
                                                                               ? const Color(
-                                                                                  0xFF334155,
+                                                                                  0xFF333333,
                                                                                 )
                                                                               : const Color(
                                                                                   0xFFE2E8F0,
@@ -3599,13 +3710,12 @@ class _StaffDashboardState extends State<StaffDashboard> {
                               const SizedBox(height: 24),
 
                               // Session List
-                              Text(
+                              _sectionTitle(
                                 "Active Attendance Gates",
-                                style: GoogleFonts.spaceGrotesk(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                  color: primaryTextColor,
-                                ),
+                                Icons.sensors_rounded,
+                                const Color(0xFF10B981),
+                                primaryTextColor,
+                                isDarkMode,
                               ),
                               const SizedBox(height: 8),
                               Builder(
@@ -3668,7 +3778,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                               ),
                                               const SizedBox(height: 6),
                                               Text(
-                                                "No open check-in gates currently active.",
+                                                tr('No open check-in gates currently active.'),
                                                 style: GoogleFonts.inter(
                                                   fontSize: 11,
                                                   color: secondaryTextColor,
@@ -3709,7 +3819,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                     decoration: BoxDecoration(
                                                       color: isDarkMode
                                                           ? const Color(
-                                                              0xFF334155,
+                                                              0xFF333333,
                                                             )
                                                           : primaryColor
                                                                 .withValues(
@@ -3721,9 +3831,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                           ),
                                                     ),
                                                     child: Text(
-                                                      "ACTIVE GATE",
+                                                      tr('ACTIVE GATE'),
                                                       style: GoogleFonts.inter(
-                                                        fontSize: 8,
+                                                        fontSize: 10,
                                                         fontWeight:
                                                             FontWeight.bold,
                                                         color: primaryColor,
@@ -3731,9 +3841,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                     ),
                                                   ),
                                                   Text(
-                                                    "Tut Group: ${session['classGroup']}",
+                                                    tr('Tut Group: {v}', {'v': session['classGroup']}),
                                                     style: GoogleFonts.inter(
-                                                      fontSize: 9,
+                                                      fontSize: 10.5,
                                                       color: primaryColor,
                                                       fontWeight:
                                                           FontWeight.bold,
@@ -3752,9 +3862,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                               ),
                                               const SizedBox(height: 4),
                                               Text(
-                                                "Open since ${session['openTime'] ?? 'Active'} · ${session['verifiedCount'] ?? 0} Checked-In",
+                                                tr('Open since {v} · {v2} Checked-In', {'v': session['openTime'] ?? tr('Active'), 'v2': session['verifiedCount'] ?? 0}),
                                                 style: GoogleFonts.inter(
-                                                  fontSize: 10,
+                                                  fontSize: 11,
                                                   color: secondaryTextColor,
                                                 ),
                                               ),
@@ -3774,8 +3884,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
                                                             .assignment_turned_in_outlined,
                                                         size: 14,
                                                       ),
-                                                      label: const Text(
-                                                        "Check & Take Attendance",
+                                                      label: Text(
+                                                        tr('Check & Take Attendance'),
                                                       ),
                                                       style: OutlinedButton.styleFrom(
                                                         foregroundColor:

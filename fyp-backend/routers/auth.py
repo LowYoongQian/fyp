@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field, StrictBool
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -217,7 +217,7 @@ class UserSettingsUpdate(BaseModel):
     pet_visible: Optional[StrictBool] = None
     pet_choice: Optional[Literal["luna-techbot", "hoodie-cat"]] = None
     pet_position: Optional[PetPosition] = None
-    theme_preference: Optional[str] = None
+    theme_preference: Optional[Literal["light", "dark", "system", "cycle"]] = None   # cycle = Day/Night by campus time
     font_size_preference: Optional[str] = None
     language_preference: Optional[str] = None
     notifications_enabled: Optional[bool] = None
@@ -231,7 +231,8 @@ class UserSettingsUpdate(BaseModel):
     push_timezone: Optional[str] = Field(default=None, max_length=64)
 
 class AvatarUpdateRequest(BaseModel):
-    avatar_url: str
+    # A web link only: picked files go through /me/avatar/upload, so no base64 image bloats every profile and login response.
+    avatar_url: str = Field(max_length=2048, pattern=r"^https?://\S+$")
 
 class AdminProfileUpdateRequest(BaseModel):
     name: str
@@ -245,12 +246,14 @@ class RecoveryEmailVerify(BaseModel):
     code: str
 
 class ForgotPasswordRequest(BaseModel):
-    student_id: str
-    school_email: str
+    school_email: str = Field(max_length=255)   # PASSWORD-RESET-PAGE-18: the school email alone; an old client's extra student_id is ignored
 
 class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str
+    token: str = Field(max_length=128)
+    new_password: str = Field(max_length=128)
+
+class ResetTokenCheck(BaseModel):
+    token: str = Field(max_length=128)
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
@@ -320,35 +323,64 @@ def verify_recovery_email(body: RecoveryEmailVerify, user: User = Depends(get_cu
     db.commit()
     return {"message": "Recovery email verified"}
 
+RESET_LINK_MINUTES, RESET_RESEND_SECONDS = 20, 60
+
+
 @router.post("/forgot-password")
-def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    raw_id = body.student_id.strip().upper()
-    student_code = raw_id if raw_id.startswith("ST") else f"ST{raw_id}"
-    student = db.query(Student).filter(Student.student_code == student_code).first()
-    user = db.query(User).filter(User.id == str(student.user_id)).first() if student else None
+def forgot_password(body: ForgotPasswordRequest, background: BackgroundTasks, db: Session = Depends(get_db)):
+    """A reset link goes to the account's VERIFIED personal email. The answer is the same whatever happens (unknown address, staff or
+    personal address, no verified link, a link sent a moment ago, a provider failure), so it never shows whether an account exists."""
+    school_email = personal_email.normalized(body.school_email)
+    user = db.query(User).filter(func.lower(User.email) == school_email).first() if personal_email.is_student_identity(school_email) else None
     address = personal_email.deliverable_address(user) if user and _approved_student(db, user) else None
-    if user and address and user.email.lower() == body.school_email.strip().lower():
+    issued = user.password_reset_expires_at - timedelta(minutes=RESET_LINK_MINUTES) if user and address and user.password_reset_expires_at else None
+    if address and not (issued and (utcnow() - issued).total_seconds() < RESET_RESEND_SECONDS):
         token = secrets.token_urlsafe(32)
         user.password_reset_hash = _token_hash(token)
-        user.password_reset_expires_at = utcnow() + timedelta(minutes=20)
+        user.password_reset_expires_at = utcnow() + timedelta(minutes=RESET_LINK_MINUTES)
         db.commit()
         base_url = os.getenv("WEB_APP_URL", "http://localhost:5173").rstrip("/")
-        link = f"{base_url}/?reset_token={token}"
+        link = f"{base_url}/login/reset?token={token}"
+        # Sent after the answer, so a matching account does not make the reply slower than an unknown one.
+        background.add_task(_send_reset_link, db, user.id, user.password_reset_hash, address, link, f"reset-{user.id}-{token[:12]}")
+    return {"message": "If this school email has a verified recovery email, a reset link has been sent to it."}
+
+
+def _send_reset_link(db: Session, user_id, token_digest: str, address: str, link: str, idempotency_key: str):
+    try:
+        text = f"Open this link to set a new password for your school account:\n\n{link}\n\nThis link works once and expires in {RESET_LINK_MINUTES} minutes."
+        resend_mail.send(address, "Reset your password", text, idempotency_key)
+    except resend_mail.EmailError:
+        # Nothing was delivered: drop that unusable link (not a newer one) so the student can ask again at once.
         try:
-            _mail(address, "Reset your password", f"Open this link to set a new password for your school account:\n\n{link}\n\nThis link expires in 20 minutes.", f"reset-{user.id}-{token[:12]}")
-        except HTTPException:
-            # Keep the public response identical so this endpoint cannot reveal
-            # whether the supplied student ID and school email matched an account.
-            pass
-    return {"message": "If the details match, a reset link was sent to the verified recovery email."}
+            user = db.get(User, user_id)
+            if user and user.password_reset_hash == token_digest:
+                user.password_reset_hash = user.password_reset_expires_at = None
+                db.commit()
+        except Exception:
+            db.rollback()
+
+
+def _reset_user(db: Session, token: str, lock: bool = False):
+    query = db.query(User).filter(User.password_reset_hash == _token_hash(token))
+    user = (query.with_for_update() if lock else query).first()
+    if not user or not user.password_reset_expires_at or user.password_reset_expires_at < utcnow():
+        raise HTTPException(status_code=400, detail="This reset link is invalid, expired or already used.")
+    return user
+
+
+@router.post("/reset-password/check")
+def check_reset_token(body: ResetTokenCheck, db: Session = Depends(get_db)):
+    """Lets the reset page say at once that a link is no longer usable, before a new password is typed. It never names the account."""
+    _reset_user(db, body.token)
+    return {"valid": True}
+
 
 @router.post("/reset-password")
 def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    user = db.query(User).filter(User.password_reset_hash == _token_hash(body.token)).with_for_update().first()
-    if not user or not user.password_reset_expires_at or user.password_reset_expires_at < utcnow():
-        raise HTTPException(status_code=400, detail="Reset link is invalid or expired")
+    user = _reset_user(db, body.token, lock=True)
     user.password_hash = hash_password(body.new_password)
     user.password_reset_hash = None
     user.password_reset_expires_at = None

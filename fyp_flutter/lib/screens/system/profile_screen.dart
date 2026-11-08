@@ -1,7 +1,10 @@
+import '../../i18n/tr.dart';
+import '../../widgets/brand_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../widgets/avatar_image.dart';
 import '../../services/user_service.dart';
 import '../../services/account_security.dart';
 import 'account_security_card.dart';
@@ -63,10 +66,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           builder: (context, setModalState) {
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final fieldColor = isDark
-                ? const Color(0xFF0F172A)
+                ? const Color(0xFF181818)
                 : const Color(0xFFF8FAFC);
             final borderColor = isDark
-                ? const Color(0xFF334155)
+                ? const Color(0xFF333333)
                 : const Color(0xFFCBD5E1);
 
             InputDecoration passwordDecoration({
@@ -80,7 +83,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 labelStyle: GoogleFonts.inter(
                   fontSize: 12,
                   color: isDark
-                      ? const Color(0xFF94A3B8)
+                      ? const Color(0xFFA0A0A0)
                       : const Color(0xFF64748B),
                 ),
                 prefixIcon: Icon(icon, size: 19),
@@ -126,7 +129,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             }
 
             return AlertDialog(
-              backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+              backgroundColor: isDark ? const Color(0xFF222222) : Colors.white,
               surfaceTintColor: Colors.transparent,
               insetPadding: const EdgeInsets.symmetric(horizontal: 20),
               titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
@@ -158,7 +161,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       const SizedBox(width: 11),
                       Expanded(
                         child: Text(
-                          'Change Password',
+                          tr('Change Password'),
                           style: GoogleFonts.spaceGrotesk(
                             fontWeight: FontWeight.w800,
                             fontSize: 19,
@@ -169,12 +172,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Use at least 8 characters for your new password.',
+                    tr('Use at least 8 characters for your new password.'),
                     style: GoogleFonts.inter(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w500,
                       color: isDark
-                          ? const Color(0xFF94A3B8)
+                          ? const Color(0xFFA0A0A0)
                           : const Color(0xFF64748B),
                     ),
                   ),
@@ -211,7 +214,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  errorMessage!,
+                                  tr(errorMessage!),
                                   style: GoogleFonts.inter(
                                     color: isDark
                                         ? const Color(0xFFFCA5A5)
@@ -235,7 +238,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         textInputAction: TextInputAction.next,
                         style: GoogleFonts.inter(fontSize: 13.5),
                         decoration: passwordDecoration(
-                          label: 'Current password',
+                          label: tr('Current password'),
                           icon: Icons.lock_outline_rounded,
                           hidden: hideCurrentPassword,
                           toggleVisibility: () => setModalState(
@@ -256,7 +259,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         textInputAction: TextInputAction.next,
                         style: GoogleFonts.inter(fontSize: 13.5),
                         decoration: passwordDecoration(
-                          label: 'New password',
+                          label: tr('New password'),
                           icon: Icons.key_rounded,
                           hidden: hideNewPassword,
                           toggleVisibility: () => setModalState(
@@ -286,7 +289,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         textInputAction: TextInputAction.done,
                         style: GoogleFonts.inter(fontSize: 13.5),
                         decoration: passwordDecoration(
-                          label: 'Confirm new password',
+                          label: tr('Confirm new password'),
                           icon: Icons.verified_user_outlined,
                           hidden: hideConfirmPassword,
                           toggleVisibility: () => setModalState(
@@ -321,7 +324,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Cancel'),
+                  child: Text(tr('Cancel')),
                 ),
                 ElevatedButton(
                   onPressed: isSubmitting
@@ -343,8 +346,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             );
                             nav.pop();
                             messenger.showSnackBar(
-                              const SnackBar(
-                                content: Text('Password updated; sign in again on all devices.'),
+                              SnackBar(
+                                content: Text(tr('Password updated; sign in again on all devices.')),
                                 backgroundColor: Color(0xFF10B981),
                               ),
                             );
@@ -378,7 +381,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             color: Colors.white,
                           ),
                         )
-                      : const Text('Update Password'),
+                      : Text(tr('Update Password')),
                 ),
               ],
             );
@@ -397,7 +400,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final chooseImage = await showModalBottomSheet<bool>(
       context: context,
       showDragHandle: true,
-      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      backgroundColor: isDark ? const Color(0xFF222222) : Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -423,7 +426,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               const SizedBox(height: 14),
               Text(
-                'Update Profile Photo',
+                tr('Update Profile Photo'),
                 style: GoogleFonts.spaceGrotesk(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
@@ -431,13 +434,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Choose a clear photo, then crop it to fit your profile.',
+                tr('Choose a clear photo, then crop it to fit your profile.'),
                 textAlign: TextAlign.center,
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   height: 1.45,
                   color: isDark
-                      ? const Color(0xFF94A3B8)
+                      ? const Color(0xFFA0A0A0)
                       : const Color(0xFF64748B),
                 ),
               ),
@@ -448,7 +451,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: FilledButton.icon(
                   onPressed: () => Navigator.pop(sheetContext, true),
                   icon: const Icon(Icons.photo_library_rounded, size: 19),
-                  label: const Text('Choose from Gallery'),
+                  label: Text(tr('Choose from Gallery')),
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF2563EB),
                     foregroundColor: Colors.white,
@@ -464,7 +467,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 height: 44,
                 child: TextButton(
                   onPressed: () => Navigator.pop(sheetContext, false),
-                  child: const Text('Cancel'),
+                  child: Text(tr('Cancel')),
                 ),
               ),
             ],
@@ -500,7 +503,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             lockAspectRatio: true,
           ),
           IOSUiSettings(
-            title: 'Crop Profile Photo',
+            title: tr('Crop Profile Photo'),
             cropStyle: CropStyle.circle,
             aspectRatioLockEnabled: true,
             resetAspectRatioEnabled: false,
@@ -525,7 +528,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             final previewDark = Theme.of(context).brightness == Brightness.dark;
             return AlertDialog(
               backgroundColor: previewDark
-                  ? const Color(0xFF1E293B)
+                  ? const Color(0xFF222222)
                   : Colors.white,
               surfaceTintColor: Colors.transparent,
               insetPadding: const EdgeInsets.symmetric(horizontal: 20),
@@ -537,7 +540,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Preview Photo',
+                    tr('Preview Photo'),
                     style: GoogleFonts.spaceGrotesk(
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
@@ -545,7 +548,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'This is how your profile photo will appear.',
+                    tr('This is how your profile photo will appear.'),
                     textAlign: TextAlign.center,
                     style: GoogleFonts.inter(
                       fontSize: 11.5,
@@ -581,7 +584,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        uploadError!,
+                        tr(uploadError!),
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
                           fontSize: 11,
@@ -599,7 +602,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ? null
                           : () => Navigator.pop(dialogContext, ''),
                       icon: const Icon(Icons.photo_library_outlined, size: 18),
-                      label: const Text('Choose Another Photo'),
+                      label: Text(tr('Choose Another Photo')),
                       style: OutlinedButton.styleFrom(
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -649,7 +652,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                             )
                           : const Icon(Icons.cloud_upload_rounded, size: 19),
-                      label: Text(uploading ? 'Saving...' : 'Save Photo'),
+                      label: Text(tr(uploading ? 'Saving...' : 'Save Photo')),
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF2563EB),
                         foregroundColor: Colors.white,
@@ -664,7 +667,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onPressed: uploading
                         ? null
                         : () => Navigator.pop(dialogContext),
-                    child: const Text('Cancel'),
+                    child: Text(tr('Cancel')),
                   ),
                 ],
               ),
@@ -680,8 +683,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           () => _userProfile = {...?_userProfile, 'avatar_url': savedUrl},
         );
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Profile photo updated'),
+          SnackBar(
+            content: Text(tr('Profile photo updated')),
             backgroundColor: Color(0xFF10B981),
           ),
         );
@@ -690,7 +693,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error.toString().replaceFirst('Exception: ', '')),
+          content: Text(tr(error.toString().replaceFirst('Exception: ', ''))),
           backgroundColor: const Color(0xFFEF4444),
         ),
       );
@@ -711,18 +714,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final backgroundColor = isDark
-        ? const Color(0xFF0F172A)
+        ? const Color(0xFF181818)
         : const Color(0xFFF8FAFC);
     final primaryTextColor = isDark ? Colors.white : const Color(0xFF0F172A);
     final secondaryTextColor = isDark
-        ? const Color(0xFF94A3B8)
+        ? const Color(0xFFA0A0A0)
         : const Color(0xFF64748B);
-    final cardColor = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final cardColor = isDark ? const Color(0xFF222222) : Colors.white;
     final borderColor = isDark
-        ? const Color(0xFF334155)
+        ? const Color(0xFF333333)
         : const Color(0xFFE2E8F0);
     final avatarUrl = _userProfile?['avatar_url']?.toString();
-    final hasAvatar = avatarUrl != null && avatarUrl.startsWith('http');
+    final avatar = avatarImage(avatarUrl);
+    final hasAvatar = avatar != null;
 
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -730,7 +734,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         backgroundColor: backgroundColor,
         foregroundColor: primaryTextColor,
         title: Text(
-          'My Profile',
+          tr('My Profile'),
           style: GoogleFonts.spaceGrotesk(
             fontWeight: FontWeight.w800,
             fontSize: 20,
@@ -770,7 +774,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'Profile unavailable',
+                        tr('Profile unavailable'),
                         style: GoogleFonts.spaceGrotesk(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
@@ -779,7 +783,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Check your connection and try again.',
+                        tr('Check your connection and try again.'),
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
                           fontSize: 12,
@@ -790,7 +794,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       FilledButton.icon(
                         onPressed: _loadProfile,
                         icon: const Icon(Icons.refresh_rounded, size: 18),
-                        label: const Text('Try Again'),
+                        label: Text(tr('Try Again')),
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF2563EB),
                           foregroundColor: Colors.white,
@@ -808,8 +812,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ),
             )
-          : RefreshIndicator(
-              color: const Color(0xFF2563EB),
+          : BrandRefresh(
               onRefresh: _loadProfile,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -818,118 +821,132 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                      clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
                         color: cardColor,
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: BorderRadius.circular(24),
                         border: Border.all(color: borderColor),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withValues(
-                              alpha: isDark ? 0.18 : 0.04,
-                            ),
-                            blurRadius: 18,
+                            color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.05),
+                            blurRadius: 20,
                             offset: const Offset(0, 8),
                           ),
                         ],
                       ),
                       child: Column(
                         children: [
-                          Stack(
-                            children: [
-                              GestureDetector(
-                                onTap: _showAvatarUploadDialog,
-                                child: CircleAvatar(
-                                  radius: 52,
-                                  backgroundColor: const Color(
-                                    0xFF2563EB,
-                                  ).withValues(alpha: isDark ? 0.22 : 0.1),
-                                  backgroundImage: hasAvatar
-                                      ? NetworkImage(avatarUrl)
-                                      : null,
-                                  child: !hasAvatar
-                                      ? Text(
-                                          (_userProfile!['name'] ?? 'U')[0]
-                                              .toUpperCase(),
-                                          style: GoogleFonts.spaceGrotesk(
-                                            fontSize: 38,
-                                            fontWeight: FontWeight.w800,
-                                            color: isDark
-                                                ? const Color(0xFF60A5FA)
-                                                : const Color(0xFF2563EB),
-                                          ),
-                                        )
-                                      : null,
-                                ),
-                              ),
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: InkWell(
-                                  onTap: _showAvatarUploadDialog,
-                                  borderRadius: BorderRadius.circular(20),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF2563EB),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: cardColor,
-                                        width: 3,
-                                      ),
+                          // A banner in the app's blue, cyan and purple, with the photo resting on its edge.
+                          SizedBox(
+                            height: 150,
+                            child: Stack(
+                              alignment: Alignment.topCenter,
+                              children: [
+                                Container(
+                                  height: 92,
+                                  decoration: const BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [Color(0xFF2563EB), Color(0xFF06B6D4), Color(0xFF8B5CF6)],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
                                     ),
-                                    child: const Icon(
-                                      Icons.camera_alt_rounded,
-                                      color: Colors.white,
-                                      size: 17,
+                                  ),
+                                  child: Stack(
+                                    children: [
+                                      Positioned(right: -24, top: -30, child: _bubble(110, .16)),
+                                      Positioned(left: -18, bottom: -36, child: _bubble(90, .12)),
+                                      Positioned(left: 70, top: 12, child: _bubble(18, .22)),
+                                    ],
+                                  ),
+                                ),
+                                Positioned(
+                                  top: 38,
+                                  child: Stack(
+                                    children: [
+                                      GestureDetector(
+                                        onTap: _showAvatarUploadDialog,
+                                        child: Container(
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: BoxDecoration(color: cardColor, shape: BoxShape.circle),
+                                          child: CircleAvatar(
+                                            radius: 52,
+                                            backgroundColor: isDark ? const Color(0xFF2D2D2D) : const Color(0xFFEFF6FF),
+                                            backgroundImage: avatar,
+                                            onBackgroundImageError: hasAvatar ? (error, stack) {} : null,
+                                            child: !hasAvatar
+                                                ? Text(
+                                                    tr((_userProfile!['name'] ?? 'U')[0].toUpperCase()),
+                                                    style: GoogleFonts.spaceGrotesk(
+                                                      fontSize: 38,
+                                                      fontWeight: FontWeight.w800,
+                                                      color: isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB),
+                                                    ),
+                                                  )
+                                                : null,
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        bottom: 4,
+                                        right: 4,
+                                        child: Semantics(
+                                          button: true,
+                                          label: tr('Change profile photo'),
+                                          child: InkWell(
+                                            onTap: _showAvatarUploadDialog,
+                                            borderRadius: BorderRadius.circular(20),
+                                            child: Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF2563EB),
+                                                shape: BoxShape.circle,
+                                                border: Border.all(color: cardColor, width: 3),
+                                              ),
+                                              child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 17),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 6, 20, 20),
+                            child: Column(
+                              children: [
+                                Text(
+                                  tr(_userProfile!['name'] ?? 'User'),
+                                  textAlign: TextAlign.center,
+                                  style: GoogleFonts.spaceGrotesk(fontSize: 23, fontWeight: FontWeight.w800, color: primaryTextColor),
+                                ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        const Color(0xFF2563EB).withValues(alpha: isDark ? 0.28 : 0.12),
+                                        const Color(0xFF8B5CF6).withValues(alpha: isDark ? 0.28 : 0.12),
+                                      ],
+                                    ),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    tr((_userProfile!['role'] ?? 'User').toString().toUpperCase()),
+                                    style: GoogleFonts.inter(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB),
+                                      letterSpacing: 0.6,
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          Text(
-                            _userProfile!['name'] ?? 'User',
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.spaceGrotesk(
-                              fontSize: 23,
-                              fontWeight: FontWeight.w800,
-                              color: primaryTextColor,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(
-                                0xFF2563EB,
-                              ).withValues(alpha: isDark ? 0.2 : 0.1),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              (_userProfile!['role'] ?? 'User')
-                                  .toString()
-                                  .toUpperCase(),
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                color: isDark
-                                    ? const Color(0xFF93C5FD)
-                                    : const Color(0xFF2563EB),
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            'Tap the photo to update it',
-                            style: GoogleFonts.inter(
-                              fontSize: 11,
-                              color: secondaryTextColor,
+                                const SizedBox(height: 10),
+                                Text(tr('Tap the photo to update it'), style: GoogleFonts.inter(fontSize: 11, color: secondaryTextColor)),
+                              ],
                             ),
                           ),
                         ],
@@ -940,28 +957,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 18),
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(
                         color: cardColor,
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(22),
                         border: Border.all(color: borderColor),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04), blurRadius: 18, offset: const Offset(0, 8)),
+                        ],
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'ACCOUNT DETAILS',
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: secondaryTextColor,
-                              letterSpacing: 0.8,
-                            ),
+                          Row(
+                            children: [
+                              Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981).withValues(alpha: isDark ? 0.2 : 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.person_outline_rounded, size: 18, color: Color(0xFF10B981)),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                tr('Account details'),
+                                style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w800, color: primaryTextColor),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 14),
                           _buildInfoRow(
                             icon: Icons.email_rounded,
-                            label: 'Email Address',
+                            label: tr('Email Address'),
                             value: _userProfile!['email'] ?? 'N/A',
                             trailing: Container(
                               padding: const EdgeInsets.symmetric(
@@ -984,7 +1013,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
-                                    'Verified',
+                                    tr('Verified'),
                                     style: GoogleFonts.inter(
                                       fontSize: 11,
                                       fontWeight: FontWeight.bold,
@@ -995,16 +1024,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                             ),
                           ),
-                          const Divider(height: 24),
+                          Divider(height: 24, color: borderColor),
                           _buildInfoRow(
                             icon: Icons.badge_rounded,
-                            label: 'Account ID',
+                            label: tr('Account ID'),
                             value: _userProfile!['code'] ?? 'N/A',
                           ),
-                          const Divider(height: 24),
+                          Divider(height: 24, color: borderColor),
                           _buildInfoRow(
                             icon: Icons.lock_outline_rounded,
-                            label: 'Password',
+                            label: tr('Password'),
                             value: '••••••••',
                             trailing: OutlinedButton(
                               onPressed: _showChangePasswordDialog,
@@ -1017,16 +1046,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
-                              child: const Text(
-                                'Change',
+                              child: Text(
+                                tr('Change'),
                                 style: TextStyle(fontSize: 12),
                               ),
                             ),
                           ),
-                          const Divider(height: 24),
+                          Divider(height: 24, color: borderColor),
                           _buildInfoRow(
                             icon: Icons.shield_rounded,
-                            label: 'Account Status',
+                            label: tr('Account Status'),
                             value: _userProfile!['status'] ?? 'Active',
                             trailing: Container(
                               padding: const EdgeInsets.symmetric(
@@ -1044,7 +1073,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Text(
-                                _userProfile!['status'] ?? 'Active',
+                                tr(_userProfile!['status'] ?? 'Active'),
                                 style: GoogleFonts.inter(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
@@ -1056,10 +1085,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                             ),
                           ),
-                          const Divider(height: 24),
+                          Divider(height: 24, color: borderColor),
                           _buildInfoRow(
                             icon: Icons.history_rounded,
-                            label: 'Last Login',
+                            label: tr('Last Login'),
                             value: _formatTimestamp(
                               _userProfile!['last_login_at'],
                             ),
@@ -1074,6 +1103,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _bubble(double size, double alpha) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(color: Colors.white.withValues(alpha: alpha), shape: BoxShape.circle),
+      );
+
   Widget _buildInfoRow({
     required IconData icon,
     required String label,
@@ -1082,7 +1117,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final secondaryTextColor = isDark
-        ? const Color(0xFF94A3B8)
+        ? const Color(0xFFA0A0A0)
         : const Color(0xFF64748B);
     return Row(
       children: [
@@ -1090,9 +1125,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: const Color(
-              0xFF2563EB,
-            ).withValues(alpha: isDark ? 0.16 : 0.07),
+            // A grey tile in the dark theme (never a navy one), a light blue one in the light theme.
+            color: isDark ? const Color(0xFF2D2D2D) : const Color(0xFF2563EB).withValues(alpha: 0.07),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -1107,7 +1141,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                label,
+                tr(label),
                 style: GoogleFonts.inter(
                   fontSize: 11,
                   color: secondaryTextColor,
@@ -1116,7 +1150,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                value,
+                tr(value),
                 style: GoogleFonts.inter(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -1138,10 +1172,10 @@ class _ProfileSkeleton extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final baseColor = isDark
-        ? const Color(0xFF1E293B)
+        ? const Color(0xFF222222)
         : const Color(0xFFE2E8F0);
     final accentColor = isDark
-        ? const Color(0xFF334155)
+        ? const Color(0xFF333333)
         : const Color(0xFFF1F5F9);
 
     Widget block({

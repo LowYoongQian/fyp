@@ -1039,8 +1039,8 @@ const campusNight = () => {
 
 /** The sign-in page while it, or the saved-session check, is loading: the real card's shape (logo, title, two fields, buttons, portal switch) and nothing from the signed-in app. */
 export const ShimmerLogin: React.FC = () => (
-  <div className={`flex min-h-screen flex-col items-center justify-center px-4 py-12 sm:px-6 lg:px-8 ${campusNight() ? 'bg-gradient-to-b from-slate-950 via-indigo-950 to-slate-900' : 'bg-gradient-to-b from-sky-400 via-sky-200 to-emerald-100'} dark:bg-gradient-to-b dark:from-slate-950 dark:via-indigo-950 dark:to-slate-900`}>
-    <LoadingRegion label="Loading sign-in…" outerClassName="w-full max-w-md" className="uipro-card w-full space-y-6 border border-white/60 bg-white/85 backdrop-blur-xl dark:border-slate-800/60 dark:bg-slate-900/85">
+  <div className={`flex min-h-screen flex-col items-center justify-start px-4 pb-8 pt-[clamp(3.5rem,12vh,7rem)] sm:justify-center sm:px-6 sm:py-12 lg:px-8 ${campusNight() ? 'bg-gradient-to-b from-slate-950 via-indigo-950 to-slate-900' : 'bg-gradient-to-b from-sky-400 via-sky-200 to-emerald-100'} dark:bg-gradient-to-b dark:from-slate-950 dark:via-indigo-950 dark:to-slate-900`}>
+    <LoadingRegion label="Loading sign-in…" outerClassName="w-full max-w-md" className="uipro-card login-card w-full space-y-6">
       <div className="flex flex-col items-center space-y-3">
         <div className="shimmer-placeholder h-36 w-36 rounded-full sm:h-44 sm:w-44 md:h-48 md:w-48" />
         <ShimmerText width="w-72 max-w-full" height="h-8" />

@@ -1,3 +1,4 @@
+import '../i18n/tr.dart';
 // Dates below are campus calendar values, not timestamps to convert to device time.
 DateTime calendarDate(DateTime value) =>
     DateTime.utc(value.year, value.month, value.day);
@@ -38,4 +39,19 @@ SemesterWindow? sharedSemester(List<Map<String, dynamic>> schedule) {
     result = term;
   }
   return result;
+}
+
+/// The Mondays the week picker offers: only the weeks of the semester the classes belong to (a 5-week semester
+/// gives 5). Without semester dates there are none, and the picker says no timetable is available.
+List<DateTime> pickerWeeks(SemesterWindow? term) =>
+    term == null ? const [] : [for (var i = 0; i < term.weeks; i++) term.firstMonday.add(Duration(days: 7 * i))];
+
+/// "This week", "Next week", "Last week" or "Week of 3 Nov" for a week without semester numbering.
+String relativeWeekLabel(DateTime monday, DateTime thisMonday) {
+  return switch (calendarDate(monday).difference(calendarDate(thisMonday)).inDays ~/ 7) {
+    0 => tr('This week'),
+    1 => tr('Next week'),
+    -1 => tr('Last week'),
+    _ => tr('Week of {date}', {'date': dayMonth(monday)}),
+  };
 }

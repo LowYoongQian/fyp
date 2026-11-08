@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { apiService } from '../../services/api';
 import { BookOpen, MessageSquareCode, Send, Sparkles, UserRound, UsersRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { TextShimmer } from '../../components/loading-ui/text-shimmer';
+import { ThinkingBar } from '../../components/loading-ui/thinking-bar';
 import { InfinityLoop } from '../../components/loading-ui/infinity';
 import { ChatWorkspace, type ChatTab } from '../../components/ChatWorkspace';
 import { CHAT_STARTERS, rankChatSuggestions } from '../../utils/chatSuggestions';
@@ -189,7 +189,6 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
   const finishGreeting = useCallback(() => setGreeting('done'), []);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [loadingStatus, setLoadingStatus] = useState('Sending...');
   const [sessionId, setSessionId] = useState<string>(tab.sessionId || '');
   const [historyLoading, setHistoryLoading] = useState(restoring);
   const [historyError, setHistoryError] = useState(false);
@@ -214,7 +213,6 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
   const lastFollowedIdRef = useRef<string | undefined>(undefined);
   const prependRef = useRef<{ height: number; top: number } | null>(null);
   const loadingOlderRef = useRef(false);
-  const statusTimersRef = useRef<number[]>([]);
   const messageIdRef = useRef(0);
 
   // Only this thread's own questions steer its chips, so no other chat, tab or temporary conversation can influence them.
@@ -349,7 +347,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; requestRef.current?.abort(); statusTimersRef.current.forEach(window.clearTimeout); };
+    return () => { mountedRef.current = false; requestRef.current?.abort(); };
   }, []);
 
   const handleSend = async (questionText: string) => {
@@ -360,14 +358,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
     requestRef.current = controller;
     if (!messages.some(message => message.sender === 'user')) titleRef.current = questionText.trim();
     update(titleRef.current, sessionId || undefined);
-    statusTimersRef.current.forEach(window.clearTimeout);
-    setLoadingStatus('Sending...');
     setSending(true);
-    statusTimersRef.current = [
-      window.setTimeout(() => setLoadingStatus('Thinking...'), 500),
-      window.setTimeout(() => setLoadingStatus('Checking data...'), 1800),
-      window.setTimeout(() => setLoadingStatus('Writing answer...'), 4500),
-    ];
     
     // Add user message
     messageIdRef.current += 1;
@@ -411,8 +402,6 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
       };
       setMessages(prev => [...prev, systemMsg]);
     } finally {
-      statusTimersRef.current.forEach(window.clearTimeout);
-      statusTimersRef.current = [];
       sendingRef.current = false;
       if (mountedRef.current) setSending(false);
     }
@@ -494,24 +483,12 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
         })}
         {greeting === 'typing' && !historyLoading && <TypingIndicator />}
         {sending && (
-          <div className="flex items-center gap-3 mr-auto text-left max-w-[80%]" aria-live="polite">
+          <div className="flex items-center gap-3 mr-auto text-left max-w-[80%]">
             <div className="h-8 w-8 rounded-full shrink-0 flex items-center justify-center border border-brand-blue/10 bg-brand-blue-light text-brand-blue font-sans font-bold text-[10px] shadow-sm">
               AI
             </div>
-            <div className="min-w-40 rounded-2xl rounded-tl-none border border-slate-100 bg-white px-4 py-3 shadow-sm">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={loadingStatus}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.2, ease: 'easeOut' }}
-                >
-                  <TextShimmer className="text-xs font-semibold text-slate-500">
-                    {loadingStatus}
-                  </TextShimmer>
-                </motion.div>
-              </AnimatePresence>
+            <div className="rounded-2xl rounded-tl-none border border-slate-100 bg-white px-4 py-3 shadow-sm">
+              <ThinkingBar />
             </div>
           </div>
         )}

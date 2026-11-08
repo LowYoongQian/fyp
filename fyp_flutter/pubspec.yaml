@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   google_fonts: ^6.1.0
   http: ^1.1.0
   camera: ^0.12.0+1
@@ -44,3 +46,5 @@ flutter_launcher_icons:
   # 所以前景图内容要收在中间安全区，用的是缩小版那张
   adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+
+  adaptive_icon_foreground_inset: 0

@@ -28,17 +28,27 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     );
-    if (widget.isLoading) _controller.repeat();
+
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateAnimation();
+  }
+
+  void _updateAnimation() {
+    if (widget.isLoading && !MediaQuery.disableAnimationsOf(context)) {
+      if (!_controller.isAnimating) _controller.repeat();
+    } else {
+      _controller.stop();
+    }
   }
 
   @override
   void didUpdateWidget(ShimmerLoading oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isLoading && !_controller.isAnimating) {
-      _controller.repeat();
-    } else if (!widget.isLoading && _controller.isAnimating) {
-      _controller.stop();
-    }
+    _updateAnimation();
   }
 
   @override
@@ -49,16 +59,16 @@ class _ShimmerLoadingState extends State<ShimmerLoading>
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.isLoading) {
+    if (!widget.isLoading || MediaQuery.disableAnimationsOf(context)) {
       return widget.child;
     }
 
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final shimmerColors = isDarkMode
         ? [
-            const Color(0xFF1E293B),
-            const Color(0xFF334155),
-            const Color(0xFF1E293B),
+            const Color(0xFF222222),
+            const Color(0xFF333333),
+            const Color(0xFF222222),
           ]
         : [
             Colors.grey.shade300,
@@ -98,8 +108,8 @@ class ShimmerSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final baseColor = isDarkMode ? const Color(0xFF1E293B) : Colors.grey.shade300;
-    final accentColor = isDarkMode ? const Color(0xFF334155) : Colors.grey.shade400;
+    final baseColor = isDarkMode ? const Color(0xFF222222) : Colors.grey.shade300;
+    final accentColor = isDarkMode ? const Color(0xFF333333) : Colors.grey.shade400;
 
     return SingleChildScrollView(
       physics: const NeverScrollableScrollPhysics(),
@@ -216,6 +226,70 @@ class ShimmerSkeleton extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------
+// SHIMMER SKELETON PRESET: the staff dashboard (header, profile card with three counts, tabs, class cards)
+// -----------------------------------------------------------------
+class ShimmerStaffSkeleton extends StatelessWidget {
+  const ShimmerStaffSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final base = dark ? const Color(0xFF222222) : Colors.grey.shade300;
+    Widget box(double w, double h, {double r = 8}) =>
+        Container(width: w, height: h, decoration: BoxDecoration(color: base, borderRadius: BorderRadius.circular(r)));
+    // The shimmer paints everything it covers in one sweep, so the shapes are drawn directly (no filled panels behind them).
+    Widget panel(Widget child) => Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: child);
+    Widget classCard() => panel(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            box(38, 38, r: 11),
+            const SizedBox(width: 11),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [box(140, 12), const SizedBox(height: 6), box(100, 10)])),
+            box(70, 22, r: 20),
+          ]),
+          const SizedBox(height: 12),
+          box(160, 10),
+          const SizedBox(height: 12),
+          Row(children: [Expanded(child: box(0, 40, r: 20)), const SizedBox(width: 8), Expanded(child: box(0, 40, r: 20))]),
+        ]));
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          box(36, 36, r: 10),
+          const SizedBox(width: 10),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [box(96, 12), const SizedBox(height: 6), box(130, 8)]),
+          const Spacer(),
+          for (var i = 0; i < 3; i++) Padding(padding: const EdgeInsets.only(left: 8), child: box(34, 34, r: 10)),
+        ]),
+        const SizedBox(height: 18),
+        panel(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(width: 56, height: 56, decoration: BoxDecoration(color: base, shape: BoxShape.circle)),
+            const SizedBox(width: 14),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [box(80, 10), const SizedBox(height: 7), box(120, 16), const SizedBox(height: 7), box(150, 10)]),
+          ]),
+          const SizedBox(height: 14),
+          Row(children: [box(80, 24, r: 20), const SizedBox(width: 6), box(120, 24, r: 20)]),
+          const SizedBox(height: 14),
+          Row(children: [
+            for (var i = 0; i < 3; i++) ...[if (i > 0) const SizedBox(width: 8), Expanded(child: box(0, 62, r: 14))],
+          ]),
+        ])),
+        const SizedBox(height: 16),
+        box(double.infinity, 46, r: 14),
+        const SizedBox(height: 18),
+        classCard(),
+        const SizedBox(height: 18),
+        box(150, 14),
+        const SizedBox(height: 12),
+        classCard(),
+      ]),
     );
   }
 }

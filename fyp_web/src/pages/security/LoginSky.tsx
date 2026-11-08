@@ -4,13 +4,16 @@ import type { AuroraEpisode, ConstellationPattern } from './loginSkyData';
 // Decorative login-sky artwork. Every piece is aria-hidden and pointer-transparent; the parent positions and animates it.
 type Palette = { stop1: string; stop2: string; stop3: string; ring1: string; ring2: string };
 
-/** Night-side shading, a lit rim and a soft atmosphere shared by every round body. */
-const SphereShading: React.FC<{ id: string; r: number; rim: string }> = ({ id, r, rim }) => (
+/** The light on the scene, as the direction it comes from (x, y; y is negative from above). Bodies, clouds and the land all share it. */
+export type LightDirection = { lx: number; ly: number };
+
+/** Night-side shading and a lit rim shared by every round body; the bright side faces the light and the dark side turns away from it. */
+const SphereShading: React.FC<{ id: string; r: number; rim: string } & LightDirection> = ({ id, r, rim, lx, ly }) => (
   <>
     <circle r={r} fill={`url(#${id}-shade)`} />
-    <circle r={r - 0.6} fill="none" stroke={rim} strokeWidth="1.2" opacity="0.45" strokeDasharray={`${r * 2.2} ${r * 10}`} strokeDashoffset={-r * 2.9} strokeLinecap="round" />
+    <circle r={r - 0.6} fill="none" stroke={rim} strokeWidth="1.2" opacity="0.45" strokeDasharray={`${r * 2.2} ${r * 10}`} strokeLinecap="round" transform={`rotate(${Math.round(Math.atan2(ly, lx) * 180 / Math.PI - 63)})`} />
     <defs>
-      <radialGradient id={`${id}-shade`} cx="32%" cy="30%" r="80%">
+      <radialGradient id={`${id}-shade`} cx={`${50 + lx * 20}%`} cy={`${50 + ly * 20}%`} r="80%">
         <stop offset="0%" stopColor="#fff" stopOpacity="0.28" />
         <stop offset="35%" stopColor="#fff" stopOpacity="0" />
         <stop offset="68%" stopColor="#020617" stopOpacity="0.25" />
@@ -20,10 +23,10 @@ const SphereShading: React.FC<{ id: string; r: number; rim: string }> = ({ id, r
   </>
 );
 
-export const PlanetBody: React.FC<{ id: string; kind: 'saturn' | 'ice_giant' | 'crimson_planet' | 'crater_moonlet'; pal: Palette; tilt: number }> = ({ id, kind, pal, tilt }) => {
+export const PlanetBody: React.FC<{ id: string; kind: 'saturn' | 'ice_giant' | 'crimson_planet' | 'crater_moonlet'; pal: Palette; tilt: number } & LightDirection> = ({ id, kind, pal, tilt, lx, ly }) => {
   const r = kind === 'crater_moonlet' ? 15 : kind === 'saturn' ? 20 : 19;
   const base = (
-    <radialGradient id={`${id}-base`} cx="38%" cy="34%" r="70%">
+    <radialGradient id={`${id}-base`} cx={`${50 + lx * 12}%`} cy={`${50 + ly * 16}%`} r="70%">
       <stop offset="0%" stopColor={kind === 'crater_moonlet' ? '#e2e8f0' : pal.stop1} />
       <stop offset="55%" stopColor={kind === 'crater_moonlet' ? '#94a3b8' : pal.stop2} />
       <stop offset="100%" stopColor={kind === 'crater_moonlet' ? '#475569' : pal.stop3} />
@@ -61,13 +64,13 @@ export const PlanetBody: React.FC<{ id: string; kind: 'saturn' | 'ice_giant' | '
           {kind === 'crater_moonlet' && [[-5, -4, 3.2], [5, 3, 2.6], [-1, 8, 2], [7, -7, 1.6]].map(([cx, cy, cr]) => (
             <g key={`${cx}${cy}`}>
               <circle cx={cx} cy={cy} r={cr} fill="#334155" opacity="0.35" />
-              <circle cx={cx + cr * 0.25} cy={cy + cr * 0.25} r={cr * 0.8} fill="none" stroke="#f1f5f9" strokeWidth="0.6" opacity="0.35" />
+              <circle cx={cx - lx * cr * 0.25} cy={cy - ly * cr * 0.25} r={cr * 0.8} fill="none" stroke="#f1f5f9" strokeWidth="0.6" opacity="0.35" />
             </g>
           ))}
-          {/* The ring's shadow falling across the body. */}
-          {ring && ring.inner > 0 && <ellipse cx="0" cy="3" rx={ring.rx} ry={ring.ry * 0.6} fill="none" stroke="#020617" strokeWidth="2.2" opacity="0.3" />}
+          {/* The ring's shadow falling across the body, away from the light. */}
+          {ring && ring.inner > 0 && <ellipse cx={-lx * 2.5} cy={3 - ly * 2.5} rx={ring.rx} ry={ring.ry * 0.6} fill="none" stroke="#020617" strokeWidth="2.2" opacity="0.3" />}
         </g>
-        <SphereShading id={id} r={r} rim={kind === 'crater_moonlet' ? '#f8fafc' : pal.ring1} />
+        <SphereShading id={id} r={r} rim={kind === 'crater_moonlet' ? '#f8fafc' : pal.ring1} lx={lx} ly={ly} />
         {ringHalf(true)}
       </g>
       <defs>
@@ -133,10 +136,10 @@ export const BlackHole: React.FC<{ id: string; tilt: number }> = ({ id, tilt }) 
 const CRATERS: [number, number, number][] = [[-12, -14, 5], [10, -4, 7], [-6, 10, 4], [14, 16, 3.5], [-20, 4, 3]];
 const MARIA: [number, number, number][] = [[-10, -10, 13], [12, -2, 11], [-2, 14, 9], [16, 16, 6]];
 
-/** A clean crescent cut from one disc; its glow comes from the container drop-shadow so it follows the lit edge. */
-export const CrescentMoon: React.FC = () => (
+/** A clean crescent cut from one disc; its glow comes from the container drop-shadow so it follows the lit edge. `litAngle` is the way the lit edge faces, in degrees clockwise from the right: toward the sun, which is just below the horizon. */
+export const CrescentMoon: React.FC<{ litAngle?: number }> = ({ litAngle = 156 }) => (
   <svg viewBox="-60 -60 120 120" className="h-full w-full overflow-visible" aria-hidden="true">
-    <g transform="rotate(-24)">
+    <g transform={`rotate(${litAngle - 180})`}>
       <g mask="url(#login-crescent)">
         <circle r="38" fill="url(#login-crescent-surface)" />
         {CRATERS.map(([x, y, r]) => <circle key={`${x}${y}`} cx={x - 8} cy={y} r={r * 0.7} fill="#d6cba8" opacity="0.35" />)}
@@ -189,17 +192,19 @@ export const FullMoon: React.FC = () => (
   </svg>
 );
 
-/** A soft cloud with a lit top and a cooler underside. */
-export const Cloud: React.FC<{ id: string; evening: boolean }> = ({ id, evening }) => {
+/** A soft cloud: the side facing the light is bright, the far side and the underside fall into a cooler shade. */
+export const Cloud: React.FC<{ id: string; lit: string; base: string; shade: string } & LightDirection> = ({ id, lit, base, shade, lx, ly }) => {
+  // Shade grows away from the light and always a little downward, since the sky lights the top of a cloud.
+  const sx = -lx, sy = 0.6 - ly, length = Math.hypot(sx, sy) || 1, dx = (sx / length) * 0.5, dy = (sy / length) * 0.5;
   return (
     <svg viewBox="0 0 120 60" className="h-full w-full overflow-visible" aria-hidden="true">
       <path fill={`url(#${id})`} d="M16 50 C6 50 3 41 11 36 C8 27 18 20 28 25 C31 13 47 8 57 16 C64 7 82 9 85 22 C96 20 106 29 102 39 C110 41 109 50 100 50 Z" />
-      <path fill="#fff" opacity={evening ? 0.35 : 0.5} d="M30 30 C33 20 46 15 55 22 C62 14 76 16 79 25 C70 22 63 26 60 31 C52 25 40 25 30 30 Z" />
+      <path fill={lit} opacity="0.6" transform={lx > 0 ? 'translate(120 0) scale(-1 1)' : undefined} d="M30 30 C33 20 46 15 55 22 C62 14 76 16 79 25 C70 22 63 26 60 31 C52 25 40 25 30 30 Z" />
       <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={evening ? '#fff7ed' : '#ffffff'} />
-          <stop offset="60%" stopColor={evening ? '#fed7aa' : '#f8fafc'} />
-          <stop offset="100%" stopColor={evening ? '#f9a8d4' : '#dbe4ef'} />
+        <linearGradient id={id} x1={0.5 - dx} y1={0.5 - dy} x2={0.5 + dx} y2={0.5 + dy}>
+          <stop offset="0%" stopColor={lit} />
+          <stop offset="55%" stopColor={base} />
+          <stop offset="100%" stopColor={shade} />
         </linearGradient>
       </defs>
     </svg>

@@ -4,7 +4,9 @@ import { ModalLayer } from '../../components/ModalLayer';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNotificationRecord } from '../../hooks/useNotificationRecord';
 import { apiService } from '../../services/api';
-import type { StudentFeedbackReport, MCReportItem } from '../../services/api';
+import type { StudentFeedbackReport, MCReportItem, FeedbackSeverity } from '../../services/api';
+import { AttachmentPreview } from '../../components/AttachmentPreview';
+import { ADMIN_STATUS, type FeedbackStatus } from '../../utils/feedbackStatus';
 import {
   MessageSquare,
   FileCheck,
@@ -120,6 +122,40 @@ function CustomDropdown<T extends string | number>({
   );
 }
 
+const SEVERITIES: FeedbackSeverity[] = ['Low', 'Medium', 'High', 'Urgent'];
+/** The moves still possible from each status: a report already In Progress offers no second Set In Progress, and a Completed one can only be reopened.
+ * Admins see Pending, In Progress and Completed; the stored status for Completed stays "Resolved". */
+const FEEDBACK_MOVES: Record<FeedbackStatus, { label: string; busyLabel: string; target: FeedbackStatus; tone: 'blue' | 'green' }[]> = {
+  'Pending': [{ label: 'Set In Progress', busyLabel: 'Setting…', target: 'In Progress', tone: 'blue' }, { label: 'Mark Completed', busyLabel: 'Completing…', target: 'Resolved', tone: 'green' }],
+  'In Progress': [{ label: 'Mark Completed', busyLabel: 'Completing…', target: 'Resolved', tone: 'green' }],
+  'Resolved': [{ label: 'Reopen', busyLabel: 'Reopening…', target: 'In Progress', tone: 'blue' }],
+};
+
+/** The admin's own severity for a report, as one choice of four (the same switch look as the teaching role in Academics). */
+function SeverityPicker({ value, onChange, error, note }: { value: FeedbackSeverity | ''; onChange: (next: FeedbackSeverity) => void; error: string; note: string }) {
+  const move = (event: React.KeyboardEvent) => {
+    const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = SEVERITIES[(Math.max(0, SEVERITIES.indexOf(value as FeedbackSeverity)) + step + SEVERITIES.length) % SEVERITIES.length];
+    onChange(next);
+    (event.currentTarget.querySelectorAll('[role=radio]')[SEVERITIES.indexOf(next)] as HTMLElement | undefined)?.focus();
+  };
+  return (
+    <fieldset id="feedback-severity" className="space-y-1.5">
+      <legend className="text-slate-400 font-medium">Severity (set by you)</legend>
+      <div role="radiogroup" aria-label="Severity" aria-describedby="feedback-severity-note" aria-invalid={!!error || undefined} onKeyDown={move}
+        className={`grid grid-cols-4 gap-1 rounded-xl border p-1 ${error ? 'border-rose-300 bg-rose-50/60 dark:border-rose-500/40 dark:bg-rose-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800'}`}>
+        {SEVERITIES.map((level, index) => (
+          <button key={level} type="button" role="radio" aria-checked={value === level} tabIndex={value === level || (!value && index === 0) ? 0 : -1} onClick={() => onChange(level)}
+            className={`rounded-lg px-2 py-2 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 ${value === level ? 'bg-white text-brand-blue shadow-sm dark:bg-slate-900 dark:text-blue-300' : 'text-slate-600 hover:text-slate-900 dark:text-slate-300'}`}>{level}</button>
+        ))}
+      </div>
+      <p id="feedback-severity-note" role={error ? 'alert' : undefined} className={error ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}>{error || note}</p>
+    </fieldset>
+  );
+}
+
 interface ReportsManagerProps {
   activeSubTab?: 'feedback' | 'mc';
 }
@@ -142,7 +178,12 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
   const [feedbackSearch, setFeedbackSearch] = useState('');
   const [feedbackSnapshot, setFeedbackSnapshot] = useState<{ scope: string; report: StudentFeedbackReport } | null>(null);
   const [adminNoteInput, setAdminNoteInput] = useState('');
-  const [updatingFeedbackId, setUpdatingFeedbackId] = useState<string | null>(null);
+  const [feedbackAction, setFeedbackAction] = useState<{ id: string; label: string } | null>(null);   // what is being saved right now
+  const feedbackBusy = useRef(false);   // a ref, so a second click before the next render is still refused
+  const focusOnMount = useCallback((node: HTMLDivElement | null) => node?.focus(), []);   // a div ignores autoFocus; a stable ref runs once on mount
+  const feedbackOpener = useRef<HTMLElement | null>(null);   // the button that opened the dialog, so focus can go back to it
+  const [severityInput, setSeverityInput] = useState<FeedbackSeverity | ''>('');
+  const [severityError, setSeverityError] = useState('');
 
   // MC Report State
   const [mcStatusFilter, setMcStatusFilter] = useState('All');
@@ -189,6 +230,8 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
   const setSelectedMc = (report: MCReportItem | null) => setMcSnapshot(report ? { scope, report } : null);
   const selectedFeedback = feedbackSnapshot?.scope === scope ? feedbackList.find(row => row.id === feedbackSnapshot.report.id) || feedbackSnapshot.report : null;
   const selectedMc = mcSnapshot?.scope === scope ? mcList.find(row => row.id === mcSnapshot.report.id && row.source === mcSnapshot.report.source) || mcSnapshot.report : null;
+  const feedbackBusyNow = !!selectedFeedback && feedbackAction?.id === selectedFeedback.id;
+  const feedbackDirty = !!selectedFeedback && (adminNoteInput !== (selectedFeedback.student_response || '') || (!!severityInput && severityInput !== (selectedFeedback.priority || '')));
   const proofId = selectedMc?.id;
   const proofSource = selectedMc?.source;
   const proofMime = selectedMc?.file_type;
@@ -219,23 +262,44 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
     };
   }, [proofId, proofSource, proofMime, legacyProof]);
 
-  const handleUpdateFeedbackStatus = async (feedbackId: string, status: string) => {
-    if (updatingFeedbackId) return;
+  const openFeedback = (report: StudentFeedbackReport) => {
+    feedbackOpener.current = document.activeElement as HTMLElement | null;
+    setSelectedFeedback(report); setAdminNoteInput(report.student_response || ''); setSeverityInput(report.priority || ''); setSeverityError('');
+  };
+  const closeFeedback = () => {
+    setSelectedFeedback(null); setAdminNoteInput(''); setSeverityInput(''); setSeverityError('');
+    window.requestAnimationFrame(() => { if (feedbackOpener.current?.isConnected) feedbackOpener.current.focus(); });
+  };
+
+  /** One authorised request saves the severity and the status move together. On success the dialog closes first, then one toast follows. */
+  const saveFeedback = async (report: StudentFeedbackReport, target: FeedbackStatus, label: string) => {
+    if (feedbackBusy.current) return;
+    if (target !== report.status && report.status === 'Pending' && !report.priority && !severityInput) {
+      setSeverityError('Choose a severity before moving this report forward.');
+      document.querySelector<HTMLElement>('#feedback-severity [role=radio]')?.focus();
+      return;
+    }
+    feedbackBusy.current = true;
+    setFeedbackAction({ id: report.id, label });
     try {
-      setUpdatingFeedbackId(feedbackId);
-      const updated = await apiService.updateAdminFeedback(feedbackId, {
-        status,
-        student_response: adminNoteInput
+      const updated = await apiService.updateAdminFeedback(report.id, {
+        status: target, expected_status: report.status, priority: severityInput || undefined, student_response: adminNoteInput,
       });
-      setData(previous => ({ ...previous!, feedback: (previous?.feedback || []).map(row => row.id === feedbackId ? updated : row), mc: previous?.mc || [] }));
+      const leavesFilter = feedbackStatusFilter !== 'All' && updated.status !== feedbackStatusFilter;
+      setData(previous => ({ ...previous!, feedback: (previous?.feedback || []).flatMap(row => row.id !== report.id ? [row] : leavesFilter ? [] : [updated]),
+        total: leavesFilter ? Math.max(0, (previous?.total || 0) - 1) : previous?.total || 0, mc: previous?.mc || [] }));
+      closeFeedback();
       void loadData();
-      await swalSuccess('Status Updated', `Feedback report status marked as '${status}'.`);
-      setSelectedFeedback(null);
-      setAdminNoteInput('');
+      void (target !== report.status ? swalSuccess('Status Updated', `Feedback report status marked as '${ADMIN_STATUS[target]}'.`) : swalSuccess('Changes Saved', 'Your response and severity were saved.'));
     } catch (err) {
-      await swalError('Update Failed', apiErrorMessage(err, 'The response could not be saved. Please try again.'));
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const message = apiErrorMessage(err, 'The response could not be saved. Please try again.');
+      if (status === 409) void loadData();   // someone else changed it: the dialog now shows the latest status, and what was typed stays
+      if (status === 422 && /severity/i.test(message)) setSeverityError(message);
+      void swalError(status === 409 ? 'Report Changed' : 'Update Failed', message);
     } finally {
-      setUpdatingFeedbackId(null);
+      feedbackBusy.current = false;
+      setFeedbackAction(null);
     }
   };
 
@@ -318,7 +382,7 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 <CustomDropdown<string>
                   label="Status"
                   value={feedbackStatusFilter}
-                  options={['All', 'Pending', 'In Progress', 'Resolved']}
+                  options={[{ value: 'All', label: 'All' }, ...(['Pending', 'In Progress', 'Resolved'] as const).map(value => ({ value: value as string, label: ADMIN_STATUS[value] }))]}
                   onChange={(val: string) => setFeedbackStatusFilter(val)}
                 />
                 <CustomDropdown<string>
@@ -388,12 +452,12 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                             ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50'
                             : 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200/50 dark:border-amber-800/50'
                         }`}>
-                          {f.status}
+                          {ADMIN_STATUS[f.status as FeedbackStatus] ?? f.status}
                         </span>
                       </td>
                       <td className="py-4 px-4 text-right">
                         <button
-                          onClick={() => { setSelectedFeedback(f); setAdminNoteInput(f.student_response || ''); }}
+                          onClick={() => openFeedback(f)}
                           className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer"
                         >
                           <Eye className="h-3.5 w-3.5" /> View Report
@@ -500,18 +564,18 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
       {/* FEEDBACK DETAILS & ACTION MODAL */}
       {selectedFeedback && (
         <ModalLayer className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl animate-fade-in">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <div role="dialog" aria-modal="true" aria-labelledby="feedback-details-title" tabIndex={-1} ref={focusOnMount} className="outline-none bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full max-h-[92vh] flex flex-col overflow-hidden shadow-2xl animate-fade-in">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4">
+              <h3 id="feedback-details-title" className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <MessageSquare className="h-5 w-5 text-brand-blue" />
                 Feedback Details
               </h3>
-              <button onClick={() => setSelectedFeedback(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+              <button type="button" onClick={closeFeedback} aria-label="Close" className="flex h-9 w-9 items-center justify-center rounded-lg text-xl text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200">
                 &times;
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-4 text-xs">
               <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl">
                 <div>
                   <div className="font-bold text-slate-900 dark:text-white text-sm">{selectedFeedback.student_name}</div>
@@ -526,16 +590,6 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 <div className="mb-3"><span className="block mb-2 text-slate-400">Submitted</span><SubmissionTime value={selectedFeedback.created_at} /></div>
                 <label className="text-slate-400 font-medium">Subject</label>
                 <div className="font-semibold text-slate-800 dark:text-slate-200 text-sm mt-0.5">{selectedFeedback.subject}</div>
-                <p>Priority: {selectedFeedback.priority || 'Medium'}</p>
-                {selectedFeedback.attachment_name && <button type="button" className="text-blue-600 underline" onClick={async () => {
-                  try {
-                    const blob = await apiService.downloadFeedbackAttachment(selectedFeedback.id, true);
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url; link.download = selectedFeedback.attachment_name || 'attachment'; link.click();
-                    setTimeout(() => URL.revokeObjectURL(url), 1000);
-                  } catch { swalError('Download Failed', 'Please try again.'); }
-                }}>Download {selectedFeedback.attachment_name}</button>}
               </div>
 
               <div>
@@ -545,10 +599,20 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <span className="text-slate-400 font-medium">Attachment</span>
+                <AttachmentPreview key={selectedFeedback.id} name={selectedFeedback.attachment_name} type={selectedFeedback.attachment_type} load={signal => apiService.downloadFeedbackAttachment(selectedFeedback.id, true, signal)} />
+              </div>
+
+              <SeverityPicker value={severityInput} error={severityError}
+                onChange={level => { setSeverityInput(level); setSeverityError(''); }}
+                note={selectedFeedback.priority_set_at ? 'You set this. The student does not see it.' : selectedFeedback.status === 'Pending' ? 'Not set yet. Choose one before moving this report forward.' : 'Not set yet.'} />
+
               <div>
-                <label className="text-slate-400 font-medium">Response to Student (visible to the student)</label>
+                <label htmlFor="feedback-response" className="text-slate-400 font-medium">Response to Student (visible to the student)</label>
                 {selectedFeedback.admin_notes && <p className="my-2 whitespace-pre-wrap">Previous internal notes (admin only): {selectedFeedback.admin_notes}</p>}
                 <TextArea
+                  id="feedback-response"
                   rows={3}
                   value={adminNoteInput}
                   maxLength={5000}
@@ -559,22 +623,23 @@ export const ReportsManager: React.FC<ReportsManagerProps> = ({ activeSubTab = '
               </div>
             </div>
 
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                onClick={() => handleUpdateFeedbackStatus(selectedFeedback.id, 'In Progress')}
-                disabled={updatingFeedbackId === selectedFeedback.id}
-                className="px-4 py-2 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 hover:bg-blue-100 rounded-xl text-xs font-semibold transition-all"
-              >
-                Set In Progress
-              </button>
-              <button
-                onClick={() => handleUpdateFeedbackStatus(selectedFeedback.id, 'Resolved')}
-                disabled={updatingFeedbackId === selectedFeedback.id}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5"
-              >
-                <CheckCircle2 className="h-4 w-4" /> Mark Resolved
-              </button>
+            {/* Actions: only the moves that are still possible from the status the admin is looking at. */}
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800 px-6 py-4">
+              {feedbackDirty && (
+                <button type="button" onClick={() => void saveFeedback(selectedFeedback, selectedFeedback.status as FeedbackStatus, 'Saving…')} disabled={feedbackBusyNow} aria-busy={feedbackBusyNow && feedbackAction?.label === 'Saving…'}
+                  className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl text-xs font-semibold transition-all disabled:cursor-wait disabled:opacity-60">
+                  {feedbackBusyNow && feedbackAction?.label === 'Saving…' ? 'Saving…' : 'Save Changes'}
+                </button>
+              )}
+              {FEEDBACK_MOVES[selectedFeedback.status as FeedbackStatus]?.map(move => (
+                <button key={move.label} type="button" onClick={() => void saveFeedback(selectedFeedback, move.target, move.busyLabel)} disabled={feedbackBusyNow} aria-busy={feedbackBusyNow && feedbackAction?.label === move.busyLabel}
+                  className={move.tone === 'green'
+                    ? 'px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5 disabled:cursor-wait disabled:opacity-60'
+                    : 'px-4 py-2 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 hover:bg-blue-100 rounded-xl text-xs font-semibold transition-all disabled:cursor-wait disabled:opacity-60'}>
+                  {move.tone === 'green' && <CheckCircle2 className="h-4 w-4" />}
+                  {feedbackBusyNow && feedbackAction?.label === move.busyLabel ? move.busyLabel : move.label}
+                </button>
+              ))}
             </div>
           </div>
         </ModalLayer>

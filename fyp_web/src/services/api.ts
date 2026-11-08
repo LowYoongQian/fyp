@@ -175,6 +175,20 @@ export interface Enrolment {
   class_group: string;
 }
 
+export type LookupKind = 'students' | 'staff' | 'programmes' | 'courses';
+export type RecordKind = 'programmes' | 'courses' | 'assignments' | 'students';
+export type ProgrammeRecord = { id: string; code: string; name: string; student_count: number; course_count: number };
+export type CourseRecord = { id: string; course_code: string; course_name: string; credit_hours: number | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
+export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; role: string };
+export type StudentRecord = { id: string; name: string; student_code: string; programme_id: string | null; programme_code: string | null; programme_name: string | null;
+  enrolments: { id: string; course_id: string; course_code: string; course_name: string; class_group: string; semester_name: string | null; status: 'active' | 'upcoming' | 'ended' | 'undated' }[] };
+export type AllocationCheck = { groups: { group: string; count: number; full: boolean }[]; semester: AcademicSemester | null; course_credits: number | null; credits_used: number | null; credits_limit: number | null };
+export type LookupPage<T> = { items: T[]; has_more: boolean };
+export type LookupStudent = { id: string; name: string; student_code: string; email: string; programme_id: string | null; programme_code: string | null; current_enrolled: boolean };
+export type LookupStaff = { id: string; name: string; staff_id: string; email: string; role: string };
+export type LookupProgramme = { id: string; code: string; name: string };
+export type LookupCourse = { id: string; course_code: string; course_name: string; credit_hours: number | null; programme_id: string | null; semester_id: string | null; semester: AcademicSemester | null; enrolled: boolean };
+
 export interface Programme {
   id: number | string;
   name: string;
@@ -592,10 +606,12 @@ export const apiService = {
     const response = await api.post('/auth/login', { email, password, portal });
     return response.data;
   },
-  forgotPassword: async (studentId: string, schoolEmail: string) =>
-    (await api.post('/auth/forgot-password', { student_id: studentId, school_email: schoolEmail })).data,
+  forgotPassword: async (schoolEmail: string) =>
+    (await api.post('/auth/forgot-password', { school_email: schoolEmail }, { timeout: 15000 })).data,
+  checkResetToken: async (token: string) =>
+    (await api.post('/auth/reset-password/check', { token }, { timeout: 15000 })).data,
   resetPassword: async (token: string, newPassword: string) =>
-    (await api.post('/auth/reset-password', { token, new_password: newPassword })).data,
+    (await api.post('/auth/reset-password', { token, new_password: newPassword }, { timeout: 15000 })).data,
   requestRecoveryEmail: async (recoveryEmail: string) =>
     (await api.post('/auth/recovery-email/request', { recovery_email: recoveryEmail })).data,
   verifyRecoveryEmail: async (code: string) =>
@@ -764,6 +780,17 @@ export const apiService = {
     return response.data;
   },
 
+  // One small page of a server-side search for an admin picker (ACADEMIC-SEARCH-11). Never cached: every keystroke asks the server.
+  adminLookup: async <T,>(kind: LookupKind, params: Record<string, string | number | undefined>, signal?: AbortSignal): Promise<LookupPage<T>> =>
+    (await api.get(`/admin/lookup/${kind}`, { params, signal, timeout: 15000 })).data,
+
+  // One page of an Academic Manager tab's record list, searched and paged on the server (ACADEMIC-UX-12). Never cached.
+  adminRecords: async <T,>(kind: RecordKind, params: { search?: string; page: number; per_page: number }, signal?: AbortSignal): Promise<RecordPage<T>> =>
+    (await api.get(`/admin/records/${kind}`, { params, signal, timeout: 15000 })).data,
+  // The picked course's groups with real seat counts, and the chosen student's credits in its semester. Read only.
+  adminAllocationCheck: async (courseId: string, studentId: string | undefined, signal?: AbortSignal): Promise<AllocationCheck> =>
+    (await api.get('/admin/lookup/allocation', { params: { course_id: courseId, student_id: studentId || undefined }, signal, timeout: 15000 })).data,
+
   // Admin backend CRUD endpoints
   adminGetStudents: async (skip?: number, limit?: number, search?: string): Promise<{ items: AdminStudent[]; total: number }> => {
     return cachedGet('/admin/students', { skip, limit, search });
@@ -840,6 +867,8 @@ export const apiService = {
     (await api.post('/admin/semesters/rollover-preview', body, { signal })).data,
   adminSaveSemester: async (body: SemesterWrite, id?: string): Promise<AcademicSemester> =>
     (await (id ? api.put(`/admin/semesters/${id}`, body) : api.post('/admin/semesters', body))).data,
+  adminDeleteSemester: async (id: string): Promise<{ message: string; detached_courses: number }> =>
+    (await api.delete(`/admin/semesters/${id}`)).data,
   adminGetProgrammes: async (): Promise<Programme[]> => {
     return cachedGet('/admin/programmes');
   },
@@ -1026,10 +1055,18 @@ export const apiService = {
   studentGetAnnouncements: async (): Promise<Announcement[]> => {
     return cachedGet('/students/me/announcements');
   },
-  studentDownloadAnnouncementAttachment: async (announcementId: string | number): Promise<Blob> => {
-    const response = await api.get(`/students/me/announcements/${announcementId}/attachment`, { responseType: 'blob' });
+  studentDownloadAnnouncementAttachment: async (announcementId: string | number, signal?: AbortSignal): Promise<Blob> => {
+    const response = await api.get(`/students/me/announcements/${announcementId}/attachment`, { responseType: 'blob', signal });
     return response.data;
   },
+  /** A notice this staff member can see (including ones they did not write). */
+  lecturerDownloadAnnouncementAttachment: async (announcementId: string | number, signal?: AbortSignal): Promise<Blob> =>
+    (await api.get(`/lecturers/me/announcements/${announcementId}/attachment`, { responseType: 'blob', signal })).data,
+  /** The file on one of this lecturer's own course notices. */
+  lecturerDownloadCourseAnnouncementAttachment: async (announcementId: string | number, signal?: AbortSignal): Promise<Blob> =>
+    (await api.get(`/lecturers/me/course-announcements/${announcementId}/attachment`, { responseType: 'blob', signal })).data,
+  adminDownloadAnnouncementAttachment: async (announcementId: string | number, signal?: AbortSignal): Promise<Blob> =>
+    (await api.get(`/admin/announcements/${announcementId}/attachment`, { responseType: 'blob', signal })).data,
   lecturerGetAnnouncements: async (): Promise<Announcement[]> => {
     return cachedGet('/lecturers/me/announcements');
   },
@@ -1085,6 +1122,11 @@ export const apiService = {
     const response = await api.put('/auth/me/avatar', { avatar_url: avatarUrl });
     return response.data;
   },
+  uploadUserAvatar: async (file: Blob): Promise<{ avatar_url: string }> => {
+    const form = new FormData();
+    form.append('file', file, 'avatar');
+    return (await api.post('/auth/me/avatar/upload', form, { headers: { 'Content-Type': undefined } })).data;
+  },
   updateAdminProfile: async (data: { name: string; email: string; code: string }) => {
     const response = await api.put('/auth/me/admin-profile', data);
     return response.data;
@@ -1097,8 +1139,8 @@ export const apiService = {
   studentGetFeedback: async (signal?: AbortSignal): Promise<StudentFeedbackReport[]> => (await api.get('/students/me/feedback', { signal, timeout: 15000 })).data,
   studentCreateFeedback: async (data: FormData): Promise<StudentFeedbackReport> =>
     (await api.post('/students/me/feedback', data, { headers: { 'Content-Type': undefined } })).data,
-  downloadFeedbackAttachment: async (id: string, admin = false): Promise<Blob> =>
-    (await api.get(`${admin ? '/admin/reports' : '/students/me'}/feedback/${encodeURIComponent(id)}/attachment`, { responseType: 'blob' })).data,
+  downloadFeedbackAttachment: async (id: string, admin = false, signal?: AbortSignal): Promise<Blob> =>
+    (await api.get(`${admin ? '/admin/reports' : '/students/me'}/feedback/${encodeURIComponent(id)}/attachment`, { responseType: 'blob', signal })).data,
   getAdminFeedback: async (status?: string, category?: string, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (status && status !== 'All') params.append('status', status);
@@ -1106,7 +1148,7 @@ export const apiService = {
     const response = await api.get<StudentFeedbackReport[]>(`/admin/reports/feedback?${params.toString()}`, { signal, timeout: 15000 });
     return response.data;
   },
-  updateAdminFeedback: async (feedbackId: string, data: { status: string; admin_notes?: string; student_response?: string }) => {
+  updateAdminFeedback: async (feedbackId: string, data: { status: string; priority?: FeedbackSeverity; expected_status?: string; admin_notes?: string; student_response?: string }) => {
     const response = await api.put<StudentFeedbackReport>(`/admin/reports/feedback/${feedbackId}`, data);
     return response.data;
   },
@@ -1150,8 +1192,11 @@ export const apiService = {
   },
 };
 
+export type FeedbackSeverity = 'Low' | 'Medium' | 'High' | 'Urgent';
 export interface StudentFeedbackReport {
-  priority: 'Low' | 'Medium' | 'High' | 'Urgent';
+  /** The administrator's severity; null until a report is reviewed, and never sent to the student who wrote it. */
+  priority?: FeedbackSeverity | null;
+  priority_set_at?: string | null;
   attachment_name?: string | null;
   attachment_type?: string | null;
   id: string;

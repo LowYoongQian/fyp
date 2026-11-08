@@ -1,3 +1,4 @@
+import '../../i18n/tr.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../widgets/glass_card.dart';
@@ -35,7 +36,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void submit() {
+    if (widget.isSyncing) return;
     if (_formKey.currentState!.validate()) {
+      FocusScope.of(context).unfocus();
       widget.onLogin(
         _emailOrIdController.text.trim(),
         _passwordController.text.trim(),
@@ -49,9 +52,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final bool isStudent = widget.portalType == 'student';
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    final Color primaryColor = isStudent
-        ? const Color(0xFF2563EB)
-        : const Color(0xFF800000);
+    // One brand blue for both portals (the staff dashboard and notification center are blue too).
+    const Color primaryColor = Color(0xFF2563EB);
     final String portalTitle = isStudent ? "Student Login" : "Staff Login";
     final String idLabel = isStudent
         ? "School email"
@@ -64,17 +66,18 @@ class _LoginScreenState extends State<LoginScreen> {
         ? Colors.white
         : const Color(0xFF0F172A);
     final secondaryTextColor = isDarkMode
-        ? const Color(0xFF94A3B8)
+        ? const Color(0xFFA0A0A0)
         : const Color(0xFF64748B);
     final cardBgColor = isDarkMode
-        ? const Color(0xFF1E293B).withValues(alpha: 0.9)
+        ? const Color(0xFF222222).withValues(alpha: 0.9)
         : Colors.white.withValues(alpha: 0.85);
     final borderColor = isDarkMode
-        ? const Color(0xFF334155)
+        ? const Color(0xFF333333)
         : const Color(0xFFE2E8F0);
 
     return Center(
       child: SingleChildScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.symmetric(horizontal: 24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -83,7 +86,8 @@ class _LoginScreenState extends State<LoginScreen> {
             Row(
               children: [
                 IconButton(
-                  onPressed: widget.onBackPressed,
+                  onPressed: widget.isSyncing ? null : widget.onBackPressed,
+                  tooltip: tr('Back'),
                   icon: Icon(
                     Icons.arrow_back,
                     color: primaryTextColor,
@@ -101,12 +105,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(width: 12),
                 Icon(Icons.lock_outline, color: secondaryTextColor, size: 18),
                 const SizedBox(width: 8),
-                Text(
-                  portalTitle,
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: primaryTextColor,
+                Flexible(
+                  child: Text(
+                    tr(portalTitle),
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: primaryTextColor,
+                    ),
                   ),
                 ),
               ],
@@ -156,7 +162,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    portalTitle.toUpperCase(),
+                    tr(portalTitle.toUpperCase()),
                     style: GoogleFonts.spaceGrotesk(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -166,9 +172,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    isStudent
+                    tr(isStudent
                         ? "Secure Attendance Student Terminal"
-                        : "Attendance Gateway Administration Console",
+                        : "Attendance Gateway Administration Console"),
                     textAlign: TextAlign.center,
                     style: GoogleFonts.inter(
                       fontSize: 10,
@@ -183,130 +189,142 @@ class _LoginScreenState extends State<LoginScreen> {
 
             // Form container
             GlassCard(
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      idLabel,
-                      style: GoogleFonts.spaceGrotesk(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.bold,
-                        color: primaryTextColor,
+              child: AutofillGroup(
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        tr(idLabel),
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: primaryTextColor,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    TextFormField(
-                      controller: _emailOrIdController,
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: primaryTextColor,
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _emailOrIdController,
+                        enabled: !widget.isSyncing,
+                        autofillHints: const [AutofillHints.username],
+                        keyboardType: isStudent
+                            ? TextInputType.emailAddress
+                            : TextInputType.text,
+                        textInputAction: TextInputAction.next,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: primaryTextColor,
+                        ),
+                        decoration: _buildInputDecoration(
+                          context: context,
+                          hintText: idHint,
+                          prefixIcon: isStudent
+                              ? Icons.school_outlined
+                              : Icons.badge_outlined,
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) {
+                            return isStudent
+                                ? "School email is required"
+                                : "Staff ID or Email is required";
+                          }
+                          if (isStudent && !v.contains('@')) {
+                            return "Use your school email";
+                          }
+                          return null;
+                        },
                       ),
-                      decoration: _buildInputDecoration(
-                        context: context,
-                        hintText: idHint,
-                        prefixIcon: isStudent
-                            ? Icons.school_outlined
-                            : Icons.badge_outlined,
-                      ),
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return isStudent
-                              ? "School email is required"
-                              : "Staff ID or Email is required";
-                        }
-                        if (isStudent && !v.contains('@')) {
-                          return "Use your school email";
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
+                      const SizedBox(height: 16),
 
-                    Text(
-                      "Password",
-                      style: GoogleFonts.spaceGrotesk(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.bold,
-                        color: primaryTextColor,
+                      Text(
+                        tr('Password'),
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: primaryTextColor,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    TextFormField(
-                      controller: _passwordController,
-                      obscureText: _hidePassword,
-                      enableSuggestions: false,
-                      autocorrect: false,
-                      autofillHints: const [AutofillHints.password],
-                      textInputAction: TextInputAction.done,
-                      onFieldSubmitted: (_) {
-                        if (!widget.isSyncing) submit();
-                      },
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: primaryTextColor,
-                      ),
-                      decoration: _buildInputDecoration(
-                        context: context,
-                        hintText: "••••••••",
-                        prefixIcon: Icons.key_outlined,
-                        suffixIcon: IconButton(
-                          onPressed: widget.isSyncing
-                              ? null
-                              : () => setState(
-                                  () => _hidePassword = !_hidePassword,
-                                ),
-                          tooltip: _hidePassword
-                              ? 'Show password'
-                              : 'Hide password',
-                          icon: Icon(
-                            _hidePassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                            size: 19,
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _passwordController,
+                        enabled: !widget.isSyncing,
+                        obscureText: _hidePassword,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        autofillHints: const [AutofillHints.password],
+                        textInputAction: TextInputAction.done,
+                        onFieldSubmitted: (_) {
+                          if (!widget.isSyncing) submit();
+                        },
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: primaryTextColor,
+                        ),
+                        decoration: _buildInputDecoration(
+                          context: context,
+                          hintText: "••••••••",
+                          prefixIcon: Icons.key_outlined,
+                          suffixIcon: IconButton(
+                            onPressed: widget.isSyncing
+                                ? null
+                                : () => setState(
+                                    () => _hidePassword = !_hidePassword,
+                                  ),
+                            tooltip: _hidePassword
+                                ? 'Show password'
+                                : 'Hide password',
+                            icon: Icon(
+                              _hidePassword
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined,
+                              size: 19,
+                            ),
                           ),
                         ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) {
+                            return "Password is required";
+                          }
+                          return null;
+                        },
                       ),
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return "Password is required";
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 24),
+                      const SizedBox(height: 24),
 
-                    ElevatedButton(
-                      onPressed: widget.isSyncing ? null : submit,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                      ElevatedButton(
+                        onPressed: widget.isSyncing ? null : submit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryColor,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          elevation: 3,
                         ),
-                        elevation: 3,
+                        child: widget.isSyncing
+                            ? SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                  semanticsLabel: tr('Signing in'),
+                                ),
+                              )
+                            : Text(
+                                tr('LOGIN'),
+                                style: GoogleFonts.spaceGrotesk(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
                       ),
-                      child: widget.isSyncing
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : Text(
-                              "LOGIN",
-                              style: GoogleFonts.spaceGrotesk(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.0,
-                              ),
-                            ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -324,13 +342,13 @@ class _LoginScreenState extends State<LoginScreen> {
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final inputBg = isDarkMode
-        ? const Color(0xFF0F172A)
+        ? const Color(0xFF181818)
         : const Color(0xFFF8FAFC);
     final borderColor = isDarkMode
-        ? const Color(0xFF334155)
+        ? const Color(0xFF333333)
         : const Color(0xFFE2E8F0);
     final iconColor = isDarkMode
-        ? const Color(0xFF94A3B8)
+        ? const Color(0xFFA0A0A0)
         : const Color(0xFF64748B);
 
     return InputDecoration(
@@ -362,13 +380,12 @@ class _LoginScreenState extends State<LoginScreen> {
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(
-          color: widget.portalType == 'student'
-              ? const Color(0xFF2563EB)
-              : const Color(0xFF800000),
+          color: const Color(0xFF2563EB),
           width: 1.5,
         ),
       ),
-      errorStyle: const TextStyle(fontSize: 9),
+      errorStyle: const TextStyle(fontSize: 12),
+      errorMaxLines: 3,
     );
   }
 }

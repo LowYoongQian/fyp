@@ -1,3 +1,4 @@
+import '../i18n/tr.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -90,30 +91,30 @@ class AccountSecurity {
         builder: (context, update) => PopScope(
           canPop: !busy,
           child: AlertDialog(
-            title: const Text('Verify your sign-in'),
+            title: Text(tr('Verify your sign-in')),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Enter your authenticator code or a one-use recovery code.',
+                Text(
+                  tr('Enter your authenticator code or a one-use recovery code.'),
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: controller,
                   maxLength: 32,
                   autofillHints: const [AutofillHints.oneTimeCode],
-                  decoration: const InputDecoration(
-                    labelText: 'Verification code',
+                  decoration: InputDecoration(
+                    labelText: tr('Verification code'),
                   ),
                 ),
                 if (error != null)
-                  Text(error!, style: const TextStyle(color: Colors.red)),
+                  Text(tr(error!), style: const TextStyle(color: Colors.red)),
               ],
             ),
             actions: [
               TextButton(
                 onPressed: busy ? null : () => Navigator.pop(dialog),
-                child: const Text('Cancel'),
+                child: Text(tr('Cancel')),
               ),
               FilledButton(
                 onPressed: busy
@@ -152,7 +153,7 @@ class AccountSecurity {
                           if (dialog.mounted) update(() => busy = false);
                         }
                       },
-                child: Text(busy ? 'Verifying…' : 'Verify & sign in'),
+                child: Text(tr(busy ? 'Verifying…' : 'Verify & sign in')),
               ),
             ],
           ),

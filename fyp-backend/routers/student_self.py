@@ -10,13 +10,12 @@ needed by the web dashboard.
 """
 from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from domain import timetable_access
 from domain.scheduler import lecture_meetings
 from domain.announcements import announcement_dict, visible_announcements
-from integrations.announcement_files import download as download_announcement_file
+from integrations.announcement_files import attachment_response
 from db.database import get_db
 from datetime import datetime
 from domain.session_sync import sync_class_sessions
@@ -184,12 +183,6 @@ def get_announcement_attachment(announcement_id: str, db: Session = Depends(get_
     programmes = {student.programme.code} if student.programme else set()
     visible = {str(row.id): row for row in visible_announcements(db, "students", programmes, courses, groups, current_user.id)}
     row = visible.get(str(announcement_id))
-    if not row or not row.attachment_path:
+    if not row:
         raise HTTPException(404, "Attachment not found")
-    try:
-        data = download_announcement_file(row.attachment_path)
-    except Exception as exc:
-        raise HTTPException(503, "Download failed") from exc
-    return Response(data, media_type=row.attachment_mime_type or "application/octet-stream", headers={
-        "Content-Disposition": f'attachment; filename="{row.attachment_name or "attachment"}"'
-    })
+    return attachment_response(row)

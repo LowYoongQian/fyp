@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { MessageCircle, RotateCcw, Send, X } from 'lucide-react';
-import { Terminal } from './loading-ui/terminal';
+import { PetBubble } from './PetBubble';
+import { pickLine, speechMs } from './petSpeech';
 import { useAuth } from '../context/AuthContext';
 import { usePetPreferences } from '../hooks/usePetPreferences';
 import { apiService } from '../services/api';
@@ -21,7 +22,8 @@ const ROWS: Record<Mode, { row: number; frames: number; ms: number }> = {
   review: { row: 8, frames: 6, ms: 180 },
 };
 const NEUTRAL = { col: 6, row: 0, flip: false };
-const WAVE_AFTER_MS = 5000;
+const WAVE_AFTER_MS = 5000;   // the first wave, and the next one after anything the user does
+const WAVE_GAP_MS = [14000, 30000] as const;   // later waves (each with something new to say) come at random, not every few seconds
 const WAVE_LOOPS = 2;
 const LOOK_HOLD_MS = 1200;
 const DRAG_THRESHOLD = 4;     // pixels a press may wander and still count as a click, not a drag
@@ -118,6 +120,9 @@ const PetBody: React.FC<{ pet: PetId; userId: string; account: PetOffset | null;
   const [dragMode, setDragMode] = useState<'runRight' | 'runLeft' | null>(null);
   const [oneShot, setOneShot] = useState<'jumping' | 'waving' | null>(null);
   const [look, setLook] = useState<LookState>(null);
+  const [speech, setSpeech] = useState<string | null>(null);   // what the bubble says; a different line each time the pet waves
+  const lastLineRef = useRef<string | undefined>(undefined);
+  const waveDelayRef = useRef(WAVE_AFTER_MS);
   const [frame, setFrame] = useState<{ mode: Mode; index: number }>({ mode: 'idle', index: 0 });
   const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [pageVisible, setPageVisible] = useState(() => !document.hidden);
@@ -218,12 +223,26 @@ const PetBody: React.FC<{ pet: PetId; userId: string; account: PetOffset | null;
   const mode: Mode = dragging ? (dragMode ?? 'idle') : feedback === 'jumping' ? 'jumping' : reviewing ? 'review' : feedback ?? 'idle';
   const showLook = mode === 'idle' && look !== null && !reducedMotion && pageVisible;
 
-  // Wave once after five seconds of uninterrupted rest; any interaction, open chat or question starts the count again.
+  // Wave after five seconds of uninterrupted rest, saying something; any interaction, open chat or question starts the count again from five.
+  // Later waves follow at random gaps, each with a different line.
   useEffect(() => {
     if (reducedMotion || !pageVisible || mode !== 'idle' || showLook || chat !== 'closed') return;
-    const timer = window.setTimeout(() => setOneShot('waving'), WAVE_AFTER_MS);
+    const timer = window.setTimeout(() => {
+      const line = pickLine(lastLineRef.current);
+      lastLineRef.current = line;
+      waveDelayRef.current = WAVE_GAP_MS[0] + Math.random() * (WAVE_GAP_MS[1] - WAVE_GAP_MS[0]);
+      setSpeech(line);
+      setOneShot('waving');
+    }, waveDelayRef.current);
     return () => window.clearTimeout(timer);
   }, [mode, showLook, reducedMotion, pageVisible, chat]);
+
+  // A line stays up long enough to read, then the bubble goes.
+  useEffect(() => {
+    if (!speech) return;
+    const timer = window.setTimeout(() => setSpeech(null), speechMs(speech));
+    return () => window.clearTimeout(timer);
+  }, [speech]);
 
   useEffect(() => {
     if (reducedMotion || !pageVisible || showLook) return;
@@ -251,7 +270,10 @@ const PetBody: React.FC<{ pet: PetId; userId: string; account: PetOffset | null;
     });
   };
 
+  const interrupt = () => { waveDelayRef.current = WAVE_AFTER_MS; setSpeech(null); };   // anything the user does ends the line and restarts the count
+
   const toggleChat = () => {
+    interrupt();
     if (!layoutRef.current?.fit.full) { if (!reducedMotion) setOneShot('jumping'); return; }   // too little room for chat: a jump only
     setChat(current => (current === 'closed' ? 'launcher' : 'closed'));
     if (!reducedMotion) setOneShot('jumping');
@@ -269,7 +291,7 @@ const PetBody: React.FC<{ pet: PetId; userId: string; account: PetOffset | null;
     const drag = dragRef.current;
     if (!drag) return;
     if (!drag.moved && Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) < DRAG_THRESHOLD) return;
-    if (!drag.moved) { drag.moved = true; setDragging(true); setOneShot(null); setLook(null); }
+    if (!drag.moved) { drag.moved = true; interrupt(); setDragging(true); setOneShot(null); setLook(null); }
     const dx = event.clientX - drag.lastX;
     if (Math.abs(dx) >= 2) { setDragMode(dx > 0 ? 'runRight' : 'runLeft'); drag.lastX = event.clientX; }
     queue({ x: event.clientX - drag.offset.x, y: event.clientY - drag.offset.y });
@@ -339,7 +361,7 @@ const PetBody: React.FC<{ pet: PetId; userId: string; account: PetOffset | null;
   const chatAvailable = fit.full;
   const view: ChatView = chatAvailable ? chat : 'closed';
   const panelShown = view !== 'closed' && reply !== null;
-  const bubble = !fit.full || dragging || panelShown || view !== 'closed' ? null : mode === 'waving' ? 'Hi!' : null;
+  const bubble = !fit.full || dragging || panelShown || view !== 'closed' || !pageVisible ? null : speech;
   const innerWidth = fit.body.right - fit.body.left - 2 * INSET;
   const panelWidth = Math.min(PANEL_WIDTH, innerWidth);
   const controlWidth = view === 'open' ? panelWidth : Math.min(LAUNCHER_WIDTH, innerWidth);
@@ -398,11 +420,11 @@ const PetBody: React.FC<{ pet: PetId; userId: string; account: PetOffset | null;
           )}
         </AnimatePresence>
 
-        <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 -translate-x-1/2">
+        <div className="pointer-events-none">
           <AnimatePresence>
-            {bubble && <Terminal key={bubble} text={bubble} reduceMotion={reducedMotion} />}
+            {bubble && <PetBubble key={bubble} text={bubble} reduceMotion={reducedMotion} anchorX={pos.x + fit.width / 2} minX={fit.body.left + INSET} maxX={fit.body.right - INSET} />}
           </AnimatePresence>
-        </span>
+        </div>
 
         <button
           ref={petRef}

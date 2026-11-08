@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { ModalLayer } from './ModalLayer';
 import { TextInput } from './LimitedTextField';
 import { ShimmerText } from './Shimmer';
+import { OtpInput } from './OtpInput';
 
 type Setup = { secret: string; qr_data_url: string };
 type Session = { id: string; device_label: string; created_at: string; current: boolean };
@@ -75,12 +76,16 @@ export function AccountSecurityPanel({ enabled: initialEnabled }: { enabled: boo
           {!codes.length && <button type="button" aria-label="Close security dialog" disabled={busy} onClick={close}><X size={18} /></button>}</div>
         {codes.length ? <><p className="text-sm text-slate-500">Save these codes now. Each works once and is not shown again.</p>
           <div className="grid gap-2 rounded-xl bg-slate-50 p-4 font-mono text-xs select-all">{codes.map(item => <span key={item}>{item}</span>)}</div>
-          <button type="button" className={`${secondaryButton} gap-2`} onClick={async () => { try { await navigator.clipboard.writeText(codes.join('\n')); setCopied(true); } catch { setError('Select and copy the codes manually.'); } }}><Copy size={16} />{copied ? 'Copied' : 'Copy codes'}</button>
-          <button type="button" className={button} onClick={close}>I have saved my codes</button></> : <>
+          <div data-recovery-actions className="flex flex-col gap-3 pt-1 sm:flex-row">
+            <button type="button" className={`${secondaryButton} w-full gap-2 sm:flex-1`} onClick={async () => { try { await navigator.clipboard.writeText(codes.join('\n')); setCopied(true); } catch { setError('Select and copy the codes manually.'); } }}><Copy size={16} />{copied ? 'Copied' : 'Copy codes'}</button>
+            <button type="button" className={`${button} w-full border border-transparent sm:flex-1`} onClick={close}>I have saved my codes</button>
+          </div></> : <>
           <p className="text-sm text-slate-500">{action === 'logout-all' || action === 'disable' ? 'This will end all sessions, including this one.' : 'Security changes are saved only after verification.'}</p>
           {setup ? <><img className="mx-auto w-44 h-44 bg-white" src={setup.qr_data_url} alt="Scan with your authenticator app" />
             <p className="text-xs text-slate-500">Scan this QR code or enter this setup key in your authenticator app:</p><code className="block break-all bg-slate-50 rounded-xl p-3 text-xs select-all">{setup.secret}</code></> : <label className="block text-xs font-semibold">Current password<TextInput autoFocus disabled={busy} showCounter={false} className={`${input} mt-2`} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required /></label>}
-          {(setup || action === 'disable' || action === 'recovery-codes') && <label className="block text-xs font-semibold">{setup ? '6-digit authenticator code' : 'Authenticator or recovery code'}<TextInput autoFocus={!!setup} disabled={busy} showCounter={false} className={`${input} mt-2`} maxLength={32} autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} required /></label>}
+          {setup && <div className="space-y-2 text-xs font-semibold"><span aria-hidden="true">6-digit authenticator code</span>
+            <OtpInput autoFocus disabled={busy} invalid={!!error} label="6-digit authenticator code" value={code} onChange={next => { setCode(next); setError(''); }} /></div>}
+          {(action === 'disable' || action === 'recovery-codes') && !setup && <label className="block text-xs font-semibold">Authenticator or recovery code<TextInput disabled={busy} showCounter={false} className={`${input} mt-2`} maxLength={32} autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} required /></label>}
           <div className="flex gap-3 pt-2"><button type="button" disabled={busy} onClick={close} className={secondaryButton}>Cancel</button><button disabled={busy} className={`${button} flex-1`}>{busy ? 'Verifying…' : setup ? 'Verify & enable' : 'Continue'}</button></div></>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       </form>

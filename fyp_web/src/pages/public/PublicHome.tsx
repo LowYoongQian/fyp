@@ -325,11 +325,11 @@ function StillStory() {
 /** smartsystem.live: what USAS is, then a scroll walk-through of the app and the web portal, then the way in. */
 export function PublicHome() {
   const reduced = useReducedMotion();
-  useEffect(() => { document.title = 'USAS — University Smart Attendance System'; }, []);
+  useEffect(() => { document.title = 'USAS - University Smart Attendance System'; }, []);
   return (
     <div className="min-h-screen bg-[#040a1c] text-slate-100">
       <PublicHeader />
-      <h1 className="sr-only">USAS — University Smart Attendance System</h1>
+      <h1 className="sr-only">USAS - University Smart Attendance System</h1>
       <ol className="sr-only">
         <li>About USAS: Welcome to USAS. Your classes and attendance, together.</li>
         {CAPTIONS.slice(1).map(caption => <li key={caption.title}>{caption.overline.slice(5)}: {caption.title}. {caption.text}</li>)}

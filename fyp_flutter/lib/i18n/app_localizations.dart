@@ -1,4 +1,7 @@
 import 'package:flutter/widgets.dart';
+import 'tr.dart' as phrases;
+
+String phrase(String english) => phrases.tr(english);
 
 /// Lightweight runtime localisation backed by the same languages.json served
 /// to the web client. It avoids a separate, drifting Flutter translation file.
@@ -22,7 +25,9 @@ class AppLocalizations extends InheritedWidget {
   String tr(String keyPath) {
     final selected = _lookup(translations[languageCode], keyPath);
     final english = _lookup(translations['en'], keyPath);
-    return selected ?? english ?? keyPath;
+    // Without the server catalogue (offline, or a key it lacks) the English label still goes through the app's own
+    // phrase books, so headings follow the chosen language too.
+    return selected ?? phrase(english ?? keyPath);
   }
 
   String? _lookup(dynamic dictionary, String keyPath) {

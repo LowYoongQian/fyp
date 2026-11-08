@@ -5,7 +5,6 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -38,7 +37,7 @@ from domain.scheduler import (
 from domain import personal_email
 from integrations import resend_mail
 from integrations.announcement_files import ALLOWED_TYPES
-from integrations.announcement_files import download as download_announcement_file
+from integrations.announcement_files import attachment_response
 from integrations.announcement_files import upload as upload_announcement_file
 from routers.attendance_features import add_notification
 from utils.db_helpers import get_or_404, my_course_ids, require_own_profile
@@ -318,22 +317,30 @@ def get_my_announcements(
     """Return published and targeted announcements for the authenticated staff member,
     ordered by priority (High -> Medium -> Low) and date.
     """
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        
-    now = utcnow()
+    return [announcement_dict(a) for a in _staff_visible_announcements(db, current_user)]
 
+
+def _staff_visible_announcements(db: Session, current_user: User) -> list:
+    """The notices this staff member may read: one rule for the list and for opening a notice's file."""
+    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
     my_courses = db.query(Course).filter(
         Course.id.in_(my_course_ids(db, lecturer.id))
     ).all()
+    return visible_announcements(
+        db, "staff",
+        {c.programme.code for c in my_courses
+         if getattr(c, "programme", None) and c.programme.code},
+        {c.course_code for c in my_courses if c.course_code},
+    )
 
-    return [
-        announcement_dict(a) for a in visible_announcements(
-            db, "staff",
-            {c.programme.code for c in my_courses
-             if getattr(c, "programme", None) and c.programme.code},
-            {c.course_code for c in my_courses if c.course_code},
-        )
-    ]
+
+@router.get("/me/announcements/{announcement_id}/attachment")
+def staff_announcement_attachment(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    """The file of a notice this staff member can see (a notice they did not write too); anything they cannot see is a 404."""
+    row = {str(a.id): a for a in _staff_visible_announcements(db, current_user)}.get(str(announcement_id))
+    if not row:
+        raise HTTPException(404, "Attachment not found")
+    return attachment_response(row)
 
 
 def _owned_announcement(db: Session, announcement_id: str, user_id: str) -> Announcement:
@@ -631,13 +638,4 @@ def update_course_announcement(
 
 @router.get("/me/course-announcements/{announcement_id}/attachment")
 def lecturer_announcement_attachment(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    row = _owned_announcement(db, announcement_id, current_user.id)
-    if not row.attachment_path:
-        raise HTTPException(404, "Attachment not found")
-    try:
-        data = download_announcement_file(row.attachment_path)
-    except Exception as exc:
-        raise HTTPException(503, "Download failed") from exc
-    return Response(data, media_type=row.attachment_mime_type or "application/octet-stream", headers={
-        "Content-Disposition": f'attachment; filename="{row.attachment_name or "attachment"}"'
-    })
+    return attachment_response(_owned_announcement(db, announcement_id, current_user.id))

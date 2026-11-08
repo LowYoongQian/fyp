@@ -1,3 +1,5 @@
+import '../../i18n/tr.dart';
+import '../../widgets/brand_refresh.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -260,7 +262,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
               ),
             ),
             Text(
-              label,
+              tr(label),
               style: GoogleFonts.inter(
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
@@ -278,14 +280,14 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
     return ChoiceChip(
       selected: selected,
       onSelected: (_) => setState(() => _filter = value),
-      label: Text(label),
+      label: Text(tr(label)),
       showCheckmark: false,
       side: BorderSide(
         color: selected ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0),
       ),
       selectedColor: const Color(0xFF2563EB),
       backgroundColor: Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF1E293B)
+          ? const Color(0xFF222222)
           : Colors.white,
       labelStyle: GoogleFonts.inter(
         color: selected ? Colors.white : const Color(0xFF64748B),
@@ -309,7 +311,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            primary,
+            tr(primary),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: GoogleFonts.inter(
@@ -320,7 +322,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
           if (secondary != null) ...[
             const SizedBox(height: 3),
             Text(
-              secondary,
+              tr(secondary),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.inter(
@@ -340,9 +342,9 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
       borderRadius: BorderRadius.circular(18),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: dark ? const Color(0xFF1E293B) : Colors.white,
+          color: dark ? const Color(0xFF222222) : Colors.white,
           border: Border.all(
-            color: dark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+            color: dark ? const Color(0xFF333333) : const Color(0xFFE2E8F0),
           ),
           borderRadius: BorderRadius.circular(18),
         ),
@@ -362,14 +364,14 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
               fontWeight: FontWeight.w800,
               color: const Color(0xFF64748B),
             ),
-            columns: const [
-              DataColumn(label: Text('NO.')),
-              DataColumn(label: Text('CLASS DATE & TIME')),
-              DataColumn(label: Text('STAFF')),
-              DataColumn(label: Text('ROLE')),
-              DataColumn(label: Text('STATUS')),
-              DataColumn(label: Text('TAKEN BY / TIME')),
-              DataColumn(label: Text('LOCATION / NETWORK')),
+            columns: [
+              DataColumn(label: Text(tr('NO.'))),
+              DataColumn(label: Text(tr('CLASS DATE & TIME'))),
+              DataColumn(label: Text(tr('STAFF'))),
+              DataColumn(label: Text(tr('ROLE'))),
+              DataColumn(label: Text(tr('STATUS'))),
+              DataColumn(label: Text(tr('TAKEN BY / TIME'))),
+              DataColumn(label: Text(tr('LOCATION / NETWORK'))),
             ],
             rows: sessions.map((session) {
               final status = _statusOf(session);
@@ -398,7 +400,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        _statusLabel(status),
+                        tr(_statusLabel(status)),
                         style: GoogleFonts.inter(
                           color: color,
                           fontSize: 9,
@@ -418,7 +420,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                     _cell(
                       _value(session['room']),
                       secondary:
-                          'Network: ${_value(session['network_ip'])}\nDevice: ${_value(session['device_ip'])}',
+                          tr('Network: {network}\nDevice: {device}', {'network': _value(session['network_ip']), 'device': _value(session['device_ip'])}),
                       width: 180,
                     ),
                   ),
@@ -483,7 +485,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            'Week $week',
+                            tr('Week {week}', {'week': week}),
                             style: GoogleFonts.inter(
                               color: Colors.white,
                               fontSize: 10,
@@ -508,13 +510,13 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                     Expanded(
                       child: Divider(
                         color: dark
-                            ? const Color(0xFF334155)
+                            ? const Color(0xFF333333)
                             : const Color(0xFFE2E8F0),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      '${sessions.length} sessions',
+                      tr('{sessionsCount} sessions', {'sessionsCount': sessions.length}),
                       style: GoogleFonts.inter(
                         fontSize: 10,
                         color: const Color(0xFF94A3B8),
@@ -548,23 +550,23 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
     final weeks = _byWeek.keys.toList()..sort((a, b) => b.compareTo(a));
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: dark ? const Color(0xFF0F172A) : const Color(0xFFF6F8FF),
+      backgroundColor: dark ? const Color(0xFF181818) : const Color(0xFFF6F8FF),
       appBar: AppBar(
-        backgroundColor: dark ? const Color(0xFF0F172A) : Colors.white,
+        backgroundColor: dark ? const Color(0xFF181818) : Colors.white,
         surfaceTintColor: Colors.transparent,
         titleSpacing: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              widget.courseCode,
+              tr(widget.courseCode),
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
               ),
             ),
             Text(
-              '${widget.courseName} · Week 1 to now',
+              tr('{courseName} · Week 1 to now', {'courseName': widget.courseName}),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: GoogleFonts.inter(
@@ -578,7 +580,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
       body: _loading
           ? _loadingView()
           : _error != null
-          ? RefreshIndicator(
+          ? BrandRefresh(
               onRefresh: _load,
               child: ListView(
                 children: [
@@ -591,14 +593,14 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                   const SizedBox(height: 12),
                   Center(
                     child: Text(
-                      _error!,
+                      tr(_error!),
                       style: GoogleFonts.inter(color: const Color(0xFF64748B)),
                     ),
                   ),
                 ],
               ),
             )
-          : RefreshIndicator(
+          : BrandRefresh(
               onRefresh: _load,
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -655,7 +657,7 @@ class _OverallAttendanceScreenState extends State<OverallAttendanceScreen> {
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            'No attendance records',
+                            tr('No attendance records'),
                             style: GoogleFonts.spaceGrotesk(
                               fontSize: 16,
                               fontWeight: FontWeight.w700,

@@ -4,6 +4,7 @@ import { FloatingPanel } from './FloatingPanel';
 import { getNotificationInbox, type InboxNotice, type NotificationInbox } from '../services/notificationInbox';
 import type { useNotificationInbox } from '../hooks/useNotificationInbox';
 import { apiErrorMessage } from '../utils/apiError';
+import { usePageVisible } from '../hooks/usePageVisible';
 
 type Inbox = ReturnType<typeof useNotificationInbox>;
 
@@ -26,6 +27,15 @@ export function NotificationBell({ inbox, openNotice, labels }: {
   const { readShown } = inbox;
   const items = shown?.items;
   const unread = inbox.data?.unread_count || 0;
+  // Ring once when the account's own unread total goes UP after the first answer: not on the first load, a refresh, a poll with no
+  // change, or reading. The bell is remounted per account, so another account's count never makes it ring.
+  const [lastUnread, setLastUnread] = useState<number | null>(null);
+  const [ring, setRing] = useState(0);
+  const visible = usePageVisible();
+  if (inbox.data && lastUnread !== unread) {   // compared while rendering, so it happens once per real change of the total
+    if (lastUnread !== null && unread > lastUnread) setRing(count => count + 1);
+    setLastUnread(unread);
+  }
   useEffect(() => () => olderRequest.current?.abort(), []);
   useEffect(() => {
     if (open) closeButton.current?.focus();
@@ -55,12 +65,14 @@ export function NotificationBell({ inbox, openNotice, labels }: {
     } finally { if (!controller.signal.aborted) setLoadingOlder(false); }
   };
   return <div className="relative shrink-0">
-    <button ref={bellButton} type="button" className="notification-bell" data-notification-bell
+    {/* While unread notices remain, the bell gives a small shake (and its badge a ripple) every 10 s, on a wrapper so it never restarts the arrival ring. */}
+    <button ref={bellButton} type="button" className={`notification-bell ${ring ? 'notification-bell-ring' : ''} ${unread > 0 ? 'notification-bell-idle' : ''}`} data-notification-bell data-ring={ring}
+      data-paused={visible ? undefined : ''}
       aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}
       aria-haspopup="dialog" aria-expanded={open}
       onClick={() => { if (open) close(); else { setOpen(true); void inbox.refresh(); } }}>
-      <Bell className="h-5 w-5" aria-hidden="true" />
-      {unread > 0 && <span aria-hidden="true" data-notification-count className="notification-count">{unread > 99 ? '99+' : unread}</span>}
+      <span className="notification-bell-icon"><Bell key={ring} className="h-5 w-5" aria-hidden="true" /></span>
+      {unread > 0 && <span key={unread > 99 ? '99+' : unread} aria-hidden="true" data-notification-count className="notification-count notification-count-change">{unread > 99 ? '99+' : unread}</span>}
       {inbox.error && <span className="sr-only">Notification status needs attention</span>}
     </button>
     {open && <FloatingPanel clip role="dialog" aria-label="Notifications" onDismiss={close} className="notification-panel right-0 w-[24rem]">

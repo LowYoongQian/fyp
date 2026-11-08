@@ -29,9 +29,10 @@ class LocalCacheService {
     final dbPath = p.join(await getDatabasesPath(), 'attendance_cache.db');
     _db = await openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onUpgrade: (db, oldVersion, newVersion) async {
-        await _upgradeQueue(db);
+        if (oldVersion < 2) await _upgradeQueue(db);
+        if (oldVersion < 3) await db.execute("ALTER TABLE pending_checkins ADD COLUMN class_label TEXT NOT NULL DEFAULT ''");
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -55,6 +56,7 @@ class LocalCacheService {
           )
         ''');
         await _upgradeQueue(db);
+        await db.execute("ALTER TABLE pending_checkins ADD COLUMN class_label TEXT NOT NULL DEFAULT ''");
       },
     );
     return _db!;
@@ -124,8 +126,9 @@ class LocalCacheService {
     dynamic sessionId,
     String requestId,
     DateTime capturedAt,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    String classLabel = '',
+  }) async {
     if (kIsWeb) {
       throw StateError('Offline check-in storage requires the mobile app');
     }
@@ -136,6 +139,7 @@ class LocalCacheService {
       'server': server,
       'session_id': sessionId.toString(),
       'request_id': requestId,
+      'class_label': classLabel,
       'payload_json': jsonEncode(payload),
       'queued_at': capturedAt.toUtc().toIso8601String(),
       'status': 'pending',

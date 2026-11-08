@@ -1,3 +1,5 @@
+import '../../i18n/tr.dart';
+import '../../widgets/brand_refresh.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -42,15 +44,21 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
   ];
   late DateTime _weekMonday;
   SemesterWindow? get _semester => sharedSemester(_schedule);
+
+  /// "2–8 Nov" or "27 Oct – 2 Nov".
+  String _rangeLabel(DateTime a, DateTime b) => dayRange(a, b);
+
+  DateTime get _thisMonday => calendarMonday(ApiConfig.now);
+
   String get _selectedWeek {
     final term = _semester;
-    if (term == null) return 'Weekly view';
+    if (term == null) return relativeWeekLabel(_weekMonday, _thisMonday);
     final week = term.weekFor(_weekMonday);
     if (_weekMonday.add(const Duration(days: 6)).isBefore(term.start)) {
       return 'Semester upcoming';
     }
     if (_weekMonday.isAfter(term.end)) return 'Semester ended';
-    return 'Week $week';
+    return tr('Week {n}', {'n': week});
   }
 
   late PageController _pageController;
@@ -117,8 +125,6 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     }
   }
 
-  int get _selectedWeekNumber => _semester?.weekFor(_weekMonday) ?? 0;
-
   DateTime _dateForDay(int dayIndex) =>
       _weekMonday.add(Duration(days: dayIndex));
 
@@ -132,180 +138,190 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     final minutes = math.max(0, _timeMinutes(end) - _timeMinutes(start));
     final hours = minutes ~/ 60;
     final remaining = minutes % 60;
-    if (hours == 0) return '${remaining}m';
-    return remaining == 0 ? '${hours}h' : '${hours}h ${remaining}m';
+    if (hours == 0) return tr('{m}m', {'m': remaining});
+    return remaining == 0 ? tr('{h}h', {'h': hours}) : tr('{h}h {m}m', {'h': hours, 'm': remaining});
   }
 
+  void _shiftWeek(int weeks) => setState(() => _weekMonday = _weekMonday.add(Duration(days: 7 * weeks)));
+
+  /// Previous / next stay inside the semester's weeks when there are semester dates.
+  bool get _canGoBack => _semester == null || _weekMonday.isAfter(_semester!.firstMonday);
+  bool get _canGoForward =>
+      _semester == null || _weekMonday.isBefore(_semester!.firstMonday.add(Duration(days: 7 * (_semester!.weeks - 1))));
+
+  void _goToToday() {
+    final today = math.min(6, math.max(0, ApiConfig.now.weekday - 1));
+    setState(() {
+      _weekMonday = _thisMonday;
+      _selectedDayIndex = today;
+    });
+    if (_pageController.hasClients) {
+      _pageController.animateToPage(today, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+    }
+  }
+
+  /// Opens for every timetable. With semester dates it lists the semester's weeks; without them (no classes yet,
+  /// or courses in different semesters) it lists the weeks around today. Before, it silently did nothing then.
   Future<void> _showWeekPicker() async {
     final term = _semester;
-    if (term == null) return;
-    final selected = await showModalBottomSheet<int>(
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final thisMonday = _thisMonday;
+    final mondays = pickerWeeks(term);
+    final muted = dark ? const Color(0xFFA0A0A0) : const Color(0xFF64748B);
+    final selected = await showModalBottomSheet<DateTime>(
       context: context,
       showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      isScrollControlled: true,
+      backgroundColor: dark ? const Color(0xFF222222) : Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-          child: SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .75),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (term == null)
+                  // No semester dates for these classes: nothing to pick, so say so instead of inventing weeks.
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 12, 0, 20),
+                    child: Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2563EB).withValues(alpha: dark ? .18 : .1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.event_busy_rounded, size: 30, color: Color(0xFF2563EB)),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(tr('No semester dates yet'),
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.spaceGrotesk(fontSize: 17, fontWeight: FontWeight.w700, color: dark ? Colors.white : const Color(0xFF0F172A))),
+                        const SizedBox(height: 4),
+                        Text(tr('No available timetable'),
+                            textAlign: TextAlign.center, style: GoogleFonts.inter(fontSize: 13, color: muted)),
+                      ]),
+                    ),
+                  )
+                else ...[
+                Row(children: [
+                  Expanded(
+                    child: Text(tr('Choose a week'),
+                        style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.w700, color: dark ? Colors.white : const Color(0xFF0F172A))),
+                  ),
+                  if (mondays.contains(thisMonday))
+                    TextButton.icon(
+                      onPressed: () => Navigator.pop(context, thisMonday),
+                      icon: const Icon(Icons.today_rounded, size: 16),
+                      label: Text(tr('This week')),
+                    ),
+                ]),
                 Text(
-                  'Choose semester week',
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  '${term.name} · ${_rangeLabel(term.start, term.end)} ${term.end.year}',
+                  style: GoogleFonts.inter(fontSize: 12, color: muted),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '${term.name}: ${term.start.toIso8601String().substring(0, 10)} – ${term.end.toIso8601String().substring(0, 10)}',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: const Color(0xFF64748B),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    childAspectRatio: 1.65,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                  ),
-                  itemCount: term.weeks,
-                  itemBuilder: (context, index) {
-                    final week = index + 1;
-                    final active = week == _selectedWeekNumber;
-                    return InkWell(
-                      onTap: () => Navigator.pop(context, week),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Container(
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: active
-                              ? const Color(0xFF2563EB)
-                              : const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
+                const SizedBox(height: 14),
+                Flexible(
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      childAspectRatio: 1.6,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                    ),
+                    itemCount: mondays.length,
+                    itemBuilder: (context, index) {
+                      final monday = mondays[index];
+                      final active = monday == _weekMonday;
+                      final current = monday == thisMonday;
+                      final title = tr('Week {n}', {'n': index + 1});
+                      return Material(
+                        color: active ? const Color(0xFF2563EB) : (dark ? const Color(0xFF2D2D2D) : const Color(0xFFF1F5F9)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          side: BorderSide(
                             color: active
                                 ? const Color(0xFF2563EB)
-                                : const Color(0xFFE2E8F0),
+                                : current
+                                    ? const Color(0xFF93C5FD)
+                                    : (dark ? const Color(0xFF333333) : const Color(0xFFE2E8F0)),
+                            width: current && !active ? 1.6 : 1,
                           ),
                         ),
-                        child: Text(
-                          'W$week',
-                          style: GoogleFonts.spaceGrotesk(
-                            fontWeight: FontWeight.w700,
-                            color: active
-                                ? Colors.white
-                                : const Color(0xFF475569),
-                          ),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => Navigator.pop(context, monday),
+                          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            Text(tr(title),
+                                style: GoogleFonts.spaceGrotesk(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: active ? Colors.white : (dark ? Colors.white : const Color(0xFF1E293B)),
+                                )),
+                            const SizedBox(height: 2),
+                            Text(tr(_rangeLabel(monday, monday.add(const Duration(days: 6)))),
+                                style: GoogleFonts.inter(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: active ? Colors.white70 : (dark ? const Color(0xFFA0A0A0) : const Color(0xFF64748B)),
+                                )),
+                          ]),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
+                ],
               ],
             ),
           ),
         ),
       ),
     );
-    if (selected != null && mounted) {
-      setState(
-        () => _weekMonday = term.firstMonday.add(
-          Duration(days: (selected - 1) * 7),
-        ),
-      );
-    }
+    if (selected != null && mounted) setState(() => _weekMonday = selected);
   }
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final bar = dark ? const Color(0xFF181818) : Colors.white;
+    final muted = dark ? const Color(0xFFA0A0A0) : const Color(0xFF64748B);
+    final line = dark ? const Color(0xFF333333) : const Color(0xFFE2E8F0);
+    final weekEnd = _weekMonday.add(const Duration(days: 6));
     return Scaffold(
       appBar: AppBar(
-        title: Row(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "Class Timetable",
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? Colors.white
-                          : const Color(0xFF0F172A),
-                    ),
-                  ),
-                  Text(
-                    "2026 Semester, 15 Jun - 20 Sep",
-                    style: GoogleFonts.inter(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFF64748B),
-                    ),
-                  ),
-                ],
-              ),
+            Text(
+              tr('Class Timetable'),
+              style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.bold, color: dark ? Colors.white : const Color(0xFF0F172A)),
             ),
-            const SizedBox(width: 8),
-            InkWell(
-              onTap: _showWeekPicker,
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                height: 38,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFBFDBFE)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.calendar_view_week_rounded,
-                      size: 15,
-                      color: Color(0xFF2563EB),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _selectedWeek,
-                      style: GoogleFonts.spaceGrotesk(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF2563EB),
-                      ),
-                    ),
-                    const SizedBox(width: 3),
-                    const Icon(
-                      Icons.keyboard_arrow_down_rounded,
-                      color: Color(0xFF2563EB),
-                      size: 16,
-                    ),
-                  ],
-                ),
-              ),
+            Text(
+              tr(_semester != null
+                  ? '${_semester!.name} · ${_rangeLabel(_semester!.start, _semester!.end)} ${_semester!.end.year}'
+                  : 'Your weekly classes'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: muted),
             ),
           ],
         ),
-        backgroundColor: Colors.white,
+        backgroundColor: bar,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         actions: [
           IconButton(
-            icon: const Icon(
+            tooltip: tr('About these dates'),
+            icon: Icon(
               Icons.info_outline,
-              color: Color(0xFF64748B),
+              color: muted,
               size: 20,
             ),
             onPressed: () {
@@ -316,13 +332,13 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                     borderRadius: BorderRadius.circular(16),
                   ),
                   title: Text(
-                    "Academic Calendar",
+                    tr('Academic Calendar'),
                     style: GoogleFonts.spaceGrotesk(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   content: Text(
-                    "Dates use Malaysia time and the current server clock. Semester dates are set by the academic office; courses without a configured semester retain their weekly timetable.",
+                    tr('Dates use Malaysia time and the current server clock. Semester dates are set by the academic office; courses without a configured semester retain their weekly timetable.'),
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       color: const Color(0xFF475569),
@@ -332,7 +348,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
-                      child: const Text("Close"),
+                      child: Text(tr('Close')),
                     ),
                   ],
                 ),
@@ -346,10 +362,56 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
           const AuroraBackground(),
           Column(
             children: [
+              // Week bar: previous / next week, the week (tap to choose another) and a way back to today.
+              Container(
+                color: bar,
+                padding: const EdgeInsets.fromLTRB(6, 2, 6, 0),
+                child: Row(children: [
+                  IconButton(
+                    tooltip: tr('Previous week'),
+                    onPressed: _canGoBack ? () => _shiftWeek(-1) : null,
+                    icon: const Icon(Icons.chevron_left_rounded),
+                  ),
+                  Expanded(
+                    child: InkWell(
+                      onTap: _showWeekPicker,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Column(children: [
+                          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            const Icon(Icons.calendar_view_week_rounded, size: 16, color: Color(0xFF2563EB)),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(tr(_selectedWeek),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.spaceGrotesk(fontSize: 14, fontWeight: FontWeight.bold, color: dark ? Colors.white : const Color(0xFF0F172A))),
+                            ),
+                            Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: muted),
+                          ]),
+                          Text('${_rangeLabel(_weekMonday, weekEnd)} ${weekEnd.year}',
+                              style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: muted)),
+                        ]),
+                      ),
+                    ),
+                  ),
+                  if (_weekMonday != _thisMonday)
+                    TextButton(
+                      onPressed: _goToToday,
+                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 8)),
+                      child: Text(tr('Today')),
+                    ),
+                  IconButton(
+                    tooltip: tr('Next week'),
+                    onPressed: _canGoForward ? () => _shiftWeek(1) : null,
+                    icon: const Icon(Icons.chevron_right_rounded),
+                  ),
+                ]),
+              ),
               // Weekday Selector Bar
               Container(
-                color: Colors.white,
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                color: bar,
+                padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
                 child: Row(
                   children: List.generate(7, (index) {
                     final isSelected = _selectedDayIndex == index;
@@ -391,9 +453,10 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                           child: Column(
                             children: [
                               Text(
-                                abbrev.substring(0, 1),
+                                // English keeps its single letter; other languages show their short day name.
+                                AppLanguage.code == 'en' ? abbrev.substring(0, 1) : tr(const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][index]),
                                 style: GoogleFonts.inter(
-                                  fontSize: 9,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.w700,
                                   color: isSelected
                                       ? Colors.white70
@@ -408,7 +471,17 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                   fontWeight: FontWeight.w800,
                                   color: isSelected
                                       ? Colors.white
-                                      : const Color(0xFF334155),
+                                      : (dark ? Colors.white : const Color(0xFF334155)),
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              // Today gets a small dot, also when another day is selected.
+                              Container(
+                                width: 4,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: isToday ? (isSelected ? Colors.white : const Color(0xFF2563EB)) : Colors.transparent,
                                 ),
                               ),
                             ],
@@ -421,7 +494,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
               ),
 
               // Divider
-              Container(height: 1, color: const Color(0xFFE2E8F0)),
+              Container(height: 1, color: line),
 
               // Timeline PageView Area
               Expanded(
@@ -471,7 +544,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                           );
                     }).toList();
 
-                    return RefreshIndicator(
+                    return BrandRefresh(
                       onRefresh: _refreshSchedule,
                       child: SingleChildScrollView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -529,7 +602,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                           CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          selectedDayName,
+                                          tr(selectedDayName),
                                           style: GoogleFonts.spaceGrotesk(
                                             fontSize: 18,
                                             fontWeight: FontWeight.w800,
@@ -537,9 +610,9 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                           ),
                                         ),
                                         Text(
-                                          selectedDayDate,
+                                          tr(selectedDayDate),
                                           style: GoogleFonts.inter(
-                                            fontSize: 10.5,
+                                            fontSize: 11.5,
                                             fontWeight: FontWeight.w600,
                                             color: Colors.white70,
                                           ),
@@ -559,9 +632,9 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                       borderRadius: BorderRadius.circular(20),
                                     ),
                                     child: Text(
-                                      '${dayClasses.length} ${dayClasses.length == 1 ? 'class' : 'classes'}',
+                                      dayClasses.length == 1 ? tr('1 class') : tr('{n} classes', {'n': dayClasses.length}),
                                       style: GoogleFonts.inter(
-                                        fontSize: 10,
+                                        fontSize: 11,
                                         fontWeight: FontWeight.w700,
                                         color: Colors.white,
                                       ),
@@ -591,7 +664,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                         ),
                                         const SizedBox(height: 12),
                                         Text(
-                                          "No classes scheduled for today",
+                                          dayIndex == ApiConfig.now.weekday - 1 && _weekMonday == _thisMonday ? tr("No classes today") : tr('No classes on {day}', {'day': tr(selectedDayName)}),
                                           style: GoogleFonts.spaceGrotesk(
                                             fontSize: 14,
                                             fontWeight: FontWeight.bold,
@@ -600,7 +673,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
-                                          "Enjoy your day off or review self-study materials.",
+                                          tr('Enjoy the free time, or catch up on self-study.'),
                                           style: GoogleFonts.inter(
                                             fontSize: 11,
                                             color: const Color(0xFF94A3B8),
@@ -659,7 +732,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                 CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                _formatTimeWithAmPm(start),
+                                                tr(_formatTimeWithAmPm(start)),
                                                 style: GoogleFonts.spaceGrotesk(
                                                   fontSize: 11.5,
                                                   fontWeight: FontWeight.w800,
@@ -674,9 +747,9 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                               ),
                                               const SizedBox(height: 4),
                                               Text(
-                                                _durationLabel(start, end),
+                                                tr(_durationLabel(start, end)),
                                                 style: GoogleFonts.inter(
-                                                  fontSize: 9.5,
+                                                  fontSize: 11,
                                                   fontWeight: FontWeight.w700,
                                                   color: const Color(
                                                     0xFF94A3B8,
@@ -706,7 +779,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                 Theme.of(context).brightness ==
                                                     Brightness.dark
                                                 ? const Color(
-                                                    0xFF1E293B,
+                                                    0xFF222222,
                                                   ).withValues(alpha: 0.9)
                                                 : Colors.white.withValues(
                                                     alpha: 0.9,
@@ -753,7 +826,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                           ),
                                                     ),
                                                     child: Text(
-                                                      badgeLetter,
+                                                      tr(badgeLetter),
                                                       style:
                                                           GoogleFonts.spaceGrotesk(
                                                             fontSize: 12,
@@ -802,10 +875,10 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                                       ),
                                                                 ),
                                                                 child: Text(
-                                                                  typeLabel,
+                                                                  tr(typeLabel),
                                                                   style: GoogleFonts.inter(
                                                                     fontSize:
-                                                                        8.5,
+                                                                        10,
                                                                     fontWeight:
                                                                         FontWeight
                                                                             .w800,
@@ -903,7 +976,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                     bottom: 8.0,
                                   ),
                                   child: Text(
-                                    "Project / Direct Study",
+                                    tr('Project / Direct Study'),
                                     style: GoogleFonts.spaceGrotesk(
                                       fontSize: 11,
                                       fontWeight: FontWeight.bold,
@@ -980,11 +1053,11 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                                                     const SizedBox(width: 4),
                                                     Expanded(
                                                       child: Text(
-                                                        item['lecturerName'] ??
-                                                            'TBA',
+                                                        tr(item['lecturerName'] ??
+                                                            'TBA'),
                                                         style:
                                                             GoogleFonts.inter(
-                                                              fontSize: 9.5,
+                                                              fontSize: 11,
                                                               fontWeight:
                                                                   FontWeight
                                                                       .w600,
@@ -1031,10 +1104,10 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 145),
           child: Text(
-            value,
+            tr(value),
             overflow: TextOverflow.ellipsis,
             style: GoogleFonts.inter(
-              fontSize: 9,
+              fontSize: 10.5,
               fontWeight: FontWeight.w600,
               color: const Color(0xFF64748B),
             ),
@@ -1058,7 +1131,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
-          backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+          backgroundColor: isDark ? const Color(0xFF222222) : Colors.white,
           elevation: 10,
           child: Padding(
             padding: const EdgeInsets.all(22.0),
@@ -1096,7 +1169,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                 const SizedBox(height: 8),
 
                 Text(
-                  item['courseName'].toString().toUpperCase(),
+                  tr(item['courseName'].toString().toUpperCase()),
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
@@ -1112,7 +1185,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                   context: context,
                   icon: Icons.access_time_filled_rounded,
                   iconColor: const Color(0xFFD97706),
-                  title: "Class Time",
+                  title: tr('Class Time'),
                   value:
                       "${_formatTimeWithAmPm(start)} - ${_formatTimeWithAmPm(end)}",
                 ),
@@ -1122,7 +1195,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                   context: context,
                   icon: Icons.location_on_rounded,
                   iconColor: const Color(0xFF059669),
-                  title: "Class Location / Room",
+                  title: tr('Class Location / Room'),
                   value: item['room'] ?? 'Main Hall A',
                 ),
                 const SizedBox(height: 12),
@@ -1131,7 +1204,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                   context: context,
                   icon: Icons.person_rounded,
                   iconColor: const Color(0xFF7C3AED),
-                  title: "Teacher / Lecturer in Charge",
+                  title: tr('Teacher / Lecturer in Charge'),
                   value:
                       "${item['lecturerName'] ?? 'TBA'} (${item['group'] ?? 'Instructor'})",
                 ),
@@ -1150,8 +1223,8 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                       ),
                     ),
                     onPressed: () => Navigator.pop(ctx),
-                    child: const Text(
-                      "Close Details",
+                    child: Text(
+                      tr('Close Details'),
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -1188,18 +1261,18 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                title,
+                tr(title),
                 style: GoogleFonts.inter(
-                  fontSize: 10.5,
+                  fontSize: 11.5,
                   fontWeight: FontWeight.w600,
                   color: isDark
-                      ? const Color(0xFF94A3B8)
+                      ? const Color(0xFFA0A0A0)
                       : const Color(0xFF64748B),
                 ),
               ),
               const SizedBox(height: 1),
               Text(
-                value,
+                tr(value),
                 style: GoogleFonts.spaceGrotesk(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,

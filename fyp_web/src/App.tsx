@@ -21,7 +21,7 @@ import {
 import './App.css';
 import { applyThemePreference, getAccountThemePreference, resetThemeOnLogout } from './theme/themePreference';
 import { recordRecentStaffPage } from './utils/staffRecentPages';
-import { ROUTE_EVENT, surfaceFor } from './utils/publicRoute';
+import { isSignInPath, ROUTE_EVENT, surfaceFor } from './utils/publicRoute';
 
 // Keep the login screen and role pages out of the first download. Each screen is
 // fetched only when it is needed, so students do not download admin and staff code.
@@ -103,6 +103,57 @@ function tabFromLocation(): string | null {
 
 const TIMETABLE_TABS = new Set(['timetable', 'student_timetable', 'admin_timetable']);
 
+/**
+ * The system skeleton of one app page. One map for every wait: a tab change, the page's code loading, and a refresh while the saved session
+ * is being checked. It is chosen from the address alone and draws only grey shapes, so nothing private shows before the server confirms.
+ */
+function pageSkeleton(tab: string) {
+  switch (tab) {
+    case 'dashboard': return <ShimmerDashboard />;
+    case 'student_dashboard': return <ShimmerStudentDashboard />;
+    case 'timetable':
+    case 'student_timetable':
+    case 'admin_timetable': return <ShimmerTimetable admin={tab === 'admin_timetable'} />;
+    case 'attendance': return <ShimmerAttendance />;
+    case 'analytics': return <ShimmerAnalytics />;
+    case 'risk': return <ShimmerAtRisk />;
+    case 'chatbot': return <ShimmerChatbot />;
+    case 'admin_academic': return <ShimmerAcademics />;
+    case 'admin_network': return <ShimmerCampusNetwork />;
+    case 'settings':
+    case 'profile':
+    case 'profile_security':
+      return <div role="status" aria-label="Loading account page" aria-busy="true" className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">{tab === 'settings' ? <ShimmerSettingsModal /> : <ShimmerProfileModal />}</div>;
+    case 'course_announcements':
+    case 'admin_dashboard':
+    case 'admin_attendance':
+    case 'admin_students':
+    case 'admin_staff':
+    case 'admin_announcements':
+    case 'admin_reports':
+    case 'admin_reports_feedback':
+    case 'admin_reports_mc':
+    case 'admin_audit': return <ShimmerAdminPanel />;
+    default: return <ShimmerPage />;
+  }
+}
+
+/** While a refreshed app page waits for the server to confirm the saved session: a plain frame (no names, links or controls) around that page's skeleton. */
+const RestoringPage: React.FC<{ tab: string }> = ({ tab }) => (
+  <div data-restoring-page={tab} className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div aria-hidden="true" className="hidden w-64 shrink-0 space-y-4 border-r border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 lg:block">
+      <div className="h-10 w-36 rounded-xl shimmer-placeholder" />
+      {Array.from({ length: 7 }, (_, index) => <div key={index} className="h-9 rounded-xl shimmer-placeholder" />)}
+    </div>
+    <div className="min-w-0 flex-1">
+      <div aria-hidden="true" className="flex h-16 items-center justify-end gap-3 border-b border-slate-200 bg-white px-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="h-9 w-9 rounded-full shimmer-placeholder" /><div className="h-9 w-32 rounded-xl shimmer-placeholder" />
+      </div>
+      <div className="p-4 sm:p-6 lg:p-8">{pageSkeleton(tab)}</div>
+    </div>
+  </div>
+);
+
 function writeTabLocation(tab: string, replace = false) {
   const route = TAB_ROUTES[tab];
   if (!route) return;
@@ -150,7 +201,7 @@ const DashboardContent: React.FC = () => {
         : DEFAULT_TABS[user.role];
       setCurrentTab(nextTab);
       writeTabLocation(nextTab, true);
-    } else if (!loading && window.location.pathname !== '/login') {
+    } else if (!loading && !isSignInPath(window.location.pathname)) {
       // Signed out on an app page: the address becomes the sign-in page ("/" is the public information page now).
       window.history.replaceState({}, '', '/login');
     }
@@ -210,8 +261,12 @@ const DashboardContent: React.FC = () => {
     return true;
   };
 
-  // Checking a saved session: the sign-in shape, never the signed-in app's sidebar, header or dashboard cards.
-  if (loading) return <ShimmerLogin />;
+  // Checking a saved session. A refreshed app page shows that page's own skeleton (from the address only, nothing private); the sign-in
+  // address, or a browser with no saved session at all, shows the sign-in shape.
+  if (loading) {
+    const tab = tabFromLocation();
+    return tab && sessionStorage.getItem('auth_token') ? <RestoringPage tab={tab} /> : <ShimmerLogin />;
+  }
 
   if (!isAuthenticated) {
     return (
@@ -222,47 +277,7 @@ const DashboardContent: React.FC = () => {
   }
 
   const renderActiveTab = () => {
-    if (tabLoading) {
-      switch (currentTab) {
-        case 'dashboard':
-          return <ShimmerDashboard />;
-        case 'student_dashboard':
-          return <ShimmerStudentDashboard />;
-        case 'timetable':
-        case 'student_timetable':
-        case 'admin_timetable':
-          return <ShimmerTimetable admin={user?.role === 'admin'} />;
-        case 'attendance':
-          return <ShimmerAttendance />;
-        case 'analytics':
-          return <ShimmerAnalytics />;
-        case 'risk':
-          return <ShimmerAtRisk />;
-        case 'chatbot':
-          return <ShimmerChatbot />;
-        case 'course_announcements':
-          return <ShimmerAdminPanel />;
-        case 'student_mc':
-        case 'student_contact':
-          return <ShimmerPage />;
-        case 'admin_academic':
-          return <ShimmerAcademics />;
-        case 'admin_network':
-          return <ShimmerCampusNetwork />;
-        case 'admin_dashboard':
-        case 'admin_attendance':
-        case 'admin_students':
-        case 'admin_staff':
-        case 'admin_announcements':
-        case 'admin_reports':
-        case 'admin_reports_feedback':
-        case 'admin_reports_mc':
-        case 'admin_audit':
-          return <ShimmerAdminPanel />;
-        default:
-          return <ShimmerPage />;
-      }
-    }
+    if (tabLoading) return pageSkeleton(currentTab);
 
     switch (currentTab) {
       case 'profile':
@@ -285,7 +300,7 @@ const DashboardContent: React.FC = () => {
       case 'course_announcements':
         return <CourseAnnouncements />;
       case 'student_dashboard':
-        return <StudentDashboard />;
+        return <StudentDashboard onNavigate={handleTabChange} />;
       case 'student_timetable':
       case 'admin_timetable':
         return <Timetable />;
@@ -325,7 +340,7 @@ const DashboardContent: React.FC = () => {
       setCurrentTab={handleTabChange}
       isLoading={tabLoading}
     >
-      <Suspense fallback={ACCOUNT_TABS.includes(currentTab) ? <div role="status" aria-label="Loading account page" aria-busy="true" className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">{currentTab === 'settings' ? <ShimmerSettingsModal /> : <ShimmerProfileModal />}</div> : currentTab === 'chatbot' ? <ShimmerChatbot /> : currentTab === 'risk' ? <ShimmerAtRisk /> : currentTab === 'student_dashboard' ? <ShimmerStudentDashboard /> : currentTab === 'admin_network' ? <ShimmerCampusNetwork /> : <ShimmerPage />}>
+      <Suspense fallback={pageSkeleton(currentTab)}>
         {renderActiveTab()}
       </Suspense>
     </MainLayout>

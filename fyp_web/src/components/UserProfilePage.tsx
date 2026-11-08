@@ -81,6 +81,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
   } | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const avatarFile = useRef<File | null>(null);
 
   const handleFileSelect = (file: File) => {
     setAvatarError(null);
@@ -119,6 +120,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
       setUploadProgress(progress);
     }, 60);
 
+    avatarFile.current = file;
     const reader = new FileReader();
     reader.onload = (e) => {
       const result = e.target?.result as string;
@@ -271,8 +273,13 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
     }
     setUploadingAvatar(true);
     try {
-      await apiService.updateUserAvatar(avatarUrl.trim());
-      setProfile((prev: any) => ({ ...prev, avatar_url: avatarUrl.trim() }));
+      let saved = avatarUrl.trim();
+      // A picked file goes to storage like the mobile app does, so both get the same https link instead of a base64 blob in the database.
+      if (saved.startsWith('data:') && avatarFile.current) saved = (await apiService.uploadUserAvatar(avatarFile.current)).avatar_url;
+      else await apiService.updateUserAvatar(saved);
+      avatarFile.current = null;
+      setAvatarUrl(saved);
+      setProfile((prev: any) => ({ ...prev, avatar_url: saved }));
       setIsEditingAvatar(false);
       await swalSuccess('Avatar Updated', 'Profile photo updated successfully.');
     } catch (err: any) {

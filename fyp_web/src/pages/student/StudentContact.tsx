@@ -1,7 +1,7 @@
 import { TextInput, TextArea } from '../../components/LimitedTextField';
 import { ModalLayer } from '../../components/ModalLayer';
 import { CustomDropdown } from '../../components/CustomDropdown';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   MessageSquare,
   AlertTriangle,
@@ -12,7 +12,10 @@ import {
   MessageCircle,
   UploadCloud,
   X,
-  Mail
+  Mail,
+  Eye,
+  Paperclip,
+  ChevronRight
 } from 'lucide-react';
 import { apiService } from '../../services/api';
 import type { StudentFeedbackReport } from '../../services/api';
@@ -26,37 +29,35 @@ import { SubmissionTime, SubmissionTimeFilter } from '../../components/Submissio
 import { matchesSubmissionRange, submissionFilterParams, type SubmissionRange } from '../../utils/submissionTime';
 import { useDebouncedSearch } from '../../hooks/useDebouncedSearch';
 import { useNotificationRecord } from '../../hooks/useNotificationRecord';
-
-interface ComplaintTicket {
-  id: string;
-  category: string;
-  priority: 'Low' | 'Medium' | 'High' | 'Urgent';
-  subject: string;
-  message: string;
-  attachmentName?: string;
-  status: string;
-  createdAt: string;
-  adminResponse?: string;
-  resolvedAt?: string;
-}
+import { TicketDetailsDialog, type ComplaintTicket } from '../../components/TicketDetailsDialog';
+import { STUDENT_STATUS, asFeedbackStatus, storedStatusFor, type FeedbackStatus } from '../../utils/feedbackStatus';
 
 const toTicket = (row: StudentFeedbackReport): ComplaintTicket => ({
-  id: row.id, category: row.category, priority: row.priority, subject: row.subject,
-  message: row.message, attachmentName: row.attachment_name || undefined,
-  status: row.status === 'Pending' ? 'Open' : row.status === 'In Progress' ? 'In Review' : row.status,
+  id: row.id, category: row.category, subject: row.subject,
+  message: row.message, attachmentName: row.attachment_name || undefined, attachmentType: row.attachment_type || undefined,
+  status: asFeedbackStatus(row.status),
   createdAt: row.created_at,
   adminResponse: row.student_response || undefined,
 });
+
+/** How each stage looks on a ticket card: its wording comes from the one shared vocabulary. */
+const STAGE_LOOK: Record<FeedbackStatus, { Icon: typeof Clock; badge: string; step: number }> = {
+  'Pending': { Icon: Clock, step: 0, badge: 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/20' },
+  'In Progress': { Icon: Eye, step: 1, badge: 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/20' },
+  'Resolved': { Icon: CheckCircle2, step: 2, badge: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20' },
+};
+const STATUS_FILTERS = ['All', ...Object.values(STUDENT_STATUS)];
 
 export const StudentContact: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [submissionRange, setSubmissionRange] = useState<SubmissionRange>({ from: '', to: '' });
+  const [openTicketId, setOpenTicketId] = useState<string | null>(null);   // the ticket whose details are showing
+  const ticketOpener = useRef<HTMLElement | null>(null);                   // its card, so focus can go back there
 
   // Modal & Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [category, setCategory] = useState<ComplaintTicket['category']>('Attendance Discrepancy');
-  const [priority, setPriority] = useState<ComplaintTicket['priority']>('Medium');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [attachment, setAttachment] = useState<File | null>(null);
@@ -70,25 +71,23 @@ export const StudentContact: React.FC = () => {
   const setCurrentPage = (page: number) => setPageSelection({ key: pageKey, page });
   const loadTickets = useCallback(async (signal: AbortSignal) => {
     const result = await apiService.studentFeedbackPage({ page: currentPage, per_page: 8, search,
-      status: filterStatus === 'Open' ? 'Pending' : filterStatus === 'In Review' ? 'In Progress' : filterStatus,
+      status: storedStatusFor(filterStatus, STUDENT_STATUS),
       ...submissionFilterParams(submissionRange) }, signal);
     return { ...result, items: result.items.map(toTicket) };
   }, [currentPage, search, filterStatus, submissionRange]);
   const { data, setData, loading, error, refresh } = useLiveResource(loadTickets, JSON.stringify([pageKey, currentPage]), ['feedback']);
   const tickets = data?.items || [];
+  const [lastSeenTicket, setLastSeenTicket] = useState<ComplaintTicket | null>(null);
+  const openTicket = tickets.find(ticket => ticket.id === openTicketId) ?? (lastSeenTicket?.id === openTicketId ? lastSeenTicket : null);   // follows live changes; keeps the last copy if the page moves on
   useNotificationRecord({ tab: 'student_contact', kinds: ['feedback'], ready: !loading && data !== undefined, dataVersion: data,
     locate: async (id, signal) => { const result = await apiService.studentFeedbackPage({ page: 1, per_page: 8, focus_id: id }, signal); return { found: !!result.focus?.found, page: result.page }; },
     apply: page => { setFilterStatus('All'); setSearchQuery(''); setSubmissionRange({ from: '', to: '' });
       setPageSelection({ key: JSON.stringify([user?.user_id, 'All', '', { from: '', to: '' }]), page }); } });
 
-  const downloadAttachment = async (ticket: ComplaintTicket) => {
-    try {
-      const blob = await apiService.downloadFeedbackAttachment(ticket.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = ticket.attachmentName || 'attachment'; link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch { swalError('Download Failed', 'Please try again.'); }
+  const showTicket = (ticket: ComplaintTicket, card: HTMLElement) => { ticketOpener.current = card; setLastSeenTicket(ticket); setOpenTicketId(ticket.id); };
+  const closeTicket = () => {
+    setOpenTicketId(null);
+    window.requestAnimationFrame(() => { if (ticketOpener.current?.isConnected) ticketOpener.current.focus(); });
   };
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -118,12 +117,12 @@ export const StudentContact: React.FC = () => {
     try {
       const data = new FormData();
       data.append('subject', subject.trim()); data.append('message', message.trim());
-      data.append('category', category); data.append('priority', priority);
+      data.append('category', category);   // severity is the admin's to set, never the student's
       if (attachment) data.append('attachment', attachment);
       const created = await apiService.studentCreateFeedback(data);
       setData(previous => {
         const ticket = toTicket(created);
-        const matches = (filterStatus === 'All' || filterStatus === ticket.status)
+        const matches = (filterStatus === 'All' || filterStatus === STUDENT_STATUS[ticket.status])
           && matchesSubmissionRange(ticket.createdAt, submissionRange)
           && [ticket.id, ticket.subject, ticket.message, ticket.category].some(value => value.toLowerCase().includes(search.toLowerCase()));
         return { ...previous!, items: matches ? [ticket, ...(previous?.items || []).filter(row => row.id !== ticket.id)].slice(0, 8) : previous?.items || [],
@@ -190,7 +189,7 @@ export const StudentContact: React.FC = () => {
           </div>
           <div>
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 font-space">{openTickets}</div>
-            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">Open Tickets</div>
+            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">Pending</div>
           </div>
         </div>
 
@@ -218,7 +217,7 @@ export const StudentContact: React.FC = () => {
       {/* Filter and Search Bar */}
       <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-white dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
         <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
-          {['All', 'Open', 'In Review', 'Resolved'].map(status => (
+          {STATUS_FILTERS.map(status => (
             <button
               key={status}
               onClick={() => setFilterStatus(status)}
@@ -262,84 +261,78 @@ export const StudentContact: React.FC = () => {
             </p>
           </div>
         ) : (
-          paginatedTickets.map(ticket => (
+          paginatedTickets.map(ticket => {
+            const stage = STAGE_LOOK[ticket.status];
+            const StageIcon = stage.Icon;
+            return (
             <div
               key={ticket.id}
               data-notice-record={ticket.id}
-              className="uipro-card bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 rounded-2xl p-5 transition-all space-y-4 shadow-xs"
+              role="button"
+              tabIndex={0}
+              aria-haspopup="dialog"
+              aria-label={`View details of ${ticket.subject} (${STUDENT_STATUS[ticket.status]})`}
+              onClick={event => showTicket(ticket, event.currentTarget)}
+              onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); showTicket(ticket, event.currentTarget); } }}
+              className="group uipro-card cursor-pointer bg-white dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-500/50 hover:shadow-md hover:-translate-y-px rounded-2xl p-5 transition-all space-y-4 shadow-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/50"
             >
               {/* Ticket Top Meta */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800/80 pb-3">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-xs font-bold text-blue-600 dark:text-blue-400">{ticket.id}</span>
-                  
-                  {/* Category Badge */}
-                  <span className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300 font-medium">
+                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                  <span className="break-all font-mono text-xs font-bold text-blue-600 dark:text-blue-400">{ticket.id}</span>
+                  <span className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 font-medium">
                     {ticket.category}
                   </span>
-
-                  {/* Priority Badge */}
-                  {ticket.priority === 'Urgent' && (
-                    <span className="px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-500/20 text-[10px] font-bold">
-                      URGENT
-                    </span>
-                  )}
-                  {ticket.priority === 'High' && (
-                    <span className="px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-500/20 text-[10px] font-bold">
-                      HIGH
-                    </span>
-                  )}
                 </div>
 
-                {/* Status Badge */}
                 <div className="flex items-center gap-2">
-                  <div><span className="block mb-1 text-[10px] text-slate-400">Submitted</span><SubmissionTime value={ticket.createdAt} /></div>
-                  {ticket.status === 'Resolved' && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20 text-[11px] font-semibold">
-                      <CheckCircle2 className="w-3 h-3" />
-                      <span>Resolved</span>
-                    </span>
-                  )}
-                  {ticket.status === 'In Review' && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/20 text-[11px] font-semibold">
-                      <Clock className="w-3 h-3" />
-                      <span>In Review</span>
-                    </span>
-                  )}
-                  {ticket.status === 'Open' && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20 text-[11px] font-semibold">
-                      <Clock className="w-3 h-3" />
-                      <span>Open</span>
-                    </span>
-                  )}
+                  <div><span className="block mb-1 text-xs text-slate-400">Submitted</span><SubmissionTime value={ticket.createdAt} /></div>
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-semibold ${stage.badge}`}>
+                    <StageIcon className="w-3.5 h-3.5" />
+                    <span>{STUDENT_STATUS[ticket.status]}</span>
+                  </span>
                 </div>
               </div>
 
-              {/* Ticket Subject & Description */}
+              {/* Ticket Subject & a short look at the message; the whole ticket opens on click */}
               <div className="space-y-1.5">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 font-space">{ticket.subject}</h3>
-                <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
+                <p className="line-clamp-2 text-xs text-slate-700 dark:text-slate-300 leading-relaxed bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
                   {ticket.message}
                 </p>
               </div>
 
-              {ticket.attachmentName && <button type="button" onClick={() => downloadAttachment(ticket)} className="text-sm text-blue-600 underline">Download {ticket.attachmentName}</button>}
-              {/* Admin Response Box */}
+              {ticket.attachmentName && (
+                <p className="inline-flex max-w-full items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><Paperclip className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{ticket.attachmentName}</span></p>
+              )}
               {ticket.adminResponse && (
                 <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-500/20 rounded-xl p-3.5 space-y-1">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-blue-700 dark:text-blue-300">
                     <MessageCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                     <span>Admin Helpdesk Response</span>
                   </div>
-                  <p className="text-xs text-slate-800 dark:text-slate-200 pl-5">{ticket.adminResponse}</p>
+                  <p className="line-clamp-2 text-xs text-slate-800 dark:text-slate-200 pl-5">{ticket.adminResponse}</p>
                 </div>
               )}
+
+              {/* Where it stands, and the way in */}
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <div aria-hidden="true" className="flex gap-1">
+                  {[0, 1, 2].map(index => (
+                    <span key={index} className={`h-1.5 w-8 rounded-full transition-colors ${index <= stage.step ? (ticket.status === 'Resolved' ? 'bg-emerald-500' : 'bg-blue-500') : 'bg-slate-200 dark:bg-slate-700'}`} />
+                  ))}
+                </div>
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-blue transition-transform group-hover:translate-x-0.5 dark:text-blue-400">View details<ChevronRight className="h-4 w-4" /></span>
+              </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
 
       {data !== undefined && <RecordPagination page={page} pageSize={8} total={data.total} onChange={setCurrentPage} />}
+
+      <TicketDetailsDialog ticket={openTicket} onClose={closeTicket} />
 
       {/* Modal: New Complaint Ticket */}
       {isModalOpen && (
@@ -383,27 +376,6 @@ export const StudentContact: React.FC = () => {
                     { value: 'General Inquiry', label: 'General Academic Inquiry' },
                   ]}
                 />
-              </div>
-
-              {/* Priority */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Priority Level</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {(['Low', 'Medium', 'High', 'Urgent'] as const).map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setPriority(p)}
-                      className={`py-2 rounded-xl text-xs font-medium border transition-all cursor-pointer ${
-                        priority === p
-                          ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
-                          : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* Subject */}

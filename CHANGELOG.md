@@ -1,5 +1,257 @@
 # Changelog
 
+## Release readiness checks — 2026-11-09 06:09 MYT
+- The production web build passed with existing dependencies. A clean npm install rejected five registry mirror entries. Backend tests passed 543 with 22 skipped, all 17 semester browser checks passed, and Flutter analysis and the Android release build passed.
+- The live site and API health responded with HTTP 200. Password reset requires the new backend before the new frontend can send school email alone. The feedback migration generated SQL locally. Azure deployment and execution of the migration remain unverified.
+- The release candidate still includes an iOS test source, public walkthrough screenshots with sample data and a manually run seed utility. The review records each separately.
+
+## Web settings: theme preview fills the banner — 2026-11-08 17:29
+- The preview no longer bunches at the right: sun or moon and clouds in the middle, a larger mini app window at the right, the badge under the words.
+- System shows a light app on its light side and a dark app on its dark side; Day/Night shows the app as it looks right now.
+- On phone widths the app windows are hidden so the words have room.
+- Checks (self-reported): tsc clean; rendered in Chrome with intercepted APIs at desktop and 420 px widths, no page errors. ChatGPT review pending.
+
+
+## Web settings: theme mode preview — 2026-11-08 17:19
+- A preview banner under Theme Mode: a day scene for Light, a night scene for Dark, both split for System (with whether the device is light or dark now), and the live campus sky for Day/Night with when it next turns.
+- It cross-fades between choices (instant with reduced motion).
+- Checks (self-reported): tsc clean; rendered in Chrome with intercepted APIs in light and dark, no page errors. ChatGPT review pending.
+
+
+## Academics: delete semesters, ongoing-semester rule, edit in a dialog — 2026-11-08 16:49
+- Admins can delete a semester, an ongoing one included (not while a class is open for check-in). Its courses keep their students, classes and attendance and simply leave the semester.
+- A course or programme cannot be deleted while its semester is ongoing; delete the semester first. A programme's upcoming and ended semesters are removed with it.
+- Editing a semester opens a dialog; the page form always creates a new semester.
+- Checks (self-reported): backend pytest 543 passed / 22 skipped; web tsc clean; semester browser tests 17/17 on intercepted APIs. Academic-calendar browser test and a visual check not done. ChatGPT review pending.
+
+
+## Face check-in: smaller countdown chip — 2026-11-08 02:30
+- The challenge countdown chip (ring, number, label) is about 20% smaller; timing colours unchanged.
+- Checks (self-reported): flutter analyze clean, flutter test 51/51; rendered offscreen in light and dark. Not checked on a real phone. ChatGPT review pending.
+
+
+## Face check-in: gesture cue under the status chip, web blue — 2026-11-08 02:28
+- The Blink and Nod cues sit just under the status chip (12 px gap); turn arrows stay beside the face.
+- All cues use the web button colour (#2563eb) with a white icon.
+- Checks (self-reported): flutter analyze clean, flutter test 51/51; rendered offscreen in light and dark. Not checked on a real phone. ChatGPT review pending.
+
+
+## Face check-in: web-blue button, countdown colours, green progress, animated cues and result icons — 2026-11-08 02:22
+- Main scan button uses the web's primary blue (#2563eb).
+- Challenge countdown turns green (4 s), yellow (3-2 s), red (1-0 s); progress bar is green with a small percentage above it.
+- Smaller gesture cue: the eye blinks, arrows glide the way to move; the Nod cue now sits above the face so it is not hidden.
+- Success and failure dialogs: the icon pops in with a spark burst and breathing waves, then settles (still with reduced motion).
+- Checks (self-reported): flutter analyze clean, flutter test 51/51; rendered offscreen in light and dark. Not checked on a real phone. ChatGPT review pending.
+
+
+## Face check-in: accuracy, smooth tracking, colour states, result dialogs — 2026-11-08 02:07
+- A face locks only when truly frontal for several frames (angles plus eye and nose positions), so a side view never counts; the final photo waits for a frontal face.
+- The tracking frame moves smoothly every frame; grey/white while searching, green/lime for a frontal face, red/pink for a side view.
+- Docked bottom panel; green ticks on Even light, Look forward and Hold steady once met; red/white LIVE pill; green locked chip.
+- Success dialog is green; failed check-ins show a red dialog with the reason and Try again (reopens the scan).
+- Checks (self-reported): flutter analyze clean, flutter test 51/51; flow rendered offscreen with a fake camera. Not checked on a real phone. ChatGPT review pending.
+
+
+## Font Size setting works — 2026-11-07 21:37
+- Small / Medium / Large in Settings now resize the text on every screen (same steps as the web), on top of the phone's own text size.
+- Side effect: lib/main.dart was re-wrapped by the code formatter (layout only; behaviour unchanged).
+- Checks (self-reported): flutter analyze clean, flutter test 48/48. Not checked on a real phone. ChatGPT review pending.
+
+
+## Staff login no longer locked after a student sign-in — 2026-11-07 21:12
+- Each login page is busy only during its own sign-in; the signed-in student's background refresh no longer disables the staff login (and the reverse).
+- Checks (self-reported): flutter analyze clean, flutter test 46/46. Not checked on a real phone. ChatGPT review pending.
+
+
+## Staff notification center, sign-in shimmer for both portals — 2026-11-07 21:01
+- Staff Notification Center redesigned in the app's blue and greys: summary tiles, categories for staff notifications (All, Unread, Classes, Requests, Notices), the same date and time filter as students, day headings, swipe or tap to mark read, one-request Mark all read, restyled attendance requests.
+- Fixed: marking a notice read could crash on numeric ids; the loading skeleton was white in dark mode.
+- Staff login and the Home Staff Portal tile use the app blue.
+- Signing in shows that portal's own loading skeleton even when the other portal is already signed in (it showed only a button spinner); new staff skeleton.
+- Checks (self-reported): flutter analyze clean, flutter test 46/46; screens rendered offscreen. Not checked on a real phone. ChatGPT review pending.
+
+
+## Timetable week picker: semester weeks only — 2026-11-07 20:50
+- The week picker shows only the weeks of the assigned semester (e.g. 5 weeks for a 5-week semester); the arrows stop at its first and last week.
+- With no semester dates it shows an icon, "No semester dates yet" and "No available timetable" instead of made-up weeks.
+- Checks (self-reported): flutter analyze clean, flutter test 45/45; both cases rendered offscreen. Not checked on a real phone. ChatGPT review pending.
+
+
+## Theme previews, whole app in the chosen language — 2026-11-07 20:43
+- Theme Mode is plain buttons again, with a preview banner for the chosen mode (Light, Dark, System); Day/Night keeps its live sky card.
+- Choosing a language now translates the whole mobile app, Settings included, at once and in place: about 580 texts go through one translator, with Malay, Chinese, Tamil, Japanese, Korean, Spanish, French, German and Arabic (709 phrases each). Date pickers and dialog buttons follow too; dates use each language's order.
+- Server content (announcements, notifications, course names, server messages) stays as written. Translations are not yet reviewed by native speakers.
+- Checks (self-reported): flutter analyze clean, flutter test 45/45; key screens rendered in six languages with no layout overflow. Not checked on a real phone. ChatGPT review pending.
+
+
+## Theme picture cards, full-page announcement, timetable weeks — 2026-11-07 20:04
+- Theme Mode choices are picture cards (light, dark, live sky for Day/Night, split for System) with a check on the chosen one.
+- Announcement detail is a full page: the picture runs edge to edge and folds into the bar on scroll.
+- Timetable: the week button now always opens (it did nothing without semester dates); new week bar with previous/next and Today, today's dot, real semester subtitle, dark-mode colours.
+- Fixed: closing a page with the new pull-to-refresh that had never been pulled raised an error.
+- Checks (self-reported): flutter analyze clean, flutter test 42/42; screens rendered offscreen (output/timetable). Not checked on a real phone. ChatGPT review pending.
+
+
+## Day/Night theme mode and logo pull-to-refresh — 2026-11-07 19:25
+- New Day/Night theme mode (mobile and web): light by day, dark at night by campus time, turning when the web sign-in sky does (about 04:58 and 20:01). On mobile the background becomes the same moving sky (sun, moon, stars, dusk and dawn colours) and Settings shows a live sky card with the next turn.
+- Theme changes cross-fade smoothly without the earlier lag; reduced motion switches at once.
+- Backend accepts only light, dark, system or cycle as the theme.
+- Every mobile pull-to-refresh now reveals the app emblem filling with colour, with a haptic tap at the release point and a light sweep while loading (from the colab project's style).
+- Checks (self-reported): flutter analyze clean, flutter test 39/39; web type check passes; backend 541 passed, 22 skipped (one earlier run had one failure that did not repeat). Not checked on a real phone. ChatGPT review pending.
+
+
+## Staff card, theme buttons, announcements, notice pop-ups — 2026-11-07 19:03
+- Staff dashboard: a plain card with photo, greeting, role, staff ID and three quiet counts instead of the gradient banner; person icon in the header again.
+- Settings: the theme buttons now always match the app after a quick switch, close and reopen; saves reach the server in the order tapped.
+- Home: "Announcements" with Show More; the newest three as cards that open a detail page; a full list five per page with page numbers (also from the News tile).
+- Student notice pop-up shows once per sign-in instead of on every Home / Student / Staff switch.
+- Checks (self-reported): flutter analyze clean, flutter test 35/35; screens rendered offscreen (output/staff). Not checked on a real phone. ChatGPT review pending.
+
+
+## Settings 2FA, sync log, staff dashboard, profile photos, theme switch — 2026-11-07 18:38
+- General Settings no longer shows 2FA and devices when signed in; they stay on My Profile.
+- Backend: when the database cannot be reached, the class sync logs one warning line instead of two full tracebacks a minute.
+- Profile photos: mobile now shows photos the web saved as embedded images; the web now uploads picked photos to storage like the mobile (one https link for both); the backend refuses non-web photo links.
+- Staff dashboard: web blue instead of maroon, photo in the header, gradient banner with greeting and today's counts, clearer class cards with status pills, bigger small text, header overflow fixed.
+- Theme switch is instant: the theme was blended twice and every card re-blurred the moving sky on each frame.
+- Checks (self-reported): backend 540 passed, 22 skipped; flutter analyze clean, flutter test 31/31; web type check passes; staff screens rendered offscreen (output/staff). Not checked on a real phone or Azure. ChatGPT review pending.
+- For Azure: use Supabase's pooler address for DATABASE_URL; the direct host is IPv6 only.
+
+
+## Mobile student app: recovery email, splash, notices, attendance tab, notifications, profile — 2026-11-07 16:10
+- Recovery email pop-up redesigned (steps, styled field, clear errors, no double sending, resend and change email). Same rules and server calls.
+- Splash title now blends blue, cyan, purple and dark purple with a white shine (white also stays in the middle in dark mode); the green is gone.
+- Student dashboard shows only programme and course notices; general announcements stay on Home. Fixed a notice title that was unreadable in dark mode.
+- Attendance tab: one sentence tells the student what to do next; cleaner no-class state and unavailable button.
+- Notifications: All / Updates / Today / Classes chips and a date and time filter at the top right, with day headings.
+- Profile: gradient banner header and a redesigned account security card. Background: no birds, smaller sun, solid content cards.
+- Fixed: dark-mode text on blue buttons was navy (now white); an unread notification row overflowed on narrow phones.
+- Checks (self-reported): flutter analyze clean, flutter test 30/30; screens rendered offscreen in light and dark (output/mobile-student). Not checked on a real phone. ChatGPT review pending.
+- Noted, not changed: GET /public/announcements is open to anyone and returns course, programme and staff-only notices too.
+
+
+## Mobile app: grey dark theme, day and night sky, new splash — 2026-11-07 15:36
+- Dark theme now uses the web's dark greys (#181818 page, #222222 cards, #2d2d2d raised, #333333 borders) instead of dark blue: the theme's own surfaces and 129 hard-coded dark-mode colours. Light mode is unchanged.
+- New background: by day a sun, drifting clouds and birds; by night a crescent moon, twinkling and sparkling stars, two constellations, three planets and shooting stars; low hills with a few trees in both. Still with reduced motion.
+- Splash: the logo grows in, "Smart Attendance System" appears in one gradient across its words (blue, sky, emerald from the web theme), and it closes by itself; the Continue button is gone.
+- Checks (self-reported): flutter analyze clean, flutter test 25/25; offscreen pictures in output/mobile-theme. Not checked on a real phone or emulator. ChatGPT review pending.
+
+
+## Opaque sign-in and sign-out covers — 2026-11-07 14:52
+- The "Signing in…" and "Signing out…" screens no longer let the page behind them show through. They were 94 % white with a blur, so the sign-in page (after sign-out) or the dashboard (after sign-in) showed as a blurry ghost; they are now fully opaque, and when the server has answered they fade away to reveal the finished page. After sign-out the screen is there at once instead of fading in (what is behind it is already the next page).
+- A "Signing in…" cover and an inert form behind it were already in AuthContext when this started (not added in this turn). Seven older sign-in tests and the 2FA "too many attempts" test described the previous look (form visible under a grey button, a card-sized veil) and used queries that cannot see inside an inert area; they were updated to the cover while keeping what they guard (one request, values kept, error shown, retry works, nothing protected shown early). The app's own behaviour was traced and is correct (field locked under the cover, unlocked after).
+- Checks (self-reported, isolated fixtures only): type check and build pass; ESLint 155 (unchanged); new pixel tests for the sign-in cover (light and dark) and the sign-out cover pass and fail on the old style; browser suite 525 tests, 524 passed, 0 failed, 1 pre-existing skip (four files at a time). Not checked: a real device, a screen reader, the hosted site. ChatGPT review pending.
+
+
+## Bell reminder, recovery buttons, sign-out, 2FA page, reset page, pet caret, chat thinking bar — 2026-11-04 00:00
+- Notifications: while unread notices remain the bell gives a small shake and its red badge a soft ripple every 10 s; it pauses while the tab is hidden, stops at zero and stays still with reduced motion. A new notice still rings the bell as before.
+- Settings: Copy codes and I have saved my codes have a 12 px gap and equal heights, side by side or stacked on phones.
+- Sign-out: shows "Signing out…" until the server answers, then "Signed out" and fades onto the sign-in page; if the server cannot be reached it says "Signed out on this device". Fixed: the menu's sign-out had never actually asked the server to end the session.
+- Two-factor sign-in has its own page (/login/verify) with six code cells: paste, autofill, editing and leading zeroes work, six digits submit once, a wrong code stays editable and is not resent on its own, recovery codes have their own mode, and refresh or Back starts sign-in again. Authenticator setup uses the same cells.
+- Forgot password has its own page (/login/reset): school email only, the same answer whatever the account, the link checked before a new password is typed, single use, 20 minutes. Backend: /auth/forgot-password now takes school_email only (one link a minute, sent after the reply, a failed send can be retried), new /auth/reset-password/check. Fixed: reset emails pointed at the public home page; old links now open the reset page. Staff reset is unchanged (contact the admin office).
+- Pet: a thin blinking caret follows its line while it is typed. Chat: a compact "Thinking" bar while an answer is pending, replacing the timed "Checking data…/Writing answer…" labels, which were not real progress.
+- Checks (self-reported, isolated fixtures only): type check and build pass; ESLint 155 (157 before); web unit 61/61 (3 database test files not run, package missing); backend 535 passed, 22 skipped; browser 523 tests: 522 passed, 0 failed, 1 pre-existing skip (the one failure in the full run was the old popup test, rewritten for the new page; the four sign-in suites, 122 tests, were then re-run on the final code and all passed). Normal-speed MP4 and screenshots in output/auth-polish. Not checked: real phone keyboard/autofill, screen reader, hosted site, real email delivery. ChatGPT review pending; LOGIN-SCENE-02 still not implemented.
+
+
+## Authentication and chat UI requests — 2026-11-03 22:50 MYT
+- Recorded pending bell shake/ripple, recovery-code button spacing, sign-out polish, dedicated six-digit 2FA and school-email recovery pages, pet text animation and chat shimmer/thinking-bar requests.
+- Preserved the breathing chat loader, school-only sign-in rule, verified personal recovery destination and unfinished tasks; synchronized owner statuses in the existing three workflow files.
+- Requirements/source review only; no app changes or tests. Loading UI reference read; Prompt-kit documentation returned 403 and exact component motion remains unverified.
+
+
+## Independent login, dashboard and feedback checks — 2026-11-03 20:36 MYT
+- Confirmed the dashboard tab-return correction in 21 dashboard/live Chrome checks and feedback preview/triage behavior in focused tests. Updated bounded review statuses in the three workflow files.
+- Login glass/lighting/ridge/composition checks pass, but LOGIN-SCENE-02 smooth fast-forward after a long-hidden tab is still not implemented; the latest visual refinement explicitly excludes it.
+- Independent checks: TypeScript passed; 13 Node tests, 10 backend tests and 47 browser tests passed. Three PostgreSQL tests skipped; target severity migration, live services, continuous animation playback, real devices and screen reader unverified. Notice/pet follow-up suites and the reported full suite were not rerun. No application changes, production operations or deployment.
+
+
+## Follow-ups: trees on the ground, sign-in veil, notice Description label, pet speech bubble — 2026-11-03 20:27
+- Login scene: each tree now stands on the ridge at any screen size or shape (before, they were placed a fixed distance from the bottom, so at other resolutions they floated or sank). The grey veil shown while signing in now covers exactly the card (it started 24 px low because of the card's spacing rule) and is lighter, so the glass stays visible.
+- Notices: the message in the details dialog is labelled "Description" and sits directly under the title, above Posted / Posted by / For.
+- Assistant pet: the speech bubble is a rounded bubble with a tail and a shadow that follows its shape (the old reveal clipped the shadow into a square), light and dark. The pet now says a different line each time it waves, from 15, never the same twice in a row; a line stays a few seconds and later waves come at random 14 to 30 second gaps. Touching the pet ends the line.
+- Checks (self-reported, fixed clocks and isolated fixtures): web type check and build pass; ESLint 157 problems (158 before); all non-database unit tests 60/60 (the 3 database test files need a package that is not installed here and were not run); browser suite 509 tests, 508 passed, 0 failed, 1 pre-existing skip (header screenshots), run four files at a time; two earlier runs with every file at once showed a few unrelated 7 to 8 second timeouts under load, and those files passed when re-run alone. Not checked: watching the motion live, a screen reader, the hosted site. ChatGPT review pending.
+
+
+## Sign-in scene: glass card, phone layout, depth, soft dawn and dusk, one light — 2026-11-03 20:27
+- The sign-in card is lightly translucent glass: blurred backdrop, a subtle light border and a soft shadow that falls away from the sun or moon, more solid against a dark sky. It was a solid white slab before (a shared card style overrode the page's own see-through classes). Every word on it measures at least 4.5:1 contrast by day, dawn, dusk and night; the input hints, the character count and "Forgot password?" were darkened a little for that.
+- On a phone the scene is arranged around the form: a band of sky above it holds the sun or moon on a shallow arc, two corner planets, clouds and birds; the land stays at the bottom. The whole scene is now one stage fixed to the screen, so it keeps its composition however tall the form is.
+- Depth: far layers (stars, sun, moon, planets) barely shift with the pointer or the scroll, near ones (clouds, trees, the hill) shift more, and near clouds drift a little faster than far ones. Nothing moves with reduced motion.
+- Dawn and dusk run through soft peach, lavender and blue into night instead of the old red and purple sunset. Stars, clouds, birds, the moon and the shadows fade in and out gradually; nothing switches at 19:59 or 04:59 any more.
+- One light, the sun by day and the moon by night, lights the sky, clouds, planets, hills, trees and the card's shadow from the same side; shadows are long and dense when the sun is low, short and soft at noon, faint by moonlight.
+- Checks (self-reported, fixed clock and isolated fixtures): web type check and build pass; ESLint 157 problems (158 before); all non-database unit tests 60/60 (the 3 database test files need a package that is not installed here and were not run); browser suite 509 tests, 508 passed, 0 failed, 1 pre-existing skip (header screenshots), run four files at a time; two earlier runs with every file at once showed a few unrelated 7 to 8 second timeouts under load, and those files passed when re-run alone; 13 of these are new composition tests. Not checked: watching the motion live, a real pointer or touch device, a screen reader, the hosted site. The tab-return catch-up (LOGIN-SCENE-02) is not part of this change. ChatGPT review pending.
+
+
+## Smooth login sky catch-up requested — 2026-11-03 12:40 MYT
+- Revised LOGIN-SCENE-02: after a long-hidden tab resumes, smoothly fast-forward the last visible sky through intervening day/night phases to current Malaysia time, with coordinated sun/moon movement, lighting and colors.
+- Specified a bounded catch-up, midnight/multi-day handling, repeated interruption and reduced-motion support; animation time remains separate from real authentication/business clocks.
+- Updated existing fix, handoff and review report. Source/requirements analysis only; no app changes, tests, database operations or deployment. Implementation and motion review pending.
+
+
+## Open a notice to see all of it; two new file routes — 2026-11-03 00:08
+- Students, lecturers and administrators can click a notice card to open a Notice details dialog: picture (expandable), priority, who it is for, who posted it and when, how long it is visible, the whole message (web addresses are links), the attached file and the link. Admins also see its state (draft, scheduled, live, expired) and can Modify or Delete from it; lecturers can on their own notices. It opens from the student and lecturer dashboards, the admin Announcements cards and the lecturer Course Notices page, with a calm entrance animation, reduced-motion support, focus handling and a note if the notice is removed while it is open.
+- Cards keep their own buttons (download, link, Modify, Delete, Edit) working without opening the card, and show a "View details" cue, High priority and "Posted 2 days ago"; their small text is larger.
+- Admins can now open the file on any notice, and lecturers the file on any notice they can see (before: only the author). A file with a non-Latin or quoted name no longer breaks the download.
+- Built as a dialog (like the ticket details), not as a separate page.
+- Checks (self-reported, isolated fixtures): web type check and build pass; unit tests 44/44; backend 531 passed (PostgreSQL-only tests not run this time); browser suite 488 of 489 passed (1 pre-existing skip), including 12 new notice tests. Not checked: watching the motion live, a screen reader, the hosted site. ChatGPT review pending.
+
+
+## Browser tab shows the system logo; student ticket details with animated progress — 2026-11-02 21:59
+- The tab icon is now your system logo's round badge (32 and 48 px, and a 180 px home-screen icon) instead of the purple bolt. A browser may keep showing the old icon in an already-open tab until a hard refresh.
+- Student feedback tickets: click (or press Enter or Space on) a card to open a Ticket details dialog with a three-stage progress, Pending, In Review, Resolved. The line fills smoothly to the current stage, finished stages turn into checks, the current one pulses, and a status change while the dialog is open moves it on. The dialog also shows the full message, the admin's reply and your own attachment.
+- Wording: students see Pending / In Review / Resolved (no more "Open"), admins see Pending / In Progress / Completed. Only the labels changed; nothing stored or sent changed.
+- Checks (self-reported, isolated fixtures): web type check and build pass; unit tests 38/38; browser suite 476 of 477 passed (1 pre-existing skip), including 8 new ticket-dialog tests, 1 new favicon test and 1 new admin-wording test; backend feedback tests 48 passed. Not checked: watching the motion live, a screen reader, the hosted site. ChatGPT review pending.
+
+
+## Stable dashboard on tab return, admin-owned feedback severity and image preview — 2026-11-02 21:12
+- STUDENT-SCOPE-07: coming back to the tab, a reconnect, a missed-events resync and the timed fallback no longer replace the settled student dashboard with "Updating". They refresh quietly and swap the new data in together; only a real timetable or account change says Updating. One snapshot per return instead of two.
+- FEEDBACK-TRIAGE-13: students no longer choose a priority (form, request and ticket badge removed; a submitted value is ignored and students never see the admin's severity). The admin chooses Low/Medium/High/Urgent in Feedback Details, required before a report leaves Pending, and it is saved with the status in one request. Set In Progress closes the dialog first, then one toast; double clicks, repeats and two admins are handled safely, an old dialog cannot reset a Resolved report, a response can be saved on its own, and a resolved report can be reopened.
+- FEEDBACK-PREVIEW-13: the attachment shows as a framed picture (Expand at the top right, a footer with Download at the bottom right) as drawn, with a larger viewer, a PDF file card and clear loading, retry, missing-file and no-attachment states. Nothing downloads until you press Download.
+- New migration d8e3b5a1f7c2 (after c6e2a9d4f018, still unapplied): run `alembic upgrade head` locally. The backend now refuses to start until it is applied; the Azure image applies it itself.
+- Checks (self-reported, isolated fixtures and a throwaway local PostgreSQL, removed afterwards): backend 546 passed, 0 skipped; web type check, build and unit tests pass; browser suite 465 of 466 passed (1 pre-existing skip); 6 new tab-return tests (5 fail on the old behaviour) and 12 new feedback tests pass. Not checked: real Alt-Tab, the hosted site, a screen reader. ChatGPT review pending.
+
+
+## Dashboard focus refresh and feedback triage requested — 2026-11-02 19:58 MYT
+- Reopened STUDENT-SCOPE-07 for visible refresh on Alt-Tab/tab return: connection ready topics currently trigger the same scope-changing path as actual assignment invalidation. Keep settled content stable during ordinary revalidation while preserving real scope/account/midnight safeguards.
+- Added FEEDBACK-TRIAGE-13: remove submitter-controlled priority, require admin severity before In Progress, close the dialog before the success toast and prevent repeated/stale/concurrent same-state actions.
+- Added FEEDBACK-PREVIEW-13 following the user's sketch: contained inline image, top-right expand, separate footer with bottom-right download; authenticated fetch, safe file fallbacks and scoped cleanup.
+- Reviewed latest report/changelog claims as self-reported; unrelated Academic Manager/toast revisions still await independent review. Requirements/source analysis only, no application changes, tests, database operations or deployment.
+
+
+## Clearer Academics workspace on every tab; toasts back at the top right — 2026-11-02 18:06
+- ACADEMIC-UX-12: each Academics tab now has a searchable record list paged on the server, with a count, a range, and clear empty, no-match and error states. Rows show what matters: programme usage, course programme, semester and status, the teaching role, and each student's courses with their own semester status.
+- Forms show errors beside the field and focus the first one, keep entries when a save is refused, block double saves and show the saved record marked in the list. Deletes say what they affect and use a red confirm.
+- Student Allocation has one student choice. The programme is fixed for an assigned student, only valid courses are offered, the course's real semester and group seats are shown, and a summary with credits sits near Save. The teaching role is a three-way choice. Sync stays busy until the list answers.
+- NOTIFICATION-UI-11: toasts are back at the top right under the header, never centred; with the bell panel open they move beneath it (or wait on a phone).
+- New read-only endpoints `/admin/records/*` and `/admin/lookup/allocation`; enrolment refuses a course from another programme. No migration.
+- Checks (self-reported, isolated fixtures and a throwaway local PostgreSQL): backend 526 passed plus the 6 PostgreSQL-only tests (44/44 in their files); web type check, build and lint on changed files pass; unit tests 38/38; browser suite 445 of 446 passed (1 pre-existing skip), then 10 new Academics tests pass. Not checked: real browser zoom, hosted site. ChatGPT review pending.
+
+
+## Academic Manager quality-of-life brief — 2026-11-02 17:03 MYT
+- Added ACADEMIC-UX-12 across all five admin academic tabs: readable hierarchy, consistent responsive forms/lists, guided dependent choices, one shared allocation student selector, useful record search/statuses and clearer validation/recovery.
+- Specified reuse of existing server lookups, system shimmer, safe allocation transactions and same-programme rules; preserve recent dropdown fixes, page refresh behavior and top-right toast placement.
+- Handoff/source analysis only; no application code, tests, database or deployment changes. Existing tasks preserved and all three workflow status tables synchronized.
+
+
+## Toast position clarified — 2026-11-02 17:01 MYT
+- User rejects centred toasts: keep top-right alignment below the header, with a safe gap around the notification bell and no overlap with its open panel.
+- Updated existing NOTIFICATION-UI-11 in all three workflow files; inspect both library positioning and CSS overrides. Placement correction pending; other completion claims remain independently unreviewed. Documentation only, no application changes or tests.
+
+
+## Searchable pickers and one programme per student, page-shaped refresh, clear student empty states, calmer toasts and bell, 404 monitor — 2026-11-02 15:35
+- ACADEMIC-SEARCH-11: programme, course, student and staff pickers search on the server one small page at a time (built for 100,000 records); students already on a course this semester are hidden until searched; a student keeps one programme and only gets courses from it (refused on the server too).
+- AUTH-UI-04: refreshing an app page shows that page's own loading skeleton while the session is checked, not the sign-in shape.
+- STUDENT-EMPTY-11 / STUDENT-SCOPE-07: clear empty panels (no courses with Contact Admin, no completed classes, no notices) instead of empty charts; after midnight or a course change the dashboard never shows old totals as current.
+- NOTIFICATION-UI-11: toasts sit below the header and away from the notification panel, use green/red/yellow/blue consistently, queue without repeats and never drop a failure; the bell rings only for a genuinely new update.
+- ERROR-PAGES-10: the 404 is a monitor whose screen says 404, with a server rack behind it; secret-looking parts of the address are hidden.
+- Checks (self-reported, isolated fixtures): backend suite 521 passed, 0 failed, 6 skipped (the earlier skips), including the PostgreSQL allocation and upcoming-class tests and 6 new search/one-programme tests; full browser suite 445 tests: 444 passed, 0 failed, 1 skipped (the earlier skip); web unit tests 38 of 38; tsc and the production build clean; ESLint clean on every new file. The public page's title test was updated to the hyphen now in the source (changed there at 13:11, before this work). Nothing committed, pushed, deployed or restarted. ChatGPT review pending.
+
+## Student guidance, searchable allocation and notification polish requested — 2026-11-02 14:12 MYT
+- Added clearer student empty-state panels, scalable server-searched dropdowns with available-first suggestions, and strict same-programme additional course enrolment. Search may reveal enrolled students but cannot bypass eligibility; ordinary allocation must no longer silently change an assigned programme.
+- Requested shared toast placement below header controls, consistent success/error/warning/info feedback, and a restrained animated bell with authoritative unread counts capped at 99+.
+- Revised refresh loading to use the current page's system shimmer while retaining authoritative session checks; revised 404 to show the code inside a monitor with a server behind it. Existing login-submit behavior and other error handling remain covered by their prior requirements.
+- Updated existing FIX, handoff and review report; preserved unfinished work. Requirements/source analysis only, no app changes, tests, production operations or deployment.
+
+
 ## Independent Git push readiness checks — 2026-11-02 01:47 MYT
 - Built a Git-included source snapshot: web production build/type-check passed with the Azure API address, and backend import/allocation route passed using dummy settings. Web reused installed dependencies; no fresh npm ci, Docker, Flutter or hosted startup check.
 - Only CHANGELOG.md, no tests/recordings/private env files, and no oversized files in the pushable snapshot. Heuristic secret scans found only an example connection-URI template candidate; no exhaustive secret-free guarantee.
@@ -8115,4 +8367,5 @@ lecturer_id   FK lecturers, nullable
 ##### 影响与代价
 - **收益**:单一真相在 DB、SQL 直接查、admin 真能改课表、三页时间一致、符合真实大学"自动排+人工微调"模式(答辩加分)。
 - **代价**:较大改动(新表+迁移+scheduler 重写+4 端点+显示3处+前端)。但引擎接口不变、有逐条比对兜底,风险可控。
-- **不做**:不动签到引擎的读取接口;不删旧列(非破坏)。
+- **不做**:不动签到引擎的读取接口;不删旧列(非破坏)。
+

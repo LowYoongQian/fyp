@@ -1,5 +1,8 @@
 import { FloatingPanel } from '../../components/FloatingPanel';
 import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
+import { useOpenRecord } from '../../hooks/useOpenRecord';
+import { AnnouncementDetailsDialog } from '../../components/AnnouncementDetailsDialog';
+import { CardOpenButton } from '../../components/CardOpenButton';
 import { TextInput, TextArea } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -20,7 +23,8 @@ import {
   Upload,
   Image as ImageIcon,
   Clock,
-  UserCheck
+  UserCheck,
+  ChevronRight
 } from 'lucide-react';
 import { ShimmerCard } from '../../components/Shimmer';
 
@@ -203,6 +207,7 @@ export const AnnouncementManager: React.FC = () => {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
+  const noticeView = useOpenRecord(announcements);
 
   // Form states
   const [title, setTitle] = useState('');
@@ -500,15 +505,18 @@ export const AnnouncementManager: React.FC = () => {
     }
   };
 
-  const handleDelete = async (announcementId: number | string, titleStr: string) => {
+  /** True once the notice is really gone, so a details dialog that started the delete knows to close. */
+  const handleDelete = async (announcementId: number | string, titleStr: string): Promise<boolean> => {
     const isConfirmed = await swalConfirmDelete(titleStr);
-    if (!isConfirmed) return;
+    if (!isConfirmed) return false;
     try {
       await apiService.adminDeleteAnnouncement(announcementId);
       fetchAnnouncements();
-      await swalSuccess('Notice Deleted', 'Announcement has been removed.');
+      void swalSuccess('Notice Deleted', 'Announcement has been removed.');
+      return true;
     } catch (err: any) {
-      await swalError('Deletion Failed', err.response?.data?.detail || 'Failed to delete announcement.');
+      void swalError('Deletion Failed', err.response?.data?.detail || 'Failed to delete announcement.');
+      return false;
     }
   };
 
@@ -591,6 +599,7 @@ export const AnnouncementManager: React.FC = () => {
                   ann.is_draft ? 'border border-dashed border-amber-400/60 bg-amber-50/10' : ''
                 }`}
               >
+                <CardOpenButton label={`Open notice: ${ann.title}`} onOpen={button => noticeView.show(ann, button)} />
                 {/* Optional Top Image */}
                 {ann.image_base64 && (
                   <div className="w-full h-48 overflow-hidden relative bg-slate-100 border-b border-slate-100">
@@ -675,22 +684,25 @@ export const AnnouncementManager: React.FC = () => {
                     </p>
                   </div>
 
-                  {/* Footer Actions */}
-                  <div className="flex items-center justify-end border-t border-slate-100 pt-3.5 mt-2 gap-2 shrink-0">
-                    <button
-                      onClick={() => handleOpenEdit(ann)}
-                      className="uipro-button uipro-button-secondary !py-2 !px-3.5 text-[10px] hover:!bg-slate-100"
-                    >
-                      <Edit2 className="h-3 w-3 mr-1.5 text-slate-500" />
-                      Modify
-                    </button>
-                    <button
-                      onClick={() => handleDelete(ann.id, ann.title)}
-                      className="uipro-button uipro-button-secondary hover:!bg-danger-red-light hover:!text-danger-red !py-2 !px-3.5 text-[10px]"
-                    >
-                      <Trash2 className="h-3 w-3 mr-1.5" />
-                      Delete
-                    </button>
+                  {/* Footer: the way in on the left, the quick actions on the right (raised above the card's own open button) */}
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-2 gap-2 shrink-0">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-blue transition-transform group-hover:translate-x-0.5">View details<ChevronRight className="h-4 w-4" /></span>
+                    <div className="relative z-10 flex items-center gap-2">
+                      <button
+                        onClick={() => handleOpenEdit(ann)}
+                        className="uipro-button uipro-button-secondary !py-2 !px-3.5 text-[10px] hover:!bg-slate-100"
+                      >
+                        <Edit2 className="h-3 w-3 mr-1.5 text-slate-500" />
+                        Modify
+                      </button>
+                      <button
+                        onClick={() => void handleDelete(ann.id, ann.title)}
+                        className="uipro-button uipro-button-secondary hover:!bg-danger-red-light hover:!text-danger-red !py-2 !px-3.5 text-[10px]"
+                      >
+                        <Trash2 className="h-3 w-3 mr-1.5" />
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1153,6 +1165,13 @@ export const AnnouncementManager: React.FC = () => {
         </div>,
         document.body
       )}
+
+      <AnnouncementDetailsDialog notice={noticeView.record} gone={noticeView.gone} viewer="admin" onClose={noticeView.close}
+        loadAttachment={(notice, signal) => apiService.adminDownloadAnnouncementAttachment(notice.id, signal)}
+        actions={noticeView.record ? {
+          onModify: () => { const notice = noticeView.record!; noticeView.close(false); handleOpenEdit(notice); },
+          onDelete: () => handleDelete(noticeView.record!.id, noticeView.record!.title),
+        } : undefined} />
     </div>
   );
 };

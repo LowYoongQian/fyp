@@ -1,21 +1,21 @@
-import json
 import logging
 import threading
 from datetime import datetime, timedelta, time
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from utils.timeutil import local_offset, utcnow
 from sqlalchemy.orm import Session
 from db.database import SessionLocal
 from db.models import (
     Enrolment, ClassSession, AttendanceRecord, Student, ClassMeeting, Course,
-    Lecturer, User, UserNotification,
+    Lecturer, User,
 )
 import time as time_module
 from domain.scheduler import calculate_schedule
 from domain.medical_leave import apply_approved_medical_leave
 from domain.class_lifecycle import close_class_if_due, needs_admin_escalation, reminder_stage
 from domain.semesters import within_semester
+from domain.notification_inbox import enqueue_notification
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +64,21 @@ def _sync_worker():
     global _last_sync_time, _is_syncing, _force_pending
     db = None
     try:
-        db = SessionLocal()
-        _sync_class_sessions_now(db)
+        for attempt in range(2):
+            db = SessionLocal()
+            try:
+                _sync_class_sessions_now(db)
+                break
+            except DBAPIError as exc:
+                if not exc.connection_invalidated or attempt:
+                    raise
+                logger.warning("Class session sync connection lost; retrying with a fresh session")
+            finally:
+                db.close()
+                db = None
+    except OperationalError as exc:
+        # Database unreachable (network or DNS down): the next sync retries, so one line instead of two full tracebacks a minute.
+        logger.warning("Class session sync skipped: database unreachable (%s)", str(exc.orig).splitlines()[0] if exc.orig else type(exc).__name__)
     except Exception as exc:
         # Nothing above this frame can catch it -- an escaped exception here would print a
         # bare thread traceback and, worse, skip the flag reset below, wedging _is_syncing
@@ -245,6 +258,11 @@ def _sync_class_sessions_now(db: Session):
         # constraint on (student_id, session_id) doing its job. Expected under
         # concurrency, not a failure worth alarming about.
         db.rollback()
+    except DBAPIError:
+        db.rollback()
+        # A lost connection invalidates the whole transaction, not just its last
+        # query. Let the worker repeat it once using a fresh session.
+        raise
     except Exception as e:
         # Everything else is a real fault: sessions did not open, or students were not
         # marked absent. Nobody is waiting on this thread, so the traceback in the log is
@@ -280,15 +298,7 @@ def _lecturer_user_id(db: Session, meeting_id):
 
 def _add_notification(db: Session, *, user_id, kind: str, title: str, body: str,
                       dedupe_key: str, payload: dict) -> None:
-    exists = db.query(UserNotification.id).filter(
-        UserNotification.user_id == user_id,
-        UserNotification.dedupe_key == dedupe_key,
-    ).first()
-    if not exists:
-        db.add(UserNotification(
-            user_id=user_id, kind=kind, title=title, body=body,
-            payload=json.dumps(payload), dedupe_key=dedupe_key,
-        ))
+    enqueue_notification(db, user_id, kind, title, body, dedupe_key, payload)
 
 
 def _send_timed_lecturer_reminders(db: Session, schedule_map: dict, sessions_by_key: dict,

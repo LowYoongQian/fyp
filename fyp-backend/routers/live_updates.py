@@ -53,11 +53,18 @@ async def live_updates(socket: WebSocket):
             batch = [change]
             while not queue.empty():
                 batch.append(queue.get_nowait())
-            topics = set()
+            # A resync means "events may have been missed", not "this changed": it is sent on its own, marked, so a client can
+            # revalidate quietly instead of treating every topic as really changed.
+            topics, resync = set(), False
             for item in batch:
-                topics.update(TOPICS - ({"registry"} if scope["role"] != "admin" else set()) if item.get("resync") else authorised_topics(item, scope))
+                if item.get("resync"):
+                    resync = True
+                else:
+                    topics.update(authorised_topics(item, scope))
             if topics:
                 await socket.send_json({"type": "invalidate", "topics": sorted(topics)})
+            if resync:
+                await socket.send_json({"type": "invalidate", "resync": True, "topics": sorted(TOPICS - ({"registry"} if scope["role"] != "admin" else set()))})
     except WebSocketDisconnect:
         pass
     except Exception:

@@ -1,7 +1,6 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useRef } from 'react';
 import { api, apiService, clearApiCache } from '../services/api';
 import { clearAccountAvatars } from '../utils/accountAvatar';
-import { verifySecondFactor } from '../utils/secondFactor';
 import { applyThemePreference, getAccountThemePreference, isThemePreference, resetThemeOnLogout, saveThemePreference } from '../theme/themePreference';
 import { setActiveLanguage } from '../i18n/i18n';
 import { swalWarning } from '../utils/swal';
@@ -9,6 +8,8 @@ import { startLiveUpdates, subscribeLive } from '../services/liveUpdates';
 import { syncRecoveryReminder } from '../utils/recoveryReminder';
 import { broadcastAccountLogout } from '../utils/accountLogout';
 import { beginPetHydration, failPetHydration, hydratePetPreferences, resetPetPreferences } from '../utils/petPreference';
+import { closeSwal } from '../utils/swal';
+import { AuthTransitionOverlay, SignOutOverlay, type SignOutState } from '../components/SignOutOverlay';
 
 // Hard Maximum Session Duration: 60 Minutes (1 Hour = 3,600,000 ms) for all roles (Student, Staff, Admin)
 const SESSION_MAX_AGE_MS = 60 * 60 * 1000;
@@ -20,12 +21,22 @@ interface UserSession {
   staff_role?: string | null;
 }
 
+/** A finished sign-in (the server's session data), or the pending second step of an account with 2FA. */
+export interface SessionData {
+  access_token: string; user_id: number | string; email?: string; role: string; staff_role?: string | null;
+  recovery_email_verified?: boolean; recovery_prompt_dismissed?: boolean;
+}
+export type LoginResult = { requires_two_factor: true; challenge_token: string; expires_in: number } | (SessionData & { requires_two_factor?: undefined });
+
 interface AuthContextType {
   user: UserSession | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string, portal?: string) => Promise<any>;
+  login: (email: string, password: string, portal?: string) => Promise<LoginResult>;
+  verifyLogin: (challenge: string, code: string, email: string) => Promise<SessionData>;
   logout: () => void;
+  /** The account menu's sign-out: ends this session here at once, asks the server to revoke it, and shows what actually happened. */
+  signOut: () => Promise<void>;
   isAuthenticated: boolean;
   syncAccountPreferences: (userId: number | string) => Promise<void>;
 }
@@ -42,6 +53,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<UserSession | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [signInState, setSignInState] = useState<'pending' | 'done' | null>(null);
 
   useEffect(() => token ? startLiveUpdates(token) : undefined, [token]);
   useEffect(() => user && token ? subscribeLive(['account'], () => { void syncAccountPreferences(user.user_id); }) : undefined, [token, user?.user_id]);
@@ -207,7 +219,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const accountTheme = isThemePreference(profile.theme_preference)
         ? profile.theme_preference
         : getAccountThemePreference(userId);
-      saveThemePreference(accountTheme as 'light' | 'dark' | 'system', userId);
+      saveThemePreference(accountTheme, userId);
       setActiveLanguage(profile.language_preference || localStorage.getItem(`language_preference_${userId}`) || 'en');
     } catch (e) {
       if (sessionStorage.getItem('auth_token') !== requestToken) return;
@@ -217,10 +229,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Sign-in progress belongs to the sign-in form (its own spinner and errors); this never flips an app-wide loading flag, so a wrong password cannot unmount the form.
-  const login = async (email: string, password: string, portal?: string) => {
-    let data = await apiService.login(email, password, portal);
-    if (data.requires_two_factor) data = await verifySecondFactor(data.challenge_token);
+  // Keep the cover above route changes while preserving the form on failed sign-in.
+  // An account with 2FA gets back only its pending challenge: nothing is stored and no session starts until verifyLogin succeeds.
+  const login = async (email: string, password: string, portal?: string): Promise<LoginResult> => {
+    setSignInState('pending');
+    try {
+      const data = await apiService.login(email, password, portal);
+      if (data.requires_two_factor) {
+        setSignInState(null);
+        return { requires_two_factor: true, challenge_token: data.challenge_token, expires_in: data.expires_in };
+      }
+      const session = await startSession(data, email);
+      setSignInState('done');
+      return session;
+    } catch (error) {
+      setSignInState(null);
+      throw error;
+    }
+  };
+
+  const verifyLogin = async (challenge: string, code: string, email: string) => {
+    setSignInState('pending');
+    try {
+      const session = await startSession((await api.post('/auth/login/verify', { challenge_token: challenge, code }, { timeout: 15000 })).data, email);
+      setSignInState('done');
+      return session;
+    } catch (error) {
+      setSignInState(null);
+      throw error;
+    }
+  };
+
+  const startSession = async (data: SessionData, email: string) => {
     const sessionUser: UserSession = {
       user_id: data.user_id,
       email: data.email || email,
@@ -253,6 +293,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .catch(error => { if (error.response?.status !== 401 && error.response?.status !== 403) void swalWarning('Signed out locally', 'The server could not confirm sign-out; this session will expire automatically.'); });
   };
 
+  const [signOutState, setSignOutState] = useState<SignOutState | null>(null);
+  const signingOut = useRef(false);
+  const signOut = async () => {
+    if (signingOut.current) return;   // a second click while signing out does nothing
+    signingOut.current = true;
+    const endingToken = sessionStorage.getItem('auth_token');
+    closeSwal();
+    setSignOutState('pending');
+    performLogoutStateCleanup();      // before any network wait: a refresh or Back can no longer reach this account
+    const revoked = !endingToken || await api.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${endingToken}` }, timeout: 12000 })
+      .then(() => true, error => error.response?.status === 401 || error.response?.status === 403);   // already ended on the server counts as ended
+    setSignOutState(revoked ? 'done' : 'local');
+  };
+  const finishSignOut = () => { setSignOutState(null); signingOut.current = false; };
+
   return (
     <AuthContext.Provider
       value={{
@@ -260,12 +315,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         loading,
         login,
+        verifyLogin,
         logout,
+        signOut,
         isAuthenticated: !!token,
         syncAccountPreferences,
       }}
     >
-      {children}
+      <div style={{ display: 'contents' }} inert={signInState !== null}>{children}</div>
+      {signInState && <AuthTransitionOverlay action="in" state={signInState} onDone={() => setSignInState(null)} />}
+      {signOutState && <SignOutOverlay state={signOutState} onDone={finishSignOut} />}
     </AuthContext.Provider>
   );
 };

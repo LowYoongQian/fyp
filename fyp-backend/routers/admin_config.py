@@ -8,6 +8,7 @@ from db.database import get_db
 import ipaddress
 import socket
 from db.models import User, Announcement, CampusNetwork, SecuritySetting
+from integrations.announcement_files import attachment_response
 from utils.security import require_admin
 from utils.db_helpers import get_or_404
 from schemas import (
@@ -87,6 +88,12 @@ def update_announcement(announcement_id: Union[int, str], body: AnnouncementCrea
     db.commit()
     db.refresh(announcement)
     return announcement
+
+@router.get("/announcements/{announcement_id}/attachment")
+def announcement_attachment(announcement_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """The file on any notice (a lecturer's course notice can carry one), for the administrator who manages it."""
+    return attachment_response(get_or_404(db, Announcement, str(announcement_id), "Announcement"))
+
 
 @router.delete("/announcements/{announcement_id}", response_model=MessageResponse)
 def delete_announcement(announcement_id: Union[int, str], db: Session = Depends(get_db), current_user: User = Depends(require_admin)):

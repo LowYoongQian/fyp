@@ -5,8 +5,15 @@ import { apiService, clearApiCache } from '../../services/api';
 import { useLiveRefresh } from '../../hooks/useLiveRefresh';
 import { StudentNextAction } from '../../components/StudentNextAction';
 import { ShimmerStudentDashboard } from '../../components/Shimmer';
+import { EmptyState } from '../../components/EmptyState';
 import { useMalaysiaToday } from '../../hooks/useMalaysiaToday';
 import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
+import { useOpenRecord } from '../../hooks/useOpenRecord';
+import { AnnouncementDetailsDialog } from '../../components/AnnouncementDetailsDialog';
+import { CardOpenButton } from '../../components/CardOpenButton';
+import { relativeTime, safeHttpUrl } from '../../utils/announcementMeta';
+import { saveBlob, safeDownloadName } from '../../utils/downloadName';
+import { swalError } from '../../utils/swal';
 import type { Announcement, StudentProfile, StudentEnrolmentDetail, StudentActiveSession } from '../../services/api';
 import {
   Smartphone,
@@ -22,10 +29,14 @@ import {
   PieChart as PieIcon,
   Mail,
   Bell,
+  ChevronRight,
+  Flag,
   Download,
   ExternalLink,
   ArrowRight,
-  X
+  X,
+  MessageSquare,
+  CalendarClock
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -43,7 +54,7 @@ import {
   ReferenceLine
 } from 'recharts';
 
-export const StudentDashboard: React.FC = () => {
+export const StudentDashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const { user } = useAuth();
   const [student, setStudent] = useState<StudentProfile | null>(null);
   const [enrolments, setEnrolments] = useState<StudentEnrolmentDetail[]>([]);
@@ -61,32 +72,54 @@ export const StudentDashboard: React.FC = () => {
   const today = useMalaysiaToday();
 
   // The dashboard shows the current semester only ('current' is checked by the server); history screens keep the full list.
-  const refreshCurrent = async () => {
-    const [sessions, enrolmentsList] = await Promise.all([apiService.studentGetAttendanceSessions('current'), apiService.studentGetEnrolments('current')]);
-    setStatistics(dashboardAttendance(sessions));
-    setCompletedCourses([...new Set(sessions.map(session => String(session.course_id)))]);
-    setEnrolments(enrolmentsList);
+  // Courses, totals and charts are always fetched and replaced together, and only the newest request may apply its answer, so a slow,
+  // older answer can never put back data from before an assignment change. `scope` says whether that snapshot is current.
+  const currentRun = useRef(0);
+  const [scope, setScope] = useState<'ready' | 'updating' | 'unavailable'>('ready');
+  const scopeStale = useRef(false);   // a known change is waiting for its answer, even if a newer quiet refresh took over the request
+  const refreshCurrent = async ({ profile = false, scopeChanged = false } = {}) => {
+    const run = ++currentRun.current;
+    if (scopeChanged) { clearApiCache(); scopeStale.current = true; setScope('updating'); }
+    try {
+      const [sessions, enrolmentsList, freshProfile] = await Promise.all([
+        apiService.studentGetAttendanceSessions('current'), apiService.studentGetEnrolments('current'), profile ? apiService.studentGetProfile() : Promise.resolve(null),
+      ]);
+      if (run !== currentRun.current) return;
+      setStatistics(dashboardAttendance(sessions));
+      setCompletedCourses([...new Set(sessions.map(session => String(session.course_id)))]);
+      setEnrolments(enrolmentsList);
+      if (freshProfile) setStudent(freshProfile);
+      scopeStale.current = false;
+      setScope('ready');
+    } catch (error) {
+      // After a known change of courses or semester the old totals are no longer current: say so instead of showing them.
+      if (run === currentRun.current && scopeStale.current) setScope('unavailable');
+      throw error;
+    }
   };
-  useLiveRefresh(refreshCurrent, ['attendance'], String(user?.user_id));
-  // Malaysia midnight can end or start a semester: quietly fetch again so old totals never stay up as current.
+  // One subscription, one snapshot. A reconnect, a return to the tab or the timed fallback only revalidates quietly: the settled cards stay and
+  // the new answer replaces them together. Only a real timetable or account change is a known change of scope (then "Updating" is honest).
+  useLiveRefresh(({ kind, topics }) => {
+    const scopeChanged = kind === 'change' && topics.some(topic => topic === 'timetable' || topic === 'account');
+    return refreshCurrent({ profile: scopeChanged || kind !== 'change', scopeChanged });
+  }, ['attendance', 'timetable', 'account'], String(user?.user_id));
+  // Malaysia midnight can end or start a semester: the whole current snapshot is fetched again, never left up as current on failure.
   const lastToday = useRef(today);
   useEffect(() => {
     if (lastToday.current === today) return;
     lastToday.current = today;
-    clearApiCache();
-    void refreshCurrent().catch(() => undefined);
+    void refreshCurrent({ scopeChanged: true }).catch(() => undefined);
   }, [today]);
   useLiveRefresh(async () => setActiveSessions(await apiService.studentGetActiveSessions()), ['sessions'], String(user?.user_id));
   useLiveRefresh(async () => setAnnouncements(await apiService.studentGetAnnouncements()), ['notices'], String(user?.user_id));
   useNotificationListRecord({ tab: 'student_dashboard', kinds: ['announcement'], ids: announcements.map(item => String(item.id)), ready: !loading,
     dataVersion: [announcements, showAllNotices], prepare: id => { if (announcements.findIndex(item => String(item.id) === id) >= 6) setShowAllNotices(true); } });
-  useLiveRefresh(async () => {
-    const [profile, list] = await Promise.all([apiService.studentGetProfile(), apiService.studentGetEnrolments('current')]);
-    setStudent(profile); setEnrolments(list);
-  }, ['timetable', 'account'], String(user?.user_id));
 
   useEffect(() => {
     let cancelled = false;
+    const run = ++currentRun.current;   // the first load also wins over any older refresh still on its way
+    scopeStale.current = false;
+    setScope('ready');
     setLoading(true);
     setLoadError(false);
     setStudent(null);
@@ -112,7 +145,7 @@ export const StudentDashboard: React.FC = () => {
           apiService.getUserProfile().catch(() => null),
           apiService.studentGetAttendanceSessions('current'),
         ]);
-        if (cancelled) return;
+        if (cancelled || run !== currentRun.current) return;
         setStatistics(dashboardAttendance(sessions));
         setCompletedCourses([...new Set(sessions.map(session => String(session.course_id)))]);
         setStudent(profile);
@@ -140,14 +173,11 @@ export const StudentDashboard: React.FC = () => {
     return () => window.removeEventListener('recovery-email-verified', handleRecoveryEmailVerified);
   }, []);
 
+  const noticeView = useOpenRecord(announcements);
   const downloadNoticeFile = async (notice: Announcement) => {
-    const blob = await apiService.studentDownloadAnnouncementAttachment(notice.id);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = notice.attachment_name || 'course-file';
-    anchor.click();
-    URL.revokeObjectURL(url);
+    try {
+      saveBlob(await apiService.studentDownloadAnnouncementAttachment(notice.id), safeDownloadName(notice.attachment_name, notice.attachment_mime_type) || 'course-file');
+    } catch { void swalError('Download failed', 'The file could not be downloaded. Please try again.'); }
   };
 
   // Resolve study programme details from profile
@@ -179,6 +209,18 @@ export const StudentDashboard: React.FC = () => {
   }));
   const statusPieData = statistics.breakdown;
   const completedCount = statusPieData.reduce((sum, item) => sum + item.value, 0);
+
+  const scopeReady = scope === 'ready';
+  const contactAdmin = onNavigate && (
+    <button type="button" onClick={() => onNavigate('student_contact')} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-bold text-brand-blue shadow-xs transition hover:bg-blue-50 dark:border-slate-700 dark:bg-slate-900 dark:text-blue-300 dark:hover:bg-slate-800">
+      <MessageSquare className="h-3.5 w-3.5" />Contact Admin
+    </button>
+  );
+  const noCourses = <EmptyState icon={BookOpen} title="No current courses assigned" text="Your courses will appear here once the school allocates them for this semester." action={contactAdmin} />;
+  const scopePanel = scope === 'updating'
+    ? <div role="status" className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-6 py-8 text-xs font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300"><span aria-hidden="true" className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600 motion-reduce:animate-none" />Updating your current courses…</div>
+    : <EmptyState tone="warning" icon={AlertCircle} title="Could not update your current courses" text="Your courses or semester changed, so the earlier figures are no longer current. Please try again."
+        action={<button type="button" onClick={() => { void refreshCurrent({ profile: true, scopeChanged: true }).catch(() => undefined); }} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-brand-blue px-3.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700">Try again</button>} />;
 
   if (loading || loadedUserId !== user?.user_id) return <ShimmerStudentDashboard />;
 
@@ -289,8 +331,8 @@ export const StudentDashboard: React.FC = () => {
         <div className="uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-xs flex items-center justify-between">
           <div className="space-y-1">
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">Current Courses</span>
-            <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{enrolments.length}</span>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">{enrolments.length ? `(${totalCreditHours} Credit Hours total)` : 'No current courses assigned'}</span>
+            <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{scopeReady ? enrolments.length : '—'}</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">{!scopeReady ? 'Updating' : enrolments.length ? `(${totalCreditHours} Credit Hours total)` : 'No current courses assigned'}</span>
           </div>
           <div className="p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 rounded-xl">
             <BookOpen className="h-5 w-5" />
@@ -300,10 +342,10 @@ export const StudentDashboard: React.FC = () => {
         <div className="uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-xs flex items-center justify-between">
           <div className="space-y-1">
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">Attendance Rate</span>
-            <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{attendanceLabel}</span>
+            <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{scopeReady ? attendanceLabel : '—'}</span>
             <div className="flex items-center gap-1">
               <Activity className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-              <span className={`text-[10px] font-semibold ${hasLowCourse ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>{standing}</span>
+              <span className={`text-[10px] font-semibold ${scopeReady && hasLowCourse ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>{scopeReady ? standing : 'Updating'}</span>
             </div>
           </div>
           <div className="p-3 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-xl">
@@ -327,31 +369,40 @@ export const StudentDashboard: React.FC = () => {
         </div>
       </div>
 
-      {announcements.length > 0 && (
+      {(
         <section className="uipro-card rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-slate-800 dark:bg-slate-900/60">
           <div className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3 dark:border-slate-800">
             <Bell className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             <div><h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">Latest Notices</h3><p className="text-[10px] text-slate-500 dark:text-slate-400">General and course updates in one place.</p></div>
           </div>
-          <div className="grid gap-3 lg:grid-cols-2">
+          {announcements.length === 0 ? <EmptyState icon={Bell} title="No notices yet" text="School and course notices will show up here." /> : <div className="grid gap-3 lg:grid-cols-2">
             {announcements.slice(0, showAllNotices ? undefined : 6).map(notice => {
               const isCourse = notice.target_scope === 'course';
-              return <article key={notice.id} data-notice-record={String(notice.id)} className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+              return <article key={notice.id} data-notice-record={String(notice.id)} className="group relative rounded-xl border border-slate-200 bg-slate-50 p-4 transition-all hover:-translate-y-px hover:border-blue-300 hover:bg-white hover:shadow-md dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-blue-500/50 dark:hover:bg-slate-800">
+                <CardOpenButton label={`Open notice: ${notice.title}`} onOpen={button => noticeView.show(notice, button)} />
                 <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full px-2.5 py-1 text-[9px] font-extrabold uppercase ${isCourse ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'}`}>{isCourse ? 'Course' : 'General'}</span>
-                  {isCourse && <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400">{notice.target_course_code} · {notice.target_group?.toLowerCase() === 'all' ? 'All groups' : notice.target_group}</span>}
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${isCourse ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'}`}>{isCourse ? 'Course' : 'General'}</span>
+                  {isCourse && <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{notice.target_course_code} · {notice.target_group?.toLowerCase() === 'all' ? 'All groups' : notice.target_group}</span>}
+                  {notice.priority === 'High' && <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"><Flag className="h-3 w-3" />High priority</span>}
                 </div>
-                <h4 className="text-xs font-extrabold text-slate-900 dark:text-slate-100">{notice.title}</h4>
-                <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">{notice.content}</p>
+                <h4 className="break-words text-sm font-extrabold text-slate-900 dark:text-slate-100">{notice.title}</h4>
+                <p className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-600 dark:text-slate-300">{notice.content}</p>
                 {(notice.attachment_name || notice.external_link) && <div className="mt-3 flex flex-wrap gap-2">
-                  {notice.attachment_name && <button type="button" onClick={() => downloadNoticeFile(notice)} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300"><Download className="h-3.5 w-3.5" />{notice.attachment_name}</button>}
-                  {notice.external_link && <a href={notice.external_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200"><ExternalLink className="h-3.5 w-3.5" />Open link</a>}
+                  {notice.attachment_name && <button type="button" onClick={() => downloadNoticeFile(notice)} className="relative z-10 inline-flex max-w-full items-center gap-1.5 rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300"><Download className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{notice.attachment_name}</span></button>}
+                  {notice.external_link && safeHttpUrl(notice.external_link) && <a href={safeHttpUrl(notice.external_link)!} target="_blank" rel="noopener noreferrer" className="relative z-10 inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200"><ExternalLink className="h-3.5 w-3.5" />Open link</a>}
                 </div>}
+                <div className="mt-3 flex items-center justify-between gap-3 text-xs">
+                  <span className="text-slate-500 dark:text-slate-400">{relativeTime(notice.created_at) ? `Posted ${relativeTime(notice.created_at)}` : ''}</span>
+                  <span className="inline-flex items-center gap-1 font-semibold text-brand-blue transition-transform group-hover:translate-x-0.5 dark:text-blue-400">View details<ChevronRight className="h-4 w-4" /></span>
+                </div>
               </article>;
             })}
-          </div>
+          </div>}
         </section>
       )}
+
+      <AnnouncementDetailsDialog notice={noticeView.record} gone={noticeView.gone} viewer="student" onClose={noticeView.close}
+        loadAttachment={(notice, signal) => apiService.studentDownloadAnnouncementAttachment(notice.id, signal)} />
 
       {/* ---------------------------------------------------- */}
       {/* VISUAL CHARTS SECTION (Theme Mode Synchronized) */}
@@ -367,6 +418,9 @@ export const StudentDashboard: React.FC = () => {
           </span>
         </div>
 
+        {!scopeReady ? scopePanel : enrolments.length === 0 ? noCourses : completedCount === 0 ? (
+          <EmptyState icon={CalendarClock} title="No completed classes yet" text="Attendance appears here after your classes are completed. Nothing is counted against you before then." />
+        ) : <>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Chart 1: Weekly Attendance Rate Trend (Area Chart) */}
           <div className="lg:col-span-2 uipro-card bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-3 shadow-xs">
@@ -464,7 +518,7 @@ export const StudentDashboard: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-[10px] pt-1">
-              {statusPieData.map(entry => <span key={entry.name}>{entry.value} {entry.name}</span>)}
+              {statusPieData.filter(entry => entry.value > 0).map(entry => <span key={entry.name}>{entry.value} {entry.name}</span>)}
             </div>
           </div>
         </div>
@@ -510,9 +564,10 @@ export const StudentDashboard: React.FC = () => {
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>) : <p className="text-xs text-slate-500 dark:text-slate-400">No current courses assigned.</p>}
+            </ResponsiveContainer>) : null}
           </div>
         </div>
+        </>}
       </div>
 
       {/* Main Grid: Enrolled Modules & Guidelines */}
@@ -523,11 +578,7 @@ export const StudentDashboard: React.FC = () => {
             Current Course Modules :
           </h3>
           
-          {enrolments.length === 0 ? (
-            <div className="uipro-card bg-white dark:bg-slate-900/60 p-8 text-center text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-800 rounded-2xl">
-              No current courses assigned.
-            </div>
-          ) : (
+          {!scopeReady ? scopePanel : enrolments.length === 0 ? noCourses : (
             <div className="space-y-3">
               {enrolments.map(e => {
                 const rate = getAttendanceRateForCourse(e.course_id);

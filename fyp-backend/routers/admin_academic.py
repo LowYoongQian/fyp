@@ -72,12 +72,22 @@ def update_programme(programme_id: str, body: ProgrammeCreate, db: Session = Dep
 @router.delete("/programmes/{programme_id}", response_model=MessageResponse)
 def delete_programme(programme_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     programme = get_or_404(db, Programme, programme_id, "Programme")
-    if db.query(AcademicSemester.id).filter(AcademicSemester.programme_id == programme.id).first():
-        raise HTTPException(409, "This programme has semester history and cannot be deleted")
+    # An ongoing semester protects its programme until the admin deletes that semester; upcoming and ended ones go with it.
+    terms = db.query(AcademicSemester).filter(AcademicSemester.programme_id == programme.id).all()
+    ongoing = next((t for t in terms if semester_dict(t)["status"] == "active"), None)
+    if ongoing:
+        raise HTTPException(409, f"{programme.code} has the ongoing semester {ongoing.name}. Delete that semester first "
+                                 "(Academics → Semesters), then delete the programme.")
 
     # Read before the delete makes them unavailable.
     deleted_desc = f"{programme.name} ({programme.code})"
 
+    term_names = sorted(t.name for t in terms)
+    if terms:
+        db.query(Course).filter(Course.semester_id.in_([t.id for t in terms])).update({Course.semester_id: None}, synchronize_session=False)
+        for term in terms:
+            db.delete(term)
+        db.flush()
     detached_students = db.query(Student).filter(Student.programme_id == programme_id).update({Student.programme_id: None})
     detached_courses = db.query(Course).filter(Course.programme_id == programme_id).update({Course.programme_id: None})
 
@@ -86,7 +96,8 @@ def delete_programme(programme_id: str, db: Session = Depends(get_db), current_u
 
     log_admin_action(db, current_user, "DELETE_PROGRAMME",
                      f"Deleted programme {deleted_desc}; detached "
-                     f"{detached_students} student(s) and {detached_courses} course(s)")
+                     f"{detached_students} student(s) and {detached_courses} course(s); "
+                     f"removed semester(s): {', '.join(term_names) or 'none'}")
 
     return {"message": "Programme deleted successfully"}
 
@@ -234,6 +245,9 @@ def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_
 @router.delete("/courses/{course_id}", response_model=MessageResponse)
 def delete_course(course_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     course = get_or_404(db, Course, course_id, "Course")
+    if course.semester_id and semester_dict(course.semester)["status"] == "active":
+        raise HTTPException(409, f"{course.course_code} is in the ongoing semester {course.semester.name}. Delete that semester "
+                                 "first (Academics → Semesters), then delete the course.")
 
     # Read before the cascade deletes make them unavailable.
     deleted_desc = f"{course.course_name} ({course.course_code})"
@@ -527,6 +541,10 @@ def enrol_student(db, student_id, course_id, semester, class_group):
     student = db.query(Student).filter(Student.id == student_id).with_for_update().first()
     if not student:
         raise HTTPException(400, "Selected student does not exist")
+    # One student, one programme: a course is only ever added from the student's own programme, whatever the client sent.
+    if course.programme_id and str(student.programme_id or "") != str(course.programme_id):
+        raise HTTPException(400, "A course can only be added from the student's own study programme." if student.programme_id
+                            else "Allocate the student to this course's study programme first.")
     term = require_enrolment_credit_limit(db, student.id, course)
     if term:
         if student.programme_id != term.programme_id:
@@ -598,6 +616,10 @@ def save_student_allocation(body: dict, db: Session = Depends(get_db), current_u
         student = db.query(Student).filter(Student.id == student_id).populate_existing().with_for_update().first()
         if not student:
             raise HTTPException(400, "Selected student does not exist")
+        if student.programme_id and str(student.programme_id) != str(programme_id):
+            # Course allocation never moves a student to another programme; that would silently orphan their current courses.
+            raise HTTPException(409, f"This student already belongs to {student.programme.code if student.programme else 'another programme'}. "
+                                     "Add a course from that programme instead.")
         existing = db.query(Enrolment).filter(Enrolment.student_id == student_id, Enrolment.course_id == course_id).first()
         if existing and existing.class_group != class_group:
             raise HTTPException(409, f"This student is already enrolled in this course in group {existing.class_group}. Remove that enrolment first to change the group.")

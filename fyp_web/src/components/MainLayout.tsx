@@ -30,11 +30,8 @@ import {
   ChevronDown,
   FileCheck
 } from 'lucide-react';
-import { closeSwal } from '../utils/swal';
-import { clearApiCache } from '../services/api';
 import { t } from '../i18n/i18n';
 import { accountRoleLabel } from '../utils/accountRole';
-import { broadcastAccountLogout } from '../utils/accountLogout';
 import { useNotificationInbox } from '../hooks/useNotificationInbox';
 import { NotificationBell, UnreadIndicator } from './NotificationBell';
 import { NotificationTargetContext, type PendingTarget, type TargetStatus } from '../context/NotificationTargetContext';
@@ -59,7 +56,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   isLoading = false,
   children
 }) => {
-  const { user, token, logout } = useAuth();
+  const { user, token, signOut } = useAuth();
   const inbox = useNotificationInbox(String(user?.user_id || ''), token || '');
   const previousTab = useRef(currentTab);
   useEffect(() => {
@@ -123,7 +120,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   
   // Account navigation menu
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const pageRef = useRef<HTMLElement>(null);
   useLayoutEffect(() => animateUiEntrance(pageRef.current, 0.96), [currentTab]);
@@ -140,23 +136,8 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   }, [setCurrentTab]);
 
 
-  const handleLogout = () => {
-    broadcastAccountLogout();
-    // Immediately destroy session tokens so refreshing the page (F5 / Ctrl+F5) CANNOT cancel logout
-    sessionStorage.removeItem('auth_token');
-    sessionStorage.removeItem('auth_user');
-    sessionStorage.removeItem('auth_session_expires_at');
-    window.history.replaceState({}, '', '/login');
-    clearApiCache();
-    setIsLoggingOut(true);
-    setIsProfileMenuOpen(false);
-  };
-
-  const handleLogoutAnimationComplete = () => {
-    closeSwal();
-    logout();
-    window.location.reload();
-  };
+  // Signing out is the auth layer's job: it ends the session here at once, revokes it on the server and shows the real outcome.
+  const handleLogout = () => { setIsProfileMenuOpen(false); void signOut(); };
 
   // Close profile menu when clicking outside
   useEffect(() => {
@@ -595,84 +576,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           </NotificationTargetContext.Provider>
         </main>
         {showPet && <Suspense fallback={null}><Pet /></Suspense>}
-      </div>
-
-      {/* Full-Screen Logout Transition Overlay */}
-      {isLoggingOut && (
-        <LogoutTransitionOverlay onComplete={handleLogoutAnimationComplete} />
-      )}
-    </div>
-  );
-};
-
-interface LogoutTransitionOverlayProps {
-  onComplete: () => void;
-}
-
-const LogoutTransitionOverlay: React.FC<LogoutTransitionOverlayProps> = ({ onComplete }) => {
-  // Use lazy useState initialization so startTime is created ONCE on mount and preserved across re-renders
-  const [startTime] = useState<number>(() => Date.now());
-  const [progress, setProgress] = useState<number>(0);
-  const [remainingSec, setRemainingSec] = useState<string>('1.5');
-  const onCompleteRef = useRef(onComplete);
-
-  useEffect(() => {
-    onCompleteRef.current = onComplete;
-  }, [onComplete]);
-
-  useEffect(() => {
-    const DURATION_MS = 1500; // 1.5 seconds total
-
-    const timer = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const pct = Math.min(100, Math.floor((elapsed / DURATION_MS) * 100));
-      const sec = Math.max(0, (DURATION_MS - elapsed) / 1000).toFixed(1);
-
-      setProgress(pct);
-      setRemainingSec(sec);
-
-      if (elapsed >= DURATION_MS) {
-        clearInterval(timer);
-        onCompleteRef.current();
-      }
-    }, 30);
-
-    return () => clearInterval(timer);
-  }, [startTime]);
-
-  return (
-    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl animate-in fade-in duration-200 space-y-6">
-      <img
-        src={sasLogo}
-        alt="SmartAttendance Logo"
-        className="h-36 w-36 sm:h-44 sm:w-44 md:h-48 md:w-48 object-contain drop-shadow-2xl animate-bounce"
-      />
-      <div className="text-center space-y-1.5">
-        <h3 className="font-display font-bold text-xl text-slate-900 dark:text-slate-100">Successfully Logged Out</h3>
-        <p className="text-xs text-slate-500 dark:text-slate-400 font-sans font-medium">Clearing session credentials and redirecting to portal...</p>
-      </div>
-
-      {/* Semantic UI Progress Component with Smart Attendance System Brand Styling */}
-      <div className="ui progress active indicating w-72 sm:w-80 space-y-2.5" data-percent={progress}>
-        {/* Track Container */}
-        <div className="w-full h-3.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative border border-slate-200/80 dark:border-slate-700/80 shadow-inner p-0.5">
-          {/* Active Gradient Bar with Semantic UI Pulse Overlay */}
-          <div
-            className="bar h-full bg-gradient-to-r from-brand-blue via-sky-400 to-emerald-400 rounded-full transition-all duration-75 ease-out shadow-sm relative overflow-hidden"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        {/* Semantic UI Progress Label Row */}
-        <div className="flex justify-between items-center text-xs font-mono font-bold text-slate-600 dark:text-slate-300 px-0.5">
-          <span className="flex items-center gap-1 text-brand-blue dark:text-blue-400">
-            <span>Progress:</span>
-            <span key={`pct-${progress}`}>{progress}%</span>
-          </span>
-          <span key={`sec-${remainingSec}`} className="text-slate-500 dark:text-slate-400 font-medium">
-            {remainingSec} sec remaining
-          </span>
-        </div>
       </div>
     </div>
   );

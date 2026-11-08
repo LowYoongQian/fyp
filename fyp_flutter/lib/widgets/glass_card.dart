@@ -1,5 +1,4 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
-import 'dart:ui';
 import 'package:flutter/material.dart';
 
 // -----------------------------------------------------------------
@@ -29,31 +28,30 @@ class GlassCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final defaultColor = isDarkMode
-        ? const Color(0xFF1E1E1E).withValues(alpha: 0.75)
-        : Colors.white.withValues(alpha: 0.75);
+        // Solid enough that the sky scene behind (sun, clouds, trees) never shows through the content as blurred shapes.
+        ? const Color(0xFF222222).withValues(alpha: 0.9)
+        : Colors.white.withValues(alpha: 0.9);
     final defaultBorderColor = isDarkMode
-        ? const Color(0xFF334155).withValues(alpha: 0.4)
+        ? const Color(0xFF333333).withValues(alpha: 0.4)
         : Colors.white.withValues(alpha: 0.4);
 
     final radius = borderRadius ?? BorderRadius.circular(20);
     return ClipRRect(
       borderRadius: radius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
-        child: Container(
-          width: width,
-          height: height,
-          padding: padding ?? const EdgeInsets.all(20.0),
-          decoration: BoxDecoration(
-            color: color ?? defaultColor,
-            borderRadius: radius,
-            border: Border.all(
-              color: borderColor ?? defaultBorderColor,
-              width: 1.2,
-            ),
+      // No backdrop blur: at 90% opacity it was invisible, yet re-blurred the animated sky behind every card on every frame.
+      child: Container(
+        width: width,
+        height: height,
+        padding: padding ?? const EdgeInsets.all(20.0),
+        decoration: BoxDecoration(
+          color: color ?? defaultColor,
+          borderRadius: radius,
+          border: Border.all(
+            color: borderColor ?? defaultBorderColor,
+            width: 1.2,
           ),
-          child: child,
         ),
+        child: child,
       ),
     );
   }

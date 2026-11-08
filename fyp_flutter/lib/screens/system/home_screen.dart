@@ -1,8 +1,10 @@
-import 'dart:convert';
+import '../../i18n/tr.dart';
+import '../../widgets/brand_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../widgets/glass_card.dart';
 import '../../main.dart';
+import 'announcements.dart';
 
 class HomeScreen extends StatefulWidget {
   final List<Map<String, dynamic>> announcements;
@@ -35,6 +37,11 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _openAllAnnouncements() => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => AnnouncementsScreen(announcements: widget.announcements)),
+      );
+
   String _dayOfWeekName(int day) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     return days[day - 1];
@@ -44,10 +51,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final primaryTextColor = isDarkMode ? Colors.white : const Color(0xFF0F172A);
-    final secondaryTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF475569);
-    final slateTextColor = isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-    final cardBgColor = isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
-    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final secondaryTextColor = isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF475569);
+    final slateTextColor = isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B);
+    final cardBgColor = isDarkMode ? const Color(0xFF222222) : Colors.white;
+    final borderColor = isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0);
 
     return SafeArea(
       child: Column(
@@ -95,7 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            _dayOfWeekName(ApiConfig.now.weekday),
+                            tr(_dayOfWeekName(ApiConfig.now.weekday)),
                             style: GoogleFonts.inter(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
@@ -107,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        "Smart Attendance Portal System",
+                        tr('Smart Attendance Portal System'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: GoogleFonts.inter(
@@ -123,11 +130,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: widget.onSettingsPressed,
                   icon: Icon(Icons.settings, color: slateTextColor, size: 20),
                   style: IconButton.styleFrom(
-                    backgroundColor: isDarkMode ? const Color(0xFF1E1E1E).withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.5),
+                    backgroundColor: isDarkMode ? const Color(0xFF222222).withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.5),
                     padding: const EdgeInsets.all(8),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: isDarkMode ? const Color(0xFF334155).withValues(alpha: 0.5) : const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
+                      side: BorderSide(color: isDarkMode ? const Color(0xFF333333).withValues(alpha: 0.5) : const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
                     ),
                   ),
                 ),
@@ -137,11 +144,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // Main Home Scrollable Area
           Expanded(
-            child: RefreshIndicator(
+            child: BrandRefresh(
               onRefresh: widget.onRefresh,
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                physics: const AlwaysScrollableScrollPhysics(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -170,7 +177,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Welcome to Smart Attendance Portal",
+                          tr('Welcome to Smart Attendance Portal'),
                           style: GoogleFonts.spaceGrotesk(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -179,7 +186,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          "Manage your classes, biometric keys, and view live attendance logs seamlessly.",
+                          tr('Manage your classes, biometric keys, and view live attendance logs seamlessly.'),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             color: Colors.white.withValues(alpha: 0.85),
@@ -216,7 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  "Student Portal",
+                                  tr('Student Portal'),
                                   style: GoogleFonts.spaceGrotesk(
                                     fontSize: 13,
                                     fontWeight: FontWeight.bold,
@@ -225,7 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  "Check-in & view logs",
+                                  tr('Check-in & view logs'),
                                   textAlign: TextAlign.center,
                                   style: GoogleFonts.inter(
                                     fontSize: 9.5,
@@ -249,18 +256,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Container(
                                   padding: const EdgeInsets.all(10),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF800000).withValues(alpha: 0.1),
+                                    color: const Color(0xFF2563EB).withValues(alpha: 0.1),
                                     shape: BoxShape.circle,
                                   ),
                                   child: const Icon(
                                     Icons.admin_panel_settings,
-                                    color: Color(0xFF800000),
+                                    color: Color(0xFF2563EB),
                                     size: 24,
                                   ),
                                 ),
                                 const SizedBox(height: 10),
                                 Text(
-                                  "Staff Portal",
+                                  tr('Staff Portal'),
                                   style: GoogleFonts.spaceGrotesk(
                                     fontSize: 13,
                                     fontWeight: FontWeight.bold,
@@ -269,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  "Manage sessions & lists",
+                                  tr('Manage sessions & lists'),
                                   textAlign: TextAlign.center,
                                   style: GoogleFonts.inter(
                                     fontSize: 9.5,
@@ -300,9 +307,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       final item = gridItems[index];
                       return InkWell(
                         onTap: () {
+                          if (item['title'] == 'News') {
+                            _openAllAnnouncements();
+                            return;
+                          }
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text("${item['title']} feature is handled via school registrar web console."),
+                              content: Text(tr('{v} feature is handled via school registrar web console.', {'v': tr(item['title'])})),
                               duration: const Duration(seconds: 2),
                               behavior: SnackBarBehavior.floating,
                             ),
@@ -335,7 +346,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              item['title'],
+                              tr(item['title']),
                               textAlign: TextAlign.center,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -353,179 +364,62 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Intakes & Promo Banners
-                  Text(
-                    "Announcements & Banners",
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: primaryTextColor,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  if (widget.announcements.isEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24.0),
+                  // Announcements: the newest three here, all of them (five per page) behind Show more.
+                  Row(
+                    children: [
+                      Expanded(
                         child: Text(
-                          "No announcements at this time",
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            color: slateTextColor,
+                          tr('Announcements'),
+                          style: GoogleFonts.spaceGrotesk(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: primaryTextColor,
                           ),
                         ),
                       ),
-                    )
-                  else
-                    ...widget.announcements.asMap().entries.map((entry) {
-                      final int idx = entry.key;
-                      final Map<String, dynamic> ann = entry.value;
-
-                      // Handle background image
-                      DecorationImage? bgImage;
-                      final imageBase64 = ann['image_base64'] as String?;
-                      if (imageBase64 != null && imageBase64.isNotEmpty) {
-                        try {
-                          final base64Clean = imageBase64.split(',').last;
-                          final decodedBytes = base64Decode(base64Clean);
-                          bgImage = DecorationImage(
-                            image: MemoryImage(decodedBytes),
-                            fit: BoxFit.cover,
-                            colorFilter: ColorFilter.mode(
-                              Colors.black.withValues(alpha: 0.55),
-                              BlendMode.darken,
-                            ),
-                          );
-                        } catch (e) {
-                          debugPrint("Failed to decode announcement image: $e");
-                        }
-                      }
-
-                      // Alternating default gradients if no image
-                      final decoration = BoxDecoration(
-                        borderRadius: BorderRadius.circular(18),
-                        image: bgImage,
-                        gradient: bgImage == null
-                            ? LinearGradient(
-                                colors: idx % 2 == 0
-                                    ? [const Color(0xFF0F172A), const Color(0xFF1E293B)]
-                                    : [const Color(0xFF0369A1), const Color(0xFF0EA5E9)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              )
-                            : null,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.08),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          )
-                        ],
-                      );
-
-                      final String badgeText = (ann['faculty'] ?? ann['publisher'] ?? 'ADMIN').toString().toUpperCase();
-                      final String titleText = (ann['title'] ?? '').toString();
-                      final String contentText = (ann['content'] ?? '').toString();
-
-                      // Action button text and colors
-                      final bool isIntake = titleText.toUpperCase().contains("INTAKE");
-                      final String btnText = isIntake ? "APPLY NOW" : "More";
-                      final Color btnBgColor = idx % 2 == 0 ? const Color(0xFF2563EB) : Colors.white;
-                      final Color btnTextColor = idx % 2 == 0 ? Colors.white : const Color(0xFF0369A1);
-
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: Container(
-                          width: double.infinity,
-                          height: 140,
-                          decoration: decoration,
-                          child: Stack(
+                      if (widget.announcements.isNotEmpty)
+                        TextButton(
+                          onPressed: _openAllAnnouncements,
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF2563EB),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Padding(
-                                padding: const EdgeInsets.all(18.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        badgeText,
-                                        style: GoogleFonts.inter(
-                                          fontSize: 8,
-                                          fontWeight: FontWeight.w800,
-                                          color: Colors.white,
-                                          letterSpacing: 1.0,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    SizedBox(
-                                      width: MediaQuery.of(context).size.width - 160,
-                                      child: Text(
-                                        titleText,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: GoogleFonts.spaceGrotesk(
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white,
-                                          letterSpacing: -0.5,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    SizedBox(
-                                      width: MediaQuery.of(context).size.width - 160,
-                                      child: Text(
-                                        contentText,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: GoogleFonts.inter(
-                                          fontSize: 10,
-                                          color: const Color(0xFFE2E8F0),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Positioned(
-                                bottom: 16,
-                                right: 16,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: btnBgColor,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        btnText,
-                                        style: GoogleFonts.inter(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                          color: btnTextColor,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Icon(Icons.arrow_forward_ios, color: btnTextColor, size: 8),
-                                    ],
-                                  ),
-                                ),
-                              ),
+                              Text(tr('Show More'), style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.w700)),
+                              const Icon(Icons.chevron_right_rounded, size: 18),
                             ],
                           ),
                         ),
-                      );
-                    }),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  if (widget.announcements.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      decoration: BoxDecoration(
+                        color: cardBgColor,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: borderColor),
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(Icons.campaign_outlined, size: 28, color: slateTextColor),
+                          const SizedBox(height: 8),
+                          Text(
+                            tr('No announcements at this time'),
+                            style: GoogleFonts.inter(fontSize: 12, color: slateTextColor),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    for (final notice in widget.announcements.take(3))
+                      AnnouncementCard(notice: notice),
                   const SizedBox(height: 32),
                 ],
               ),

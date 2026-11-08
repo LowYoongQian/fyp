@@ -14,7 +14,7 @@ from sqlalchemy.exc import DBAPIError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from db.database import SessionLocal, engine
-from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course, ClassMeeting
+from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course, ClassMeeting, StudentFeedback
 from domain.account_security import validate_session
 from integrations.mobile_push import push_loop
 from utils.security import decode_token
@@ -26,6 +26,8 @@ from domain.live_updates import listen_for_commits
 from integrations.network_verify import get_client_ip, get_server_local_ip, trusted_proxy_ranges
 from routers import (
     admin_academic,
+    admin_lookup,
+    admin_records,
     academic_calendar,
     admin_attendance,
     admin_audit,
@@ -339,6 +341,15 @@ def _check_class_meeting_schema():
         raise RuntimeError('Timetable database schema is not ready (migration b4d7e1f0a2c9); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
 
 
+def _check_feedback_severity_schema():
+    # Admin-owned feedback severity reads student_feedback.priority_set_at (migration d8e3b5a1f7c2).
+    try:
+        with engine.connect() as connection:
+            connection.execute(select(StudentFeedback.priority_set_at).where(false()))
+    except DBAPIError as error:
+        raise RuntimeError('Feedback database schema is not ready (migration d8e3b5a1f7c2); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     trusted_proxy_ranges()  # Fail startup on unsafe proxy wildcard configuration.
@@ -348,6 +359,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(_check_account_security_schema)
     await asyncio.to_thread(_check_semester_schema)
     await asyncio.to_thread(_check_class_meeting_schema)
+    await asyncio.to_thread(_check_feedback_severity_schema)
     tasks = [
         asyncio.create_task(_keep_pool_warm()),
         asyncio.create_task(_class_lifecycle_loop()),
@@ -412,6 +424,8 @@ app.include_router(face_enrolment.router)
 app.include_router(admin_students.router)
 app.include_router(admin_staff.router)
 app.include_router(admin_academic.router)
+app.include_router(admin_lookup.router)
+app.include_router(admin_records.router)
 app.include_router(academic_calendar.router)
 app.include_router(admin_attendance.router)
 app.include_router(admin_config.router)

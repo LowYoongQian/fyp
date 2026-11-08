@@ -1,6 +1,6 @@
 import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, type SessionData } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check } from 'lucide-react';
 import { swalError, swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
@@ -8,124 +8,34 @@ import Swal from 'sweetalert2';
 import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
 import sasLogoLocal from '../../assets/saslogo.webp';
 import { Aurora, BlackHole, ConstellationFigure, CrescentMoon, Cloud, FullMoon, PlanetBody, StarField, type PlacedConstellation } from './LoginSky';
+import { LoginLandscape } from './LoginLandscape';
+import { lookAt, sunColors, withAlpha } from './loginLighting';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { useSceneParallax } from '../../hooks/useSceneParallax';
 import { CONSTELLATIONS, randomAurora, type AuroraEpisode } from './loginSkyData';
+import { TwoFactorStep, type PendingChallenge } from './TwoFactorStep';
+import { PasswordResetStep } from './PasswordResetStep';
+
+type SignInView = 'signin' | 'verify' | 'reset';
+/** /login is the sign-in form, /login/verify its second step, /login/reset password recovery (with ?token= from an emailed link). */
+const viewFromPath = (): SignInView => window.location.pathname.startsWith('/login/verify') ? 'verify' : window.location.pathname.startsWith('/login/reset') ? 'reset' : 'signin';
+// A reply without a usable lifetime gets the server's own five minutes (a NaN deadline would expire the step at once).
+const expiryAfter = (seconds: number) => Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 300) * 1000;
+/** The second step exists only with its in-memory challenge, so a refresh or a typed /login/verify starts again at the sign-in form. */
+const VERIFY_ENDED = 'Your verification step has ended. Sign in again to get a new one.';
+const resetTokenFromPath = () => (viewFromPath() === 'reset' ? new URLSearchParams(window.location.search).get('token') : null) || null;
 
 export type SceneId = 'early_morning' | 'morning' | 'noon' | 'afternoon' | 'evening' | 'night' | 'late_night';
 
-interface SceneData {
-  id: SceneId;
-  name: string;
-  emoji: string;
-  range: string;
-  skyBg: string;
-  sunGradient: string;
-  sunShadow: string;
-  backMountain: string;
-  middleMountain: string;
-  foreMountain: string;
-  cloudOpacity: string;
-  isNight: boolean;
-}
-
-const SCENES: Record<SceneId, SceneData> = {
-  early_morning: {
-    id: 'early_morning',
-    name: 'Early Morning',
-    emoji: '🌅',
-    range: '5:00 AM – 8:00 AM',
-    skyBg: 'from-amber-300 via-rose-300 to-sky-300 dark:from-slate-950 dark:via-rose-950/70 dark:to-slate-900',
-    sunGradient: 'from-amber-500 via-orange-400 to-yellow-300',
-    sunShadow: 'shadow-[0_0_90px_rgba(245,158,11,0.8)]',
-    backMountain: 'text-rose-900/40 dark:text-rose-950/70',
-    middleMountain: 'text-emerald-800/60 dark:text-emerald-950/80',
-    foreMountain: 'text-emerald-600/80 dark:text-emerald-900/90',
-    cloudOpacity: 'opacity-70',
-    isNight: false,
-  },
-  morning: {
-    id: 'morning',
-    name: 'Morning',
-    emoji: '☀️',
-    range: '8:00 AM – 12:00 PM',
-    skyBg: 'from-sky-400 via-sky-200 to-emerald-100 dark:from-slate-950 dark:via-teal-950/70 dark:to-slate-900',
-    sunGradient: 'from-amber-400 via-yellow-300 to-amber-200',
-    sunShadow: 'shadow-[0_0_80px_rgba(245,158,11,0.6)]',
-    backMountain: 'text-emerald-800/40 dark:text-emerald-950/70',
-    middleMountain: 'text-emerald-700/60 dark:text-emerald-900/80',
-    foreMountain: 'text-emerald-600/90 dark:text-emerald-800/90',
-    cloudOpacity: 'opacity-80',
-    isNight: false,
-  },
-  noon: {
-    id: 'noon',
-    name: 'Noon (Midday)',
-    emoji: '🕛',
-    range: '12:00 PM – 12:30 PM',
-    skyBg: 'from-sky-500 via-cyan-200 to-emerald-100 dark:from-slate-950 dark:via-cyan-950/80 dark:to-slate-900',
-    sunGradient: 'from-yellow-200 via-amber-300 to-white',
-    sunShadow: 'shadow-[0_0_110px_rgba(253,224,71,0.95)]',
-    backMountain: 'text-emerald-800/50 dark:text-emerald-950/80',
-    middleMountain: 'text-emerald-700/70 dark:text-emerald-900/90',
-    foreMountain: 'text-emerald-500 dark:text-emerald-800',
-    cloudOpacity: 'opacity-90',
-    isNight: false,
-  },
-  afternoon: {
-    id: 'afternoon',
-    name: 'Afternoon',
-    emoji: '🌤️',
-    range: '12:30 PM – 5:00 PM',
-    skyBg: 'from-sky-400 via-amber-100 to-emerald-50 dark:from-slate-950 dark:via-emerald-950/60 dark:to-slate-900',
-    sunGradient: 'from-amber-400 via-yellow-300 to-amber-200',
-    sunShadow: 'shadow-[0_0_80px_rgba(245,158,11,0.6)]',
-    backMountain: 'text-emerald-800/40 dark:text-emerald-950/70',
-    middleMountain: 'text-emerald-700/60 dark:text-emerald-900/80',
-    foreMountain: 'text-emerald-600/90 dark:text-emerald-800/90',
-    cloudOpacity: 'opacity-70',
-    isNight: false,
-  },
-  evening: {
-    id: 'evening',
-    name: 'Evening (Sunset)',
-    emoji: '🌇',
-    range: '5:00 PM – 8:00 PM',
-    skyBg: 'from-purple-900 via-indigo-700 to-amber-500 dark:from-slate-950 dark:via-purple-950 dark:to-amber-950/70',
-    sunGradient: 'from-rose-500 via-orange-500 to-amber-400',
-    sunShadow: 'shadow-[0_0_100px_rgba(225,29,72,0.9)]',
-    backMountain: 'text-purple-950/60 dark:text-purple-950/90',
-    middleMountain: 'text-indigo-900/75 dark:text-indigo-950/90',
-    foreMountain: 'text-emerald-800/90 dark:text-emerald-950',
-    cloudOpacity: 'opacity-50',
-    isNight: false,
-  },
-  night: {
-    id: 'night',
-    name: 'Night',
-    emoji: '🌃',
-    range: '8:00 PM – 12:00 AM',
-    skyBg: 'from-slate-950 via-indigo-950 to-slate-900',
-    sunGradient: 'from-slate-100 via-slate-200 to-slate-300',
-    sunShadow: 'shadow-[0_0_70px_rgba(226,232,240,0.6)]',
-    backMountain: 'text-slate-900 dark:text-slate-950',
-    middleMountain: 'text-indigo-950 dark:text-slate-950',
-    foreMountain: 'text-emerald-950 dark:text-slate-900',
-    cloudOpacity: 'opacity-30',
-    isNight: true,
-  },
-  late_night: {
-    id: 'late_night',
-    name: 'Late Night',
-    emoji: '🌙',
-    range: '12:00 AM – 5:00 AM',
-    skyBg: 'from-slate-950 via-slate-900 to-indigo-950',
-    sunGradient: 'from-slate-200 via-slate-100 to-blue-200',
-    sunShadow: 'shadow-[0_0_60px_rgba(203,213,225,0.5)]',
-    backMountain: 'text-slate-950 dark:text-slate-950',
-    middleMountain: 'text-slate-900 dark:text-indigo-950',
-    foreMountain: 'text-emerald-950 dark:text-slate-950',
-    cloudOpacity: 'opacity-20',
-    isNight: true,
-  },
+/** Which named part of the day an hour (campus time) falls in. The sky itself is continuous; this only picks the bird flocks and the moon's phase. */
+const sceneAt = (hour: number): SceneId => {
+  if (hour >= 4.9833 && hour < 7.9833) return 'early_morning';
+  if (hour >= 7.9833 && hour < 11.9833) return 'morning';
+  if (hour >= 11.9833 && hour < 12.4833) return 'noon';
+  if (hour >= 12.4833 && hour < 16.9833) return 'afternoon';
+  if (hour >= 16.9833 && hour < 19.9833) return 'evening';
+  if (hour >= 19.9833 && hour < 23.9833) return 'night';
+  return 'late_night';
 };
 
 const getMalaysiaTimeDetails = () => {
@@ -228,50 +138,20 @@ interface CloudConfig {
   top: number;
   scale: number;
   dir: 'ltr' | 'rtl';
-  speed: 'slow' | 'mid' | 'fast';
   delay: string;
-  opacity: string;
+  layer: 'far' | 'near';
 }
 
-const getCloudsForScene = (sceneId: SceneId): CloudConfig[] => {
-  if (sceneId === 'night' || sceneId === 'late_night' || sceneId === 'noon') {
-    return []; // ZERO clouds at Night, Late Night, and Noon!
-  }
-
-  if (sceneId === 'early_morning') {
-    return [
-      { id: 'em1', top: 5, scale: 0.9, dir: 'ltr', speed: 'slow', delay: '-14s', opacity: 'opacity-70' },
-      { id: 'em2', top: 14, scale: 1.15, dir: 'rtl', speed: 'mid', delay: '-38s', opacity: 'opacity-80' },
-      { id: 'em3', top: 22, scale: 0.75, dir: 'ltr', speed: 'slow', delay: '-60s', opacity: 'opacity-65' },
-      { id: 'em4', top: 9, scale: 1.0, dir: 'rtl', speed: 'mid', delay: '-22s', opacity: 'opacity-75' },
-    ];
-  }
-
-  if (sceneId === 'morning') {
-    return [
-      { id: 'm1', top: 7, scale: 0.9, dir: 'ltr', speed: 'slow', delay: '-18s', opacity: 'opacity-70' },
-      { id: 'm2', top: 17, scale: 1.1, dir: 'rtl', speed: 'mid', delay: '-45s', opacity: 'opacity-75' },
-    ];
-  }
-
-  if (sceneId === 'afternoon') {
-    return [
-      { id: 'a1', top: 8, scale: 0.95, dir: 'rtl', speed: 'mid', delay: '-15s', opacity: 'opacity-75' },
-      { id: 'a2', top: 19, scale: 0.8, dir: 'ltr', speed: 'slow', delay: '-52s', opacity: 'opacity-65' },
-    ];
-  }
-
-  if (sceneId === 'evening') {
-    return [
-      { id: 'e1', top: 5, scale: 1.2, dir: 'ltr', speed: 'mid', delay: '-10s', opacity: 'opacity-80' },
-      { id: 'e2', top: 12, scale: 0.85, dir: 'rtl', speed: 'slow', delay: '-32s', opacity: 'opacity-70' },
-      { id: 'e3', top: 21, scale: 1.05, dir: 'ltr', speed: 'mid', delay: '-55s', opacity: 'opacity-75' },
-      { id: 'e4', top: 16, scale: 0.8, dir: 'rtl', speed: 'slow', delay: '-24s', opacity: 'opacity-65' },
-    ];
-  }
-
-  return [];
-};
+// Two layers of cloud that never leave: far ones are small, pale and slow; near ones are larger, brighter and a little faster (they also shift more
+// with the pointer). How much cloud there is at any hour is the sky's call (look.clouds), so none ever pops in or out at a scene boundary.
+const CLOUDS: CloudConfig[] = [
+  { id: 'far1', top: 6, scale: 0.7, dir: 'ltr', delay: '-18s', layer: 'far' },
+  { id: 'far2', top: 15, scale: 0.6, dir: 'rtl', delay: '-52s', layer: 'far' },
+  { id: 'far3', top: 24, scale: 0.75, dir: 'ltr', delay: '-71s', layer: 'far' },
+  { id: 'near1', top: 9, scale: 1.25, dir: 'rtl', delay: '-14s', layer: 'near' },
+  { id: 'near2', top: 19, scale: 1.1, dir: 'ltr', delay: '-40s', layer: 'near' },
+  { id: 'near3', top: 3, scale: 1, dir: 'rtl', delay: '-63s', layer: 'near' },
+];
 
 export type CosmicObjectType = 'saturn' | 'ice_giant' | 'crimson_planet' | 'black_hole' | 'crater_moonlet';
 export type PlanetColorVariant = 'amber' | 'purple' | 'cyan' | 'emerald' | 'rose' | 'copper';
@@ -348,25 +228,28 @@ const getColorVariantGradients = (variant: PlanetColorVariant) => {
   }
 };
 
-const generateRandomCosmicObjects = (): CosmicObjectConfig[] => {
+const generateRandomCosmicObjects = (compact: boolean): CosmicObjectConfig[] => {
   const planetTypes: CosmicObjectType[] = ['saturn', 'ice_giant', 'crimson_planet', 'crater_moonlet'];
   const variants: PlanetColorVariant[] = ['amber', 'purple', 'cyan', 'emerald', 'rose', 'copper'];
 
+  // On a phone the form fills the screen, so only two bodies are drawn, in the corners of the band of sky above it.
   const selectedTypes: CosmicObjectType[] = [
     'black_hole', // STRICTLY EXACTLY 1 Black Hole
     'saturn',
-    planetTypes[Math.floor(Math.random() * planetTypes.length)],
-    planetTypes[Math.floor(Math.random() * planetTypes.length)],
+    ...(compact ? [] : [planetTypes[Math.floor(Math.random() * planetTypes.length)], planetTypes[Math.floor(Math.random() * planetTypes.length)]]),
   ];
 
   const generated: CosmicObjectConfig[] = [];
 
   // Quadrant zones to guarantee wide spatial separation across the sky canvas
-  const quadrantZones = [
+  const quadrantZones = compact ? [
+    { minLeft: 2, maxLeft: 9, minTop: 2, maxTop: 7 },
+    { minLeft: 68, maxLeft: 74, minTop: 2, maxTop: 7 },   // left edge, so a 68px body plus its drift still fits a 360px screen
+  ] : [
     { minLeft: 4, maxLeft: 28, minTop: 6, maxTop: 20 },
     { minLeft: 68, maxLeft: 90, minTop: 6, maxTop: 20 },
-    { minLeft: 4, maxLeft: 28, minTop: 25, maxTop: 42 },
-    { minLeft: 68, maxLeft: 90, minTop: 25, maxTop: 42 },
+    { minLeft: 4, maxLeft: 13, minTop: 25, maxTop: 42 },   // the lower row keeps to the edges, clear of the path the moon crosses
+    { minLeft: 83, maxLeft: 92, minTop: 25, maxTop: 42 },
   ];
 
   // Shuffle quadrant zones for varied celestial placement
@@ -400,7 +283,7 @@ const generateRandomCosmicObjects = (): CosmicObjectConfig[] => {
       type,
       top,
       left,
-      size: type === 'black_hole' ? 54 : Math.floor(34 + Math.random() * 22),
+      size: type === 'black_hole' ? (compact ? 36 : 54) : Math.floor((compact ? 22 : 34) + Math.random() * (compact ? 8 : 22)),
       opacity: parseFloat((0.80 + Math.random() * 0.18).toFixed(2)),
       driftDuration: Math.floor(120 + Math.random() * 60),
       ringAngle: Math.floor(-30 + Math.random() * 60),
@@ -464,6 +347,20 @@ const generateRandomStars = (count: number, isNightSlow: boolean = false, cosmic
 
 export const Login: React.FC = () => {
   const { login } = useAuth();
+  const [verifyLost] = useState(() => viewFromPath() === 'verify');
+  const [view, setView] = useState<SignInView>(() => {
+    if (viewFromPath() !== 'verify') return viewFromPath();
+    window.history.replaceState({}, '', '/login');
+    return 'signin';
+  });
+  const [challenge, setChallenge] = useState<PendingChallenge | null>(null);
+  const [resetToken, setResetToken] = useState<string | null>(resetTokenFromPath);
+  const go = (next: SignInView, path: string, replace = false) => {
+    window.history[replace ? 'replaceState' : 'pushState']({}, '', path);
+    setView(next);
+    setResetToken(resetTokenFromPath());
+    if (next !== 'verify') setChallenge(null);   // leaving the second step forgets its challenge
+  };
   
   // Real-Time Malaysia (UTC+8) Time State
   const [timeState, setTimeState] = useState(() => getMalaysiaTimeDetails());
@@ -525,50 +422,57 @@ export const Login: React.FC = () => {
 
   // Global UI States
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(verifyLost ? VERIFY_ENDED : null);
+  // Back and Forward move between these pages. Leaving the second step forgets its challenge, so arriving at /login/verify from history
+  // (Forward after Back) can only return to the sign-in form, with the reason.
+  useEffect(() => {
+    const sync = () => {
+      setResetToken(resetTokenFromPath());
+      setChallenge(null);
+      if (viewFromPath() === 'verify') { window.history.replaceState({}, '', '/login'); setView('signin'); setInfo(VERIFY_ENDED); }
+      else setView(viewFromPath());
+    };
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);   // set before React re-renders, so a double click or a second Enter cannot send twice
 
   // Active Hour from Live Malaysia Clock Time
   const activeHour = timeState.fractionalHour;
-
-  // Derive active Scene ID from activeHour
-  let computedSceneId: SceneId = 'morning';
-  if (activeHour >= 4.9833 && activeHour < 7.9833) computedSceneId = 'early_morning';
-  else if (activeHour >= 7.9833 && activeHour < 11.9833) computedSceneId = 'morning';
-  else if (activeHour >= 11.9833 && activeHour < 12.4833) computedSceneId = 'noon';
-  else if (activeHour >= 12.4833 && activeHour < 16.9833) computedSceneId = 'afternoon';
-  else if (activeHour >= 16.9833 && activeHour < 19.9833) computedSceneId = 'evening';
-  else if (activeHour >= 19.9833 && activeHour < 23.9833) computedSceneId = 'night';
-  else computedSceneId = 'late_night';
-
-  const activeSceneId = computedSceneId;
-  const activeScene = SCENES[activeSceneId];
+  const activeSceneId = sceneAt(activeHour);
+  const compact = useMediaQuery('(max-width: 639px)');   // a phone: the form fills the screen, so the scene is arranged around it instead of shrunk
+  const look = lookAt(activeHour, compact);
+  const starsVisible = look.stars > 0.01;   // stars fade in through dusk and out through dawn; there is no night switch
+  const darkSky = look.stars >= 0.7;        // dark enough for the night's events: constellations, aurora and shooting stars wait for it
 
   const isNightSlow = activeSceneId === 'night';
 
   // Dynamic Night Cosmic Objects State (Generates fresh random planets & black hole layout each night)
-  const [cosmicObjects, setCosmicObjects] = useState<CosmicObjectConfig[]>(() => generateRandomCosmicObjects());
+  const [cosmicObjects, setCosmicObjects] = useState<CosmicObjectConfig[]>(() => generateRandomCosmicObjects(compact));
 
   // Dynamic Night Constellation State (Periodically respawns stars in new random positions across the sky)
   const [dynamicStars, setDynamicStars] = useState<DynamicStar[]>(() => generateRandomStars(38, isNightSlow, cosmicObjects));
 
-  // Constellations (up to two at a time) and a random aurora, night and late night only.
+  // Constellations (up to two at a time) and a random aurora, once the sky is dark.
   const [constellations, setConstellations] = useState<PlacedConstellation[]>([]);
   const [aurora, setAurora] = useState<AuroraEpisode | null>(null);
 
+  // A new night (or a phone turning sideways) gets a fresh arrangement and an empty sky of figures.
   useEffect(() => {
-    if (activeScene.isNight) {
-      const freshCosmic = generateRandomCosmicObjects();
+    if (starsVisible) {
+      const freshCosmic = generateRandomCosmicObjects(compact);
       setCosmicObjects(freshCosmic);
       setDynamicStars(generateRandomStars(38, isNightSlow, freshCosmic));
+      setConstellations([]);
+      setAurora(null);
     }
-  }, [activeSceneId]);
+  }, [starsVisible, compact]);
 
   // Shooting stars: one at a time, at a random spot and gap, never when the visitor prefers less motion.
   const [meteor, setMeteor] = useState<{ id: number; top: number; left: number; angle: number; length: number; travel: number } | null>(null);
   useEffect(() => {
-    if (!activeScene.isNight || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (!darkSky || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     let timer = 0;
     const launch = (delay: number) => {
       timer = window.setTimeout(() => {
@@ -578,38 +482,48 @@ export const Login: React.FC = () => {
     };
     launch(2500);
     return () => { window.clearTimeout(timer); setMeteor(null); };
-  }, [activeScene.isNight]);
+  }, [darkSky]);
 
   // Placement inputs for the sky schedulers, refreshed after every render: the moon moves and the planets change each night.
-  const skyRef = useRef({ moonLeft: 50, moonTop: 50, cosmic: [] as CosmicObjectConfig[] });
+  const cardRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  useSceneParallax(stageRef);
+  const skyRef = useRef({ moonLeft: 50, moonTop: 50, cosmic: [] as CosmicObjectConfig[], dark: false, compact: false });
   const auroraTimerRef = useRef(0);
   const scheduleAurora = (delay: number) => {
     window.clearTimeout(auroraTimerRef.current);
     auroraTimerRef.current = window.setTimeout(() => setAurora(randomAurora(Date.now())), delay);
   };
 
-  // Night sky events: up to two constellations at a time in free sky (clear of the moon, planets and each other), and an aurora
+  // Night sky events: up to two constellations at a time in free sky (clear of the card, the moon, the planets and each other), and an aurora
   // that comes and goes at random. With reduced motion the sky is still: two figures and a steady aurora, nothing cycling.
   useEffect(() => {
-    if (!activeScene.isNight) return;
+    if (!darkSky) return;
     let key = Date.now();
     const place = (existing: PlacedConstellation[]): PlacedConstellation | null => {
-      const { moonLeft, moonTop, cosmic } = skyRef.current;
+      const { moonLeft, moonTop, cosmic, compact: small } = skyRef.current;
+      const width = window.innerWidth, height = window.innerHeight;
+      const card = cardRef.current?.getBoundingClientRect();
+      const moonSize = width < 640 ? 80 : width < 768 ? 144 : 192;
       for (let attempt = 0; attempt < 40; attempt++) {
         const pattern = CONSTELLATIONS[Math.floor(Math.random() * CONSTELLATIONS.length)];
-        const left = Math.random() < 0.5 ? 3 + Math.random() * 20 : 64 + Math.random() * 18;   // beside the sign-in card, not behind it
-        const top = 6 + Math.random() * 30;
-        const x = left + 5, y = top + 9;   // the figure's approximate centre, in the same % units
-        const clear = (cx: number, cy: number, distance: number) => Math.hypot(x - cx, y - cy) >= distance;
-        if (existing.some(item => item.pattern.id === pattern.id) || !clear(moonLeft, moonTop, 20)
-          || !cosmic.every(item => clear(item.left, item.top, 13)) || !existing.every(item => clear(item.left + 5, item.top + 9, 24))) continue;
-        return { key: ++key, pattern, top, left, size: 130 + Math.random() * 50 };
+        const size = small ? 64 + Math.random() * 20 : 130 + Math.random() * 50;
+        const left = 2 + Math.random() * 90, top = 4 + Math.random() * (small ? 12 : 38);
+        const x = width * left / 100, y = height * top / 100, depth = size + 24;   // the box includes the figure's name beneath it
+        if (x + size > width - 8) continue;
+        if (card && x < card.right + 12 && card.left - 12 < x + size && y < card.bottom + 12 && card.top - 12 < y + depth) continue;   // never behind the form
+        const cx = x + size / 2, cy = y + size / 2;
+        const apart = (otherX: number, otherY: number, gap: number) => Math.hypot(cx - otherX, cy - otherY) >= gap;
+        if (existing.some(item => item.pattern.id === pattern.id) || !apart(width * moonLeft / 100, height * moonTop / 100, moonSize / 2 + size / 2 + 16)
+          || !cosmic.every(item => apart(width * item.left / 100, height * item.top / 100, size / 2 + 70))
+          || !existing.every(item => apart(width * item.left / 100 + item.size / 2, height * item.top / 100 + item.size / 2, size / 2 + item.size / 2 + 40))) continue;
+        return { key: ++key, pattern, top, left, size };
       }
       return null;
     };
     let timer = 0;
-    // Leaving the night clears its sky, so a later night starts fresh.
-    const clear = () => { window.clearTimeout(timer); window.clearTimeout(auroraTimerRef.current); setConstellations([]); setAurora(null); };
+    // Leaving the dark only stops new events; what is on screen finishes its own life while the stars fade (the lists are emptied when the next night starts).
+    const stop = () => { window.clearTimeout(timer); window.clearTimeout(auroraTimerRef.current); };
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       timer = window.setTimeout(() => {
         const first = place([]);
@@ -617,7 +531,7 @@ export const Login: React.FC = () => {
         setConstellations([first, second].filter((item): item is PlacedConstellation => item !== null));
         setAurora(randomAurora(key));
       }, 0);
-      return clear;
+      return stop;
     }
     const spawn = (delay: number) => {
       timer = window.setTimeout(() => {
@@ -631,8 +545,8 @@ export const Login: React.FC = () => {
     };
     spawn(1500);
     scheduleAurora(1200 + Math.random() * 2500);
-    return clear;
-  }, [activeScene.isNight]);
+    return stop;
+  }, [darkSky]);
 
   useEffect(() => {
     const intervalMs = isNightSlow ? 9000 : 5000;
@@ -669,110 +583,19 @@ export const Login: React.FC = () => {
     return () => clearInterval(starInterval);
   }, [isNightSlow, cosmicObjects]);
 
-  // Effective hour calculation for celestial arc & lighting engine
-  const effectiveHour = activeHour;
+  useEffect(() => { skyRef.current = { moonLeft: look.moon.left, moonTop: look.moon.top, cosmic: cosmicObjects, dark: darkSky, compact }; });
 
-  // 1. Daytime Arc Trajectory (Sun: 5:00 AM to 8:00 PM -> 15 Hours)
-  // Rises from Bottom-Left (left: 5%, top: 75%) -> High Zenith (left: 50%, top: 10%) -> Sets to Bottom-Right (left: 95%, top: 75%)
-  const dayProgress = Math.max(0, Math.min(1, (effectiveHour - 5.0) / 15.0));
-  const sunLeft = 5 + dayProgress * 90;
-  const sunTop = 75 - Math.sin(dayProgress * Math.PI) * 65;
-
-  // 2. Nighttime Arc Trajectory (Moon: 8:00 PM to 5:00 AM -> 9 Hours)
-  // Rises from Bottom-Left (left: 5%, top: 75%) -> High Zenith (left: 50%, top: 12%) -> Sets to Bottom-Right (left: 95%, top: 75%)
-  const nightHour = effectiveHour >= 20.0 ? (effectiveHour - 20.0) : (effectiveHour + 4.0);
-  const nightProgress = Math.max(0, Math.min(1, nightHour / 9.0));
-  const moonLeft = 5 + nightProgress * 90;
-  const moonTop = 75 - Math.sin(nightProgress * Math.PI) * 63;
-
-  useEffect(() => { skyRef.current = { moonLeft, moonTop, cosmic: cosmicObjects }; });
-
-  // Dynamic Environment Lighting Engine: 100% Smooth Continuous RGB Color & Opacity Interpolation
-  const getDynamicEnvironmentLighting = (hour: number) => {
-    const hexToRgb = (hex: string): [number, number, number] => {
-      let clean = hex.replace('#', '');
-      if (clean.length === 3) clean = clean.split('').map(c => c + c).join('');
-      const n = parseInt(clean, 16);
-      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    };
-
-    const rgbToHex = (r: number, g: number, b: number): string => {
-      const clamp = (x: number) => Math.max(0, Math.min(255, Math.round(x)));
-      return '#' + [r, g, b].map(x => clamp(x).toString(16).padStart(2, '0')).join('');
-    };
-
-    const lerpColor = (colorA: string, colorB: string, t: number): string => {
-      const [r1, g1, b1] = hexToRgb(colorA);
-      const [r2, g2, b2] = hexToRgb(colorB);
-      return rgbToHex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t);
-    };
-
-    const lerpRgba = (a: string, b: string, t: number): string => {
-      const [pa, pb] = [a, b].map(c => (c.match(/[\d.]+/g) || []).map(Number));
-      const mixed = pa.map((v, i) => v + ((pb[i] ?? v) - v) * t);
-      return `rgba(${Math.round(mixed[0])}, ${Math.round(mixed[1])}, ${Math.round(mixed[2])}, ${mixed[3].toFixed(3)})`;
-    };
-
-    interface Keyframe {
-      hour: number;
-      skyTop: string;
-      skyMid: string;
-      skyBot: string;
-      horizonGlow: string;
-      mountainDark: string;
-      mountainLight: string;
-      sunOpacity: number;
-      nightOpacity: number;
-    }
-
-    const KEYFRAMES: Keyframe[] = [
-      { hour: 0.0,  skyTop: '#030712', skyMid: '#0B0F29', skyBot: '#111827', horizonGlow: 'rgba(56, 189, 248, 0.15)', mountainDark: '#020617', mountainLight: '#0F172A', sunOpacity: 0.0, nightOpacity: 1.0 },
-      { hour: 4.5,  skyTop: '#050719', skyMid: '#0E1133', skyBot: '#161B3D', horizonGlow: 'rgba(56, 189, 248, 0.20)', mountainDark: '#040921', mountainLight: '#111833', sunOpacity: 0.0, nightOpacity: 1.0 },
-      { hour: 4.85, skyTop: '#0C0A2E', skyMid: '#240F3F', skyBot: '#5E1442', horizonGlow: 'rgba(217, 70, 239, 0.35)', mountainDark: '#12092B', mountainLight: '#23103D', sunOpacity: 0.0, nightOpacity: 0.4 },
-      { hour: 5.0,  skyTop: '#1B1748', skyMid: '#6B1870', skyBot: '#ED3B59', horizonGlow: 'rgba(251, 146, 60, 0.65)', mountainDark: '#31103F', mountainLight: '#4A1D54', sunOpacity: 0.2, nightOpacity: 0.0 },
-      { hour: 6.0,  skyTop: '#0F3763', skyMid: '#0284C7', skyBot: '#BAE6FD', horizonGlow: 'rgba(253, 224, 71, 0.60)', mountainDark: '#0B4D36', mountainLight: '#087352', sunOpacity: 1.0, nightOpacity: 0.0 },
-      { hour: 9.5,  skyTop: '#0284C7', skyMid: '#38BDF8', skyBot: '#BAE6FD', horizonGlow: 'rgba(254, 240, 138, 0.50)', mountainDark: '#047857', mountainLight: '#059669', sunOpacity: 1.0, nightOpacity: 0.0 },
-      { hour: 12.0, skyTop: '#0369A1', skyMid: '#0284C7', skyBot: '#7DD3FC', horizonGlow: 'rgba(255, 255, 255, 0.65)', mountainDark: '#065F46', mountainLight: '#047857', sunOpacity: 1.0, nightOpacity: 0.0 },
-      { hour: 16.5, skyTop: '#0284C7', skyMid: '#38BDF8', skyBot: '#FDBA74', horizonGlow: 'rgba(251, 146, 60, 0.55)', mountainDark: '#047857', mountainLight: '#059669', sunOpacity: 1.0, nightOpacity: 0.0 },
-      { hour: 18.8, skyTop: '#311B92', skyMid: '#881337', skyBot: '#E65100', horizonGlow: 'rgba(245, 158, 11, 0.70)', mountainDark: '#1A0B2E', mountainLight: '#2D124D', sunOpacity: 0.8, nightOpacity: 0.0 },
-      { hour: 19.8, skyTop: '#17113E', skyMid: '#3A133A', skyBot: '#541A35', horizonGlow: 'rgba(168, 85, 247, 0.40)', mountainDark: '#100B2B', mountainLight: '#1E123D', sunOpacity: 0.2, nightOpacity: 0.0 },
-      { hour: 20.0, skyTop: '#0C0C2D', skyMid: '#1A1744', skyBot: '#28245D', horizonGlow: 'rgba(99, 102, 241, 0.35)', mountainDark: '#0B0D26', mountainLight: '#14183B', sunOpacity: 0.0, nightOpacity: 0.2 },
-      { hour: 21.0, skyTop: '#090D2A', skyMid: '#161B40', skyBot: '#202656', horizonGlow: 'rgba(99, 102, 241, 0.35)', mountainDark: '#0A0E26', mountainLight: '#131A3D', sunOpacity: 0.0, nightOpacity: 1.0 },
-      { hour: 24.0, skyTop: '#030712', skyMid: '#0B0F29', skyBot: '#111827', horizonGlow: 'rgba(56, 189, 248, 0.15)', mountainDark: '#020617', mountainLight: '#0F172A', sunOpacity: 0.0, nightOpacity: 1.0 },
-    ];
-
-    const h = Math.max(0, Math.min(24, hour));
-    let k1 = KEYFRAMES[0];
-    let k2 = KEYFRAMES[KEYFRAMES.length - 1];
-
-    for (let i = 0; i < KEYFRAMES.length - 1; i++) {
-      if (h >= KEYFRAMES[i].hour && h <= KEYFRAMES[i + 1].hour) {
-        k1 = KEYFRAMES[i];
-        k2 = KEYFRAMES[i + 1];
-        break;
-      }
-    }
-
-    const range = k2.hour - k1.hour;
-    const t = range > 0 ? (h - k1.hour) / range : 0;
-
-    const skyTop = lerpColor(k1.skyTop, k2.skyTop, t);
-    const skyMid = lerpColor(k1.skyMid, k2.skyMid, t);
-    const skyBot = lerpColor(k1.skyBot, k2.skyBot, t);
-
-    return {
-      skyGradient: `linear-gradient(to bottom, ${skyTop} 0%, ${skyMid} 45%, ${skyBot} 100%)`,
-      horizonGlow: lerpRgba(k1.horizonGlow, k2.horizonGlow, t),
-      mountainDark: lerpColor(k1.mountainDark, k2.mountainDark, t),
-      mountainLight: lerpColor(k1.mountainLight, k2.mountainLight, t),
-      treeColor: '#065F46',
-      sunMoonGlow: '0 0 60px rgba(251, 146, 60, 0.85)',
-      sunOpacity: k1.sunOpacity + (k2.sunOpacity - k1.sunOpacity) * t,
-      nightOpacity: k1.nightOpacity + (k2.nightOpacity - k1.nightOpacity) * t,
-    };
-  };
-
-  const envLighting = getDynamicEnvironmentLighting(effectiveHour);
+  // The page's own lighting, shared with the card through CSS variables: which way the light falls, how dense the shade is, and how opaque the
+  // glass must be (more by night so the form stays clear against a dark sky; the dark theme is the other way round).
+  const lightVars = {
+    '--login-lx': look.light.x.toFixed(3),
+    '--login-ly': look.light.y.toFixed(3),
+    '--login-shade': look.shade.toFixed(3),
+    '--login-glass-light': (0.74 + 0.16 * look.darkness).toFixed(3),
+    '--login-glass-dark': (0.86 - 0.22 * look.darkness).toFixed(3),
+  } as React.CSSProperties;
+  const lightDirection = { lx: Math.round(look.light.x * 100) / 100, ly: Math.round(look.light.y * 100) / 100 };
+  const sun = sunColors(look.sun.elevation);
 
   // Validation Logic Helpers
   const validateEmail = (val: string): string | null => {
@@ -884,19 +707,15 @@ export const Login: React.FC = () => {
 
     try {
       const loginData = await login(email, password, portalMode === 'student' ? 'student' : 'staff_admin');
-      if (portalMode === 'student') {
-        if (rememberMe) {
-          localStorage.setItem('remember_me_student', 'true');
-          localStorage.setItem('remember_student_email', email);
-        } else {
-          localStorage.removeItem('remember_me_student');
-          localStorage.removeItem('remember_student_email');
-        }
-        const dismissed = syncRecoveryReminder(loginData.user_id, loginData.recovery_prompt_dismissed);
-        if (!loginData.recovery_email_verified && !dismissed) {
-          await setupRecoveryEmail(loginData.user_id);
-        }
+      if (loginData.requires_two_factor) {
+        // Only the short-lived challenge is kept, in memory: the password is cleared and nothing is stored to reach the next page.
+        setChallenge({ token: loginData.challenge_token, email, expiresAt: expiryAfter(loginData.expires_in) });
+        setPassword('');
+        setPasswordError(null);
+        go('verify', '/login/verify');
+        return;
       }
+      await afterSignIn(loginData);
     } catch (err: any) {
       console.error(err);
       const detail = err.response?.data?.detail || err.message || 'Sign-in is not available right now. Please try again later.';
@@ -911,79 +730,19 @@ export const Login: React.FC = () => {
     }
   };
 
-  const handleForgotPassword = async () => {
-    const { value } = await Swal.fire({
-      title: 'Reset your password',
-      html: `<p class="password-reset-intro">Enter the details linked to your student account.</p>
-        <div class="password-reset-form">
-          <div class="password-reset-control">
-            <label for="reset-student-id" class="password-reset-label">Student ID</label>
-            <div class="password-reset-field" id="reset-student-id-field">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6"/></svg>
-              <input id="reset-student-id" class="password-reset-input" inputmode="numeric" autocomplete="username" maxlength="7" placeholder="e.g. 2501013" aria-describedby="reset-student-id-help">
-            </div>
-            <span id="reset-student-id-help" class="password-reset-help">Enter the 7-digit ID without “ST”.</span>
-          </div>
-          <div class="password-reset-control">
-            <label for="reset-school-email" class="password-reset-label">School email</label>
-            <div class="password-reset-field" id="reset-school-email-field">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 8 6 8-6M4 4h16v16H4z"/></svg>
-              <input id="reset-school-email" type="email" maxlength="255" class="password-reset-input" autocomplete="email" value="${email.replace(/"/g, '&quot;')}" placeholder="name@student.school.edu" aria-describedby="reset-school-email-count">
-            </div>
-            <span id="reset-school-email-count" class="block text-right text-[9px] leading-4 text-slate-400">0/255</span>
-          </div>
-        </div>`,
-      showCancelButton: true,
-      confirmButtonText: 'Send Reset Link',
-      cancelButtonText: 'Cancel',
-      customClass: {
-        popup: 'password-reset-popup !rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
-        title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-base',
-        htmlContainer: 'password-reset-content !text-slate-600 dark:!text-slate-300 !text-xs',
-        actions: 'password-reset-actions',
-        confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
-        cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
-      },
-      buttonsStyling: false,
-      focusConfirm: false,
-      didOpen: () => {
-        const studentIdInput = document.getElementById('reset-student-id');
-        const schoolEmailInput = document.getElementById('reset-school-email') as HTMLInputElement;
-        const updateCount = () => { document.getElementById('reset-school-email-count')!.textContent = `${schoolEmailInput.value.length}/255`; };
-        updateCount();
-        schoolEmailInput.addEventListener('input', updateCount);
-        studentIdInput?.addEventListener('input', () => document.getElementById('reset-student-id-field')?.classList.remove('is-invalid'));
-        schoolEmailInput?.addEventListener('input', () => document.getElementById('reset-school-email-field')?.classList.remove('is-invalid'));
-        studentIdInput?.focus();
-      },
-      preConfirm: () => {
-        const studentIdInput = document.getElementById('reset-student-id') as HTMLInputElement;
-        const schoolEmailInput = document.getElementById('reset-school-email') as HTMLInputElement;
-        const studentId = studentIdInput?.value.trim();
-        const schoolEmail = schoolEmailInput?.value.trim();
-        const studentIdValid = /^\d{7}$/.test(studentId);
-        const schoolEmailValid = emailRegex.test(schoolEmail);
-
-        document.getElementById('reset-student-id-field')?.classList.toggle('is-invalid', !studentIdValid);
-        document.getElementById('reset-school-email-field')?.classList.toggle('is-invalid', !schoolEmailValid);
-
-        if (!studentIdValid) {
-          studentIdInput?.focus();
-          Swal.showValidationMessage('Enter your 7-digit student ID.');
-          return false;
-        }
-        if (!schoolEmailValid) {
-          schoolEmailInput?.focus();
-          Swal.showValidationMessage('Enter a valid school email.');
-          return false;
-        }
-        return { studentId, schoolEmail };
-      },
-    });
-
-    if (value) {
-      const result = await apiService.forgotPassword(value.studentId, value.schoolEmail);
-      swalSuccess('Request received', result.message);
+  // What follows a successful sign-in, with or without the second step.
+  const afterSignIn = async (loginData: SessionData) => {
+    if (portalMode !== 'student') return;
+    if (rememberMe) {
+      localStorage.setItem('remember_me_student', 'true');
+      localStorage.setItem('remember_student_email', email);
+    } else {
+      localStorage.removeItem('remember_me_student');
+      localStorage.removeItem('remember_student_email');
+    }
+    const dismissed = syncRecoveryReminder(loginData.user_id, loginData.recovery_prompt_dismissed);
+    if (!loginData.recovery_email_verified && !dismissed) {
+      await setupRecoveryEmail(loginData.user_id);
     }
   };
 
@@ -1125,320 +884,217 @@ export const Login: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get('reset_token');
-    if (!token) return;
-    void Swal.fire({
-      title: 'Set a new password',
-      html: `<p class="text-xs text-slate-500 mb-4">Use at least 8 characters.</p>
-        <input id="new-reset-password" type="password" class="swal2-input !m-0 !mb-3 !w-full" placeholder="New password">
-        <input id="confirm-reset-password" type="password" class="swal2-input !m-0 !w-full" placeholder="Confirm password">`,
-      confirmButtonText: 'Save Password',
-      allowOutsideClick: false,
-      preConfirm: () => {
-        const password = (document.getElementById('new-reset-password') as HTMLInputElement)?.value;
-        const confirm = (document.getElementById('confirm-reset-password') as HTMLInputElement)?.value;
-        if (password.length < 8) return Swal.showValidationMessage('Use at least 8 characters.');
-        if (password !== confirm) return Swal.showValidationMessage('Passwords do not match.');
-        return password;
-      },
-    }).then(async result => {
-      if (!result.value) return;
-      try {
-        await apiService.resetPassword(token, result.value);
-        window.history.replaceState({}, '', window.location.pathname);
-        await swalSuccess('Password updated', 'You can sign in with your new password.');
-      } catch (err: any) {
-        await swalError('Reset failed', err.response?.data?.detail || 'The reset link is invalid or expired.');
-      }
-    });
-  }, []);
-
   return (
-    <div
-      className="min-h-screen flex flex-col items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden transition-all duration-1000 ease-in-out"
-      style={{ background: envLighting.skyGradient }}
-    >
+    <div className="relative flex min-h-screen flex-col items-center justify-start px-4 pb-8 pt-[clamp(3.5rem,12vh,7rem)] sm:justify-center sm:px-6 sm:py-12 lg:px-8" style={{ backgroundColor: look.sky.bottom, ...lightVars }}>
+      {/* The scene is one stage fixed to the screen behind the form, so it keeps its composition however tall the form is. Its layers sit at different
+          depths (data-depth): the far ones barely move with the pointer or the scroll, the near ones a little more. */}
+      <div ref={stageRef} aria-hidden="true" data-login-stage className="pointer-events-none fixed inset-0 z-0 overflow-hidden" style={{ background: look.sky.gradient }}>
+        {/* Light across the sky: a halo round the sun, and a glow along the horizon on the side the sun is (or has just gone). */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background: `radial-gradient(circle at ${look.sun.left}% ${look.sun.top}%, rgba(255, 236, 179, ${0.3 * look.sun.opacity}) 0%, transparent 30%), radial-gradient(ellipse 120% 55% at ${look.light.at * 100}% 100%, ${look.sky.glow} 0%, transparent 70%)`,
+          }}
+        />
 
-
-
-
-      {/* 2D Night Sky Cosmos: Distant Solar System Planets, 25+ Twinkling Rotating 4-Point Stars & Rare Shooting Star */}
-      {activeScene.isNight && (
-        // Fades with the night lighting so stars arrive and leave gradually around dusk and dawn.
-        <div data-login-night className="absolute inset-0 z-0 pointer-events-none overflow-hidden" style={{ opacity: Math.max(0.15, envLighting.nightOpacity) }}>
-          <div className="login-milky-way" />
-          {aurora && <Aurora key={aurora.key} episode={aurora} onDone={() => { setAurora(null); scheduleAurora(20000 + Math.random() * 30000); }} />}
-          <StarField />
-          {/* Layer 1: Background Constellation Layer (Z-0) */}
-          <div className="absolute inset-0 z-0">
-            {dynamicStars.map((star) => (
-              <div
-                key={star.id}
-                className="absolute animate-star-sparkle pointer-events-none text-sky-50"
-                style={{
-                  top: `${star.top}%`,
-                  left: `${star.left}%`,
-                  ['--star-duration' as any]: `${star.duration}s`,
-                  animationDelay: `${star.delay}s`,
-                }}
-              >
-                {star.type === 'sparkle' ? (
-                  <svg className="fill-current drop-shadow-[0_0_5px_rgba(224,242,254,0.95)]" style={{ width: `${star.size}px`, height: `${star.size}px` }} viewBox="0 0 24 24">
-                    <path d="M12 0 12.8 11.2 24 12 12.8 12.8 12 24 11.2 12.8 0 12 11.2 11.2Z" />
-                    <circle cx="12" cy="12" r="1.8" />
-                  </svg>
-                ) : (
-                  <div
-                    className="rounded-full bg-white shadow-[0_0_6px_2px_rgba(224,242,254,0.7)]"
-                    style={{ width: star.type === 'cross' ? '3px' : '2px', height: star.type === 'cross' ? '3px' : '2px' }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Layer 2: Foreground Celestial Objects Layer (Z-10, Occludes Stars Behind Planets & Black Hole) */}
-          <div className="absolute inset-0 z-10">
-            {cosmicObjects.map((obj) => {
-            if (obj.type === 'black_hole') {
-              return (
+        {/* Night sky: stars, planets and a black hole, a rare shooting star. It fades in with the dusk and out with the dawn. */}
+        {starsVisible && (
+          <div data-login-night className="absolute inset-0 overflow-hidden" style={{ opacity: look.stars }}>
+            <div className="login-milky-way" />
+            {aurora && <Aurora key={aurora.key} episode={aurora} onDone={() => { setAurora(null); if (skyRef.current.dark) scheduleAurora(20000 + Math.random() * 30000); }} />}
+            <div data-depth="1.5" className="absolute inset-0 z-0">
+              <StarField />
+              {dynamicStars.map((star) => (
                 <div
-                  key={obj.id}
-                  className="absolute z-0 pointer-events-none animate-cosmic-drift"
+                  key={star.id}
+                  className="absolute animate-star-sparkle pointer-events-none text-sky-50"
                   style={{
-                    top: `${obj.top}%`,
-                    left: `${obj.left}%`,
-                    width: `${obj.size * 1.9}px`,
-                    height: `${obj.size * 1.9}px`,
-                    ['--orbit-duration' as any]: `${obj.driftDuration}s`,
-                    opacity: obj.opacity,
+                    top: `${star.top}%`,
+                    left: `${star.left}%`,
+                    ['--star-duration' as any]: `${star.duration}s`,
+                    animationDelay: `${star.delay}s`,
                   }}
                 >
-                  <BlackHole id={obj.id} tilt={(obj.ringAngle || 0) / 3} />
+                  {star.type === 'sparkle' ? (
+                    <svg className="fill-current drop-shadow-[0_0_5px_rgba(224,242,254,0.95)]" style={{ width: `${star.size}px`, height: `${star.size}px` }} viewBox="0 0 24 24">
+                      <path d="M12 0 12.8 11.2 24 12 12.8 12.8 12 24 11.2 12.8 0 12 11.2 11.2Z" />
+                      <circle cx="12" cy="12" r="1.8" />
+                    </svg>
+                  ) : (
+                    <div
+                      className="rounded-full bg-white shadow-[0_0_6px_2px_rgba(224,242,254,0.7)]"
+                      style={{ width: star.type === 'cross' ? '3px' : '2px', height: star.type === 'cross' ? '3px' : '2px' }}
+                    />
+                  )}
                 </div>
-              );
-            }
+              ))}
+            </div>
 
-            const pal = getColorVariantGradients(obj.colorVariant);
-            const scale = obj.type === 'saturn' ? 1.9 : obj.type === 'ice_giant' ? 1.5 : obj.type === 'crimson_planet' ? 1.3 : 1.1;
-            return (
-              <div
-                key={obj.id}
-                className="absolute z-0 pointer-events-none animate-cosmic-drift"
+            {/* Planets and the black hole (they occlude the stars behind them). Their lit side faces the light that falls on everything else. */}
+            <div data-depth="3" className="absolute inset-0 z-10">
+              {cosmicObjects.map((obj) => {
+                if (obj.type === 'black_hole') {
+                  return (
+                    <div
+                      key={obj.id}
+                      className="absolute z-0 pointer-events-none animate-cosmic-drift"
+                      style={{
+                        top: `${obj.top}%`,
+                        left: `${obj.left}%`,
+                        width: `${obj.size * 1.9}px`,
+                        height: `${obj.size * 1.9}px`,
+                        ['--orbit-duration' as any]: `${obj.driftDuration}s`,
+                        opacity: obj.opacity,
+                      }}
+                    >
+                      <BlackHole id={obj.id} tilt={(obj.ringAngle || 0) / 3} />
+                    </div>
+                  );
+                }
+
+                const pal = getColorVariantGradients(obj.colorVariant);
+                const scale = obj.type === 'saturn' ? 1.9 : obj.type === 'ice_giant' ? 1.5 : obj.type === 'crimson_planet' ? 1.3 : 1.1;
+                return (
+                  <div
+                    key={obj.id}
+                    className="absolute z-0 pointer-events-none animate-cosmic-drift"
+                    style={{
+                      top: `${obj.top}%`,
+                      left: `${obj.left}%`,
+                      width: `${obj.size * scale}px`,
+                      height: `${obj.size * scale * (2 / 3)}px`,
+                      filter: `drop-shadow(0 0 10px ${obj.type === 'crater_moonlet' ? 'rgba(203,213,225,0.35)' : pal.shadow})`,
+                      ['--orbit-duration' as any]: `${obj.driftDuration}s`,
+                      opacity: obj.opacity,
+                    }}
+                  >
+                    <PlanetBody id={obj.id} kind={obj.type} pal={pal} tilt={obj.type === 'saturn' || obj.type === 'ice_giant' ? (obj.ringAngle || -20) / 2 : 0} {...lightDirection} />
+                  </div>
+                );
+              })}
+            </div>
+
+            <div data-depth="1.5" className="absolute inset-0 z-20">
+              {constellations.map(figure => (
+                <ConstellationFigure key={figure.key} figure={figure} onDone={() => setConstellations(current => current.filter(item => item.key !== figure.key))} />
+              ))}
+            </div>
+
+            {/* One thin shooting star at a time; its tail is drawn along its own direction of travel. */}
+            {meteor && (
+              <span
+                key={meteor.id}
+                data-login-meteor
+                className="login-meteor"
                 style={{
-                  top: `${obj.top}%`,
-                  left: `${obj.left}%`,
-                  width: `${obj.size * scale}px`,
-                  height: `${obj.size * scale * (2 / 3)}px`,
-                  filter: `drop-shadow(0 0 10px ${obj.type === 'crater_moonlet' ? 'rgba(203,213,225,0.35)' : pal.shadow})`,
-                  ['--orbit-duration' as any]: `${obj.driftDuration}s`,
-                  opacity: obj.opacity,
-                }}
+                  top: `${meteor.top}%`,
+                  left: `${meteor.left}%`,
+                  width: `${meteor.length}px`,
+                  '--meteor-angle': `${meteor.angle}deg`,
+                  '--meteor-travel': `${meteor.travel}px`,
+                } as React.CSSProperties}
+                onAnimationEnd={() => setMeteor(null)}
+              />
+            )}
+          </div>
+        )}
+
+        {/* The sun and the moon, on their arcs (a shallow one above the form on a phone). Both are lit by themselves; everything else is lit by them. */}
+        <div data-depth="3" className="absolute inset-0">
+          {look.sun.opacity > 0.01 && (
+            <div
+              className="absolute flex items-center justify-center transition-all duration-300 ease-out"
+              style={{ left: `${look.sun.left}%`, top: `${look.sun.top}%`, transform: 'translate(-50%, -50%)', opacity: look.sun.opacity }}
+            >
+              {/* Sun: a soft corona, slow light rays and a shaded disc, white-gold overhead and soft peach near the horizon. */}
+              <div className="login-sun-corona absolute h-48 w-48 rounded-full sm:h-72 sm:w-72 md:h-96 md:w-96" />
+              <div className="login-sun-rays absolute h-40 w-40 rounded-full animate-sun-spin sm:h-60 sm:w-60 md:h-80 md:w-80" style={{ animationDuration: '90s' }} />
+              <div
+                className="relative h-16 w-16 animate-sun-pulse overflow-hidden rounded-full sm:h-28 sm:w-28 md:h-36 md:w-36"
+                style={{ background: `radial-gradient(circle at 38% 34%, ${sun.core} 0%, ${sun.mid} 52%, ${sun.edge} 100%)`, boxShadow: `0 0 60px ${withAlpha(sun.glow, 0.8)}` }}
               >
-                <PlanetBody id={obj.id} kind={obj.type} pal={pal} tilt={obj.type === 'saturn' || obj.type === 'ice_giant' ? (obj.ringAngle || -20) / 2 : 0} />
+                <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_35%_30%,rgba(255,255,255,0.75),rgba(255,255,255,0)_55%)]" />
               </div>
-            );
-          })}
-          </div>
-
-          {/* Layer 3: Constellations (Z-20) */}
-          <div className="absolute inset-0 z-20">
-            {constellations.map(figure => (
-              <ConstellationFigure key={figure.key} figure={figure} onDone={() => setConstellations(current => current.filter(item => item.key !== figure.key))} />
-            ))}
-          </div>
-
-          {/* One thin shooting star at a time; its tail is drawn along its own direction of travel. */}
-          {meteor && (
-            <span
-              key={meteor.id}
-              data-login-meteor
-              className="login-meteor"
-              style={{
-                top: `${meteor.top}%`,
-                left: `${meteor.left}%`,
-                width: `${meteor.length}px`,
-                '--meteor-angle': `${meteor.angle}deg`,
-                '--meteor-travel': `${meteor.travel}px`,
-              } as React.CSSProperties}
-              onAnimationEnd={() => setMeteor(null)}
-            />
+            </div>
+          )}
+          {look.moon.opacity > 0.01 && (
+            <div
+              className="absolute flex items-center justify-center transition-all duration-300 ease-out"
+              style={{ left: `${look.moon.left}%`, top: `${look.moon.top}%`, transform: 'translate(-50%, -50%)', opacity: look.moon.opacity }}
+            >
+              <div className="h-20 w-20 drop-shadow-[0_0_22px_rgba(255,248,220,0.6)] sm:h-36 sm:w-36 md:h-48 md:w-48">
+                {/* Before midnight the lit edge of the crescent faces the sun, which has just set to the right; after midnight it is the full moon. */}
+                {look.hour >= 12 ? <CrescentMoon litAngle={25} /> : <FullMoon />}
+              </div>
+            </div>
           )}
         </div>
-      )}
 
-      {/* Soft light around the sun and along the horizon. */}
-      <div
-        className="absolute inset-0 z-0 pointer-events-none"
-        style={{
-          background: `radial-gradient(circle at ${sunLeft}% ${sunTop}%, rgba(255, 236, 179, ${0.3 * envLighting.sunOpacity}) 0%, transparent 30%), radial-gradient(ellipse 120% 55% at 50% 100%, ${envLighting.horizonGlow} 0%, transparent 70%)`,
-        }}
-      />
-
-      {/* 2D Celestial Body (Sun & Moon Arc Trajectory) with Continuous Cross-Fading */}
-      {/* 1. Daytime Sun */}
-      {envLighting.sunOpacity > 0.01 && (
-        <div
-          className="absolute z-0 pointer-events-none flex items-center justify-center transition-all duration-300 ease-out"
-          style={{
-            left: `${sunLeft}%`,
-            top: `${sunTop}%`,
-            transform: 'translate(-50%, -50%)',
-            opacity: envLighting.sunOpacity,
-          }}
-        >
-          {/* Sun: a soft corona, slow light rays and a shaded disc. */}
-          <div className="login-sun-corona absolute w-72 h-72 md:w-96 md:h-96 rounded-full" />
-          <div className="login-sun-rays absolute w-60 h-60 md:w-80 md:h-80 rounded-full animate-sun-spin" style={{ animationDuration: '90s' }} />
-          <div className={`relative w-28 h-28 md:w-36 md:h-36 rounded-full bg-gradient-to-tr ${activeScene.sunGradient || 'from-amber-400 via-orange-400 to-yellow-200'} animate-sun-pulse shadow-[0_0_60px_rgba(251,146,60,0.85)] transition-colors duration-1000 overflow-hidden`}>
-            <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_35%_30%,rgba(255,255,255,0.75),rgba(255,255,255,0)_55%)]" />
-          </div>
-        </div>
-      )}
-
-      {/* 2. Nighttime Moon (Crescent vs Full Moon) */}
-      {envLighting.nightOpacity > 0.01 && (
-        <div
-          className="absolute z-0 pointer-events-none flex items-center justify-center transition-all duration-300 ease-out"
-          style={{
-            left: `${moonLeft}%`,
-            top: `${moonTop}%`,
-            transform: 'translate(-50%, -50%)',
-            opacity: envLighting.nightOpacity,
-          }}
-        >
-          <div className="w-36 h-36 md:w-48 md:h-48 drop-shadow-[0_0_22px_rgba(255,248,220,0.6)]">
-            {activeSceneId === 'night' ? <CrescentMoon /> : <FullMoon />}
-          </div>
-        </div>
-      )}
-
-      {/* 2D Realistic Distant Flying Birds System (Daytime Only; Edge-to-Edge Flight) */}
-      {!activeScene.isNight && (
-        <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-          {getBirdFlocksForScene(activeSceneId).map((flock) => {
-            const isEvening = activeSceneId === 'evening';
-            const birdColor = isEvening
-              ? 'text-slate-900/80 dark:text-amber-950/80'
-              : 'text-slate-800/60 dark:text-emerald-300/40';
-            const dir = flock.dir || (isEvening ? 'rtl' : 'ltr');
-            const flightAnimClass = `animate-birds-${dir}-${flock.speed}`;
-
-            return (
-              <div
-                key={flock.id}
-                className={`absolute left-0 z-0 pointer-events-none ${flightAnimClass}`}
-                style={{
-                  top: `${flock.top}%`,
-                  animationDelay: flock.delay,
-                }}
-              >
-                <svg
-                  className={`w-36 h-12 ${birdColor} drop-shadow-sm`}
-                  viewBox="0 0 140 50"
-                  style={{ transform: `scale(${flock.scale})`, transformOrigin: 'top left' }}
-                >
-                  {/* Leader Bird */}
-                  <path className="animate-wing-flap" d="M10,25 Q20,10 30,25 Q40,10 50,25" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-                  {/* Right Follower Bird */}
-                  <path className="animate-wing-flap-stagger1" d="M55,14 Q63,4 71,14 Q79,4 87,14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  {/* Left Follower Bird */}
-                  <path className="animate-wing-flap-stagger2" d="M35,38 Q42,28 50,38 Q58,28 66,38" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  {flock.birdCount >= 4 && (
-                    <path className="animate-wing-flap-stagger3" d="M92,26 Q98,18 104,26 Q110,18 116,26" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                  )}
-                  {flock.birdCount >= 5 && (
-                    <path className="animate-wing-flap-stagger1" d="M15,44 Q20,38 25,44 Q30,38 35,44" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                  )}
-                  {flock.birdCount >= 6 && (
-                    <path className="animate-wing-flap-stagger2" d="M120,18 Q125,12 130,18 Q135,12 140,18" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  )}
-                </svg>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* 2D Dynamic Multi-Directional Edge-to-Edge Floating SVG Clouds (Daytime Only, None at Noon/Night) */}
-      {!activeScene.isNight && activeSceneId !== 'noon' && (
-        <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-          {getCloudsForScene(activeSceneId).map((cloud) => {
-            const cloudAnimClass = `animate-cloud-${cloud.dir}-${cloud.speed}`;
-
-            return (
+        {/* Clouds, far then near. The lit side of each faces the light and the underside falls into shade; the near ones drift a little faster. */}
+        {look.clouds > 0.01 && (['far', 'near'] as const).map((layer) => (
+          <div key={layer} data-depth={layer === 'far' ? 5 : 11} className="absolute inset-0 overflow-hidden">
+            {CLOUDS.filter((cloud) => cloud.layer === layer).map((cloud) => (
               <div
                 key={cloud.id}
-                className={`absolute left-0 z-0 pointer-events-none ${cloud.opacity} ${cloudAnimClass}`}
-                style={{
-                  top: `${cloud.top}%`,
-                  animationDelay: cloud.delay,
-                }}
+                className={`absolute left-0 animate-cloud-${cloud.dir}-${layer === 'far' ? 'slow' : 'mid'}`}
+                style={{ top: `${compact ? cloud.top * 0.6 : cloud.top}%`, animationDelay: cloud.delay, opacity: (layer === 'far' ? 0.6 : 0.92) * look.clouds }}
               >
-                <div className="w-36 h-18 md:w-48 md:h-24" style={{ transform: `scale(${cloud.scale})`, transformOrigin: 'top left' }}>
-                  <Cloud id={`login-cloud-${cloud.id}`} evening={activeSceneId === 'evening'} />
+                <div className="w-28 sm:w-36 md:w-48" style={{ transform: `scale(${cloud.scale})`, transformOrigin: 'top left' }}>
+                  <Cloud id={`login-cloud-${cloud.id}`} {...look.cloud} {...lightDirection} />
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ))}
+          </div>
+        ))}
 
-      {/* 2D Curved Layered Mountain Ranges & Distant Trees (Seamless Environment Synchronization) */}
-      <div className="absolute inset-x-0 bottom-0 z-0 pointer-events-none h-56 sm:h-72 md:h-96 overflow-hidden">
-        {/* Layer 1: Back Mountain Curve */}
-        <svg viewBox="0 0 1440 320" className="absolute bottom-0 w-full h-full transition-all duration-1000" preserveAspectRatio="none" style={{ fill: envLighting.mountainDark }}>
-          <path d="M0,192L60,181.3C120,171,240,149,360,160C480,171,600,213,720,208C840,203,960,149,1080,144C1200,139,1320,181,1380,202.7L1440,224L1440,320L1380,320C1320,320,1200,320,1080,320C960,320,840,320,720,320C600,320,480,320,360,320C240,320,120,320,60,320L0,320Z"></path>
-        </svg>
+        {/* Distant birds (daytime flocks; none at night), fading with the light. */}
+        {look.birds > 0.01 && (
+          <div data-depth="8" className="absolute inset-0 overflow-hidden" style={{ opacity: look.birds }}>
+            {getBirdFlocksForScene(activeSceneId).map((flock) => {
+              const dir = flock.dir || (activeSceneId === 'evening' ? 'rtl' : 'ltr');
+              const flightAnimClass = `animate-birds-${dir}-${flock.speed}`;
 
-        {/* Layer 2: Front Mountain Curve */}
-        <svg viewBox="0 0 1440 320" className="absolute bottom-0 w-full h-full transition-all duration-1000" preserveAspectRatio="none" style={{ fill: envLighting.mountainLight }}>
-          <path d="M0,256L80,229.3C160,203,320,149,480,165.3C640,181,800,267,960,266.7C1120,267,1280,181,1360,138.7L1440,96L1440,320L1360,320C1280,320,1120,320,960,320C800,320,640,320,480,320C320,320,160,320,80,320L0,320Z"></path>
-        </svg>
+              return (
+                <div
+                  key={flock.id}
+                  className={`absolute left-0 ${flightAnimClass}`}
+                  style={{
+                    top: `${compact ? flock.top * 0.6 : flock.top}%`,
+                    animationDelay: flock.delay,
+                  }}
+                >
+                  <svg
+                    className="h-12 w-36"
+                    viewBox="0 0 140 50"
+                    style={{ transform: `scale(${flock.scale})`, transformOrigin: 'top left', color: `rgba(30, 41, 59, ${0.4 + 0.3 * look.shade})` }}
+                  >
+                    {/* Leader Bird */}
+                    <path className="animate-wing-flap" d="M10,25 Q20,10 30,25 Q40,10 50,25" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                    {/* Right Follower Bird */}
+                    <path className="animate-wing-flap-stagger1" d="M55,14 Q63,4 71,14 Q79,4 87,14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    {/* Left Follower Bird */}
+                    <path className="animate-wing-flap-stagger2" d="M35,38 Q42,28 50,38 Q58,28 66,38" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    {flock.birdCount >= 4 && (
+                      <path className="animate-wing-flap-stagger3" d="M92,26 Q98,18 104,26 Q110,18 116,26" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                    )}
+                    {flock.birdCount >= 5 && (
+                      <path className="animate-wing-flap-stagger1" d="M15,44 Q20,38 25,44 Q30,38 35,44" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                    )}
+                    {flock.birdCount >= 6 && (
+                      <path className="animate-wing-flap-stagger2" d="M120,18 Q125,12 130,18 Q135,12 140,18" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    )}
+                  </svg>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
-        {/* Distant 2D Vector Trees (Upright Lush & Pine Trees resting on ridge) */}
-        <div className="absolute bottom-20 sm:bottom-28 md:bottom-36 inset-x-0 flex justify-between px-8 sm:px-16 md:px-32 opacity-90 z-0 pointer-events-none">
-          {/* Left Tree Cluster */}
-          <svg className="w-16 h-12 sm:w-24 sm:h-16 md:w-32 md:h-20 drop-shadow-sm" viewBox="0 0 100 50">
-            <rect x="23" y="28" width="4" height="18" rx="1" className="fill-emerald-950 dark:fill-slate-950" />
-            <circle cx="25" cy="20" r="14" className="fill-emerald-800 dark:fill-emerald-950" />
-            <circle cx="17" cy="22" r="10" className="fill-emerald-700 dark:fill-emerald-900" />
-            <circle cx="33" cy="22" r="10" className="fill-emerald-600 dark:fill-emerald-800" />
-
-            <rect x="63" y="30" width="4" height="16" rx="1" className="fill-emerald-950 dark:fill-slate-950" />
-            <polygon points="65,6 50,22 56,22 45,34 85,34 74,22 80,22" className="fill-emerald-800 dark:fill-emerald-950" />
-            <polygon points="65,0 54,14 59,14 50,24 80,24 71,14 76,14" className="fill-emerald-700 dark:fill-emerald-900" />
-          </svg>
-
-          {/* Right Tree Cluster */}
-          <svg className="w-20 h-14 sm:w-28 sm:h-18 md:w-36 md:h-22 drop-shadow-sm" viewBox="0 0 120 50">
-            <rect x="28" y="28" width="4" height="18" rx="1" className="fill-emerald-950 dark:fill-slate-950" />
-            <polygon points="30,4 16,20 22,20 12,32 48,32 38,20 44,20" className="fill-emerald-800 dark:fill-emerald-950" />
-            <polygon points="30,0 20,12 24,12 16,22 44,22 36,12 40,12" className="fill-emerald-700 dark:fill-emerald-900" />
-
-            <rect x="73" y="28" width="4" height="18" rx="1" className="fill-emerald-950 dark:fill-slate-950" />
-            <circle cx="75" cy="18" r="15" className="fill-emerald-800 dark:fill-emerald-950" />
-            <circle cx="66" cy="20" r="11" className="fill-emerald-700 dark:fill-emerald-900" />
-            <circle cx="84" cy="20" r="11" className="fill-emerald-600 dark:fill-emerald-800" />
-          </svg>
-        </div>
-
-        {/* Layer 3: Foreground Curved Hill */}
-        <svg viewBox="0 0 1440 320" className={`absolute bottom-0 w-full h-[62%] ${activeScene.foreMountain} animate-mountain-wave transition-colors duration-1000`} preserveAspectRatio="none">
-          <path fill="currentColor" d="M0,190 C360,110 600,230 900,140 C1200,50 1380,190 1440,150 L1440,320 L0,320 Z" />
-          <path fill="url(#login-hill-shade)" d="M0,190 C360,110 600,230 900,140 C1200,50 1380,190 1440,150 L1440,320 L0,320 Z" />
-          <path fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="3" vectorEffect="non-scaling-stroke" d="M0,190 C360,110 600,230 900,140 C1200,50 1380,190 1440,150" />
-          <defs>
-            <linearGradient id="login-hill-shade" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#020617" stopOpacity="0" />
-              <stop offset="100%" stopColor="#020617" stopOpacity="0.38" />
-            </linearGradient>
-          </defs>
-        </svg>
+        {/* The land: ridges, trees and a foreground hill, lit and shaded from the same light. */}
+        <LoginLandscape look={look} />
       </div>
 
-      <div aria-busy={submitting} className="login-card-enter max-w-md w-full uipro-card relative z-30 space-y-6 bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-white/60 dark:border-slate-800/60 shadow-2xl">
+      <div ref={cardRef} aria-busy={submitting} className="login-card login-card-enter uipro-card relative z-30 w-full max-w-md space-y-6">
         
         {/* Header */}
         <div className="text-center space-y-3">
@@ -1457,11 +1113,26 @@ export const Login: React.FC = () => {
               Smart Attendance System
             </h2>
             <span className="text-[11px] font-sans font-bold uppercase tracking-wider px-3.5 py-1 rounded-full mt-1.5 transition-all bg-blue-50 dark:bg-blue-900/30 text-brand-blue dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50">
-              {portalMode === 'student' ? 'Student Portal' : 'Staff Portal'}
+              {view === 'reset' ? 'Password recovery' : portalMode === 'student' ? 'Student Portal' : 'Staff Portal'}
             </span>
           </div>
         </div>
 
+        {view === 'verify' && challenge ? (
+          <TwoFactorStep
+            challenge={challenge}
+            onVerified={data => { void afterSignIn(data); }}
+            onCancel={() => go('signin', '/login')}
+          />
+        ) : view === 'reset' ? (
+          <PasswordResetStep
+            key={resetToken ?? 'request'}
+            token={resetToken}
+            initialEmail={email}
+            onBack={message => { go('signin', '/login'); if (portalMode !== 'student') switchPortal('student'); setInfo(message ?? null); }}
+            onRequestNew={() => go('reset', '/login/reset', true)}
+          />
+        ) : <>
         {/* Main Form (noValidate disables default native browser popups) */}
         <form className="mt-4" onSubmit={handleSubmit} noValidate>
           {/* While signing in, everything in the form is locked (typing, clearing, autofill, Remember Me, Forgot password) and the card greys out. */}
@@ -1609,8 +1280,8 @@ export const Login: React.FC = () => {
 
               <button
                 type="button"
-                onClick={handleForgotPassword}
-                className="text-brand-blue dark:text-blue-400 hover:underline font-semibold cursor-pointer transition-colors"
+                onClick={() => { setError(null); setInfo(null); go('reset', '/login/reset'); }}
+                className="text-blue-700 dark:text-blue-400 hover:underline font-semibold cursor-pointer transition-colors"
               >
                 Forgot password?
               </button>
@@ -1620,7 +1291,7 @@ export const Login: React.FC = () => {
         </form>
 
         {/* The whole card is whited out and cannot be clicked while signing in; the spinner on Sign In still shows through. */}
-        {submitting && <div aria-hidden="true" data-testid="login-busy-veil" className="absolute inset-0 z-20 cursor-wait rounded-[inherit] bg-white/55 backdrop-grayscale dark:bg-slate-900/55" />}
+        {submitting && <div aria-hidden="true" data-testid="login-busy-veil" className="absolute -inset-px z-20 !m-0 cursor-wait rounded-[inherit] bg-white/40 backdrop-grayscale dark:bg-slate-900/40" />}
 
         {/* Portal Switcher */}
         <div className="mt-6 border-t border-slate-100 dark:border-slate-800 pt-5 text-center">
@@ -1646,6 +1317,7 @@ export const Login: React.FC = () => {
             </button>
           )}
         </div>
+        </>}
 
       </div>
     </div>

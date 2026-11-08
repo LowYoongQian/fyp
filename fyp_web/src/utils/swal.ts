@@ -8,6 +8,7 @@ const glyphInfo = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 
 const toastBase = Swal.mixin({
   toast: true,
+  // Top right, just under the header and its bell (index.css sets the inset); never centred over the page.
   position: 'top-end',
   showConfirmButton: false,
   showCloseButton: true,
@@ -16,10 +17,74 @@ const toastBase = Swal.mixin({
   showClass: { popup: 'toast-in', backdrop: '', icon: '' },
   hideClass: { popup: 'toast-out', backdrop: '', icon: '' },
   didOpen: (toast) => {
-    toast.addEventListener('mouseenter', Swal.stopTimer);
+    // Pause while the pointer is really over it (it MOVED there) or keyboard focus is in it, so it can be read. A toast that merely
+    // appears under a resting pointer (the button just pressed) still closes on time. It never takes focus itself.
+    toast.addEventListener('mousemove', () => { if (Swal.isTimerRunning()) Swal.stopTimer(); });
     toast.addEventListener('mouseleave', Swal.resumeTimer);
+    toast.addEventListener('focusin', Swal.stopTimer);
+    toast.addEventListener('focusout', Swal.resumeTimer);
+    // A failure is announced at once; every other update politely, after what the screen reader is saying.
+    const urgent = toast.classList.contains('toast-error');
+    toast.setAttribute('role', urgent ? 'alert' : 'status');
+    toast.setAttribute('aria-live', urgent ? 'assertive' : 'polite');
   }
 });
+
+type ToastKind = 'success' | 'warning' | 'error' | 'info';
+type Pending = { kind: ToastKind; key: string; run: () => Promise<unknown>; done: Promise<unknown>; resolve: (value: unknown) => void };
+const MAX_WAITING = 3;
+let showing: { key: string; done: Promise<unknown> } | null = null;
+const waiting: Pending[] = [];
+
+/** A toast waits while a modal dialog is open (it must not replace it), or while the notification panel leaves no room beneath it
+ * (on a phone it fills the screen): then it shows, still top right, as soon as the panel closes. */
+const blocked = () => (Swal.isVisible() && !Swal.getPopup()?.classList.contains('swal2-toast'))
+  || (document.querySelector('.notification-panel')?.getBoundingClientRect().bottom ?? 0) + 120 > window.innerHeight;
+
+/**
+ * Keeps the toast in the top-right corner but below the notification panel while that panel is open (it opens in the same corner),
+ * by moving only its top edge. Runs whenever something is added to or removed from the page body (the panel is mounted there).
+ */
+function placeToasts() {
+  const panel = document.querySelector('.notification-panel');
+  const top = panel ? Math.round(panel.getBoundingClientRect().bottom + 12) : null;
+  if (top === null) document.documentElement.style.removeProperty('--toast-top');
+  else document.documentElement.style.setProperty('--toast-top', `${top}px`);
+}
+if (typeof window !== 'undefined' && typeof MutationObserver !== 'undefined') {
+  new MutationObserver(placeToasts).observe(document.body, { childList: true });
+  window.addEventListener('resize', placeToasts);
+}
+
+/**
+ * One toast at a time, in order (NOTIFICATION-UI-11). The same message already showing or waiting is not repeated; at most three wait,
+ * and when that is full the oldest that is not a failure gives way, so a failure is never lost behind later news.
+ */
+function enqueue(kind: ToastKind, title: string, text: string | undefined, run: () => Promise<unknown>): Promise<unknown> {
+  const key = `${kind}|${title}|${text ?? ''}`;
+  if (showing?.key === key) return showing.done;
+  const twin = waiting.find(item => item.key === key);
+  if (twin) return twin.done;
+  let resolve!: (value: unknown) => void;
+  const done = new Promise(r => { resolve = r; });
+  waiting.push({ kind, key, run, done, resolve });
+  if (waiting.length > MAX_WAITING) {
+    const drop = waiting.findIndex(item => item.kind !== 'error');
+    const [dropped] = waiting.splice(drop === -1 ? 0 : drop, 1);
+    dropped.resolve(undefined);
+  }
+  if (!showing) void next();
+  return done;
+}
+
+async function next(): Promise<void> {
+  const item = waiting.shift();
+  if (!item) { showing = null; return; }
+  while (blocked()) await new Promise(r => setTimeout(r, 300));
+  showing = { key: item.key, done: item.done };
+  try { item.resolve(await item.run()); } catch { item.resolve(undefined); }
+  void next();
+}
 
 const baseModal = Swal.mixin({
   customClass: {
@@ -37,7 +102,7 @@ const baseModal = Swal.mixin({
 });
 
 export const swalSuccess = (title: string, text?: string) =>
-  toastBase.fire({
+  enqueue('success', title, text, () => toastBase.fire({
     iconHtml: glyphSuccess,
     icon: 'success',
     title,
@@ -45,10 +110,10 @@ export const swalSuccess = (title: string, text?: string) =>
     customClass: {
       popup: 'toast-success',
     },
-  });
+  }));
 
 export const swalWarning = (title: string, text?: string) =>
-  toastBase.fire({
+  enqueue('warning', title, text, () => toastBase.fire({
     iconHtml: glyphWarning,
     icon: 'warning',
     title,
@@ -56,10 +121,10 @@ export const swalWarning = (title: string, text?: string) =>
     customClass: {
       popup: 'toast-warning',
     },
-  });
+  }));
 
 export const swalError = (title: string, text?: string) =>
-  toastBase.fire({
+  enqueue('error', title, text, () => toastBase.fire({
     iconHtml: glyphError,
     icon: 'error',
     title,
@@ -67,10 +132,10 @@ export const swalError = (title: string, text?: string) =>
     customClass: {
       popup: 'toast-error',
     },
-  });
+  }));
 
 export const swalInfo = (title: string, text?: string) =>
-  toastBase.fire({
+  enqueue('info', title, text, () => toastBase.fire({
     iconHtml: glyphInfo,
     icon: 'info',
     title,
@@ -78,17 +143,18 @@ export const swalInfo = (title: string, text?: string) =>
     customClass: {
       popup: 'toast-info',
     },
-  });
+  }));
 
 export const closeSwal = () => Swal.close();
 
-export const swalConfirm = async (title: string, text: string, confirmText: string = 'Yes, proceed'): Promise<boolean> => {
+/** `danger`: the action removes something, so the confirm button is red. */
+export const swalConfirm = async (title: string, text: string, confirmText: string = 'Yes, proceed', danger = false): Promise<boolean> => {
   const result = await baseModal.fire({
     title,
     text,
     icon: 'warning',
     showCancelButton: true,
-    confirmButtonColor: '#2563eb',
+    confirmButtonColor: danger ? '#ef4444' : '#2563eb',
     cancelButtonColor: '#64748b',
     confirmButtonText: confirmText,
     cancelButtonText: 'Cancel'

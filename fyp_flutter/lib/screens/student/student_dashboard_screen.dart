@@ -1,4 +1,7 @@
+import '../../widgets/check_in_success_dialog.dart';
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
+import '../../i18n/tr.dart';
+import '../../widgets/brand_refresh.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -7,6 +10,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../main.dart'; // for ApiConfig
 import '../../widgets/glass_card.dart';
+import '../../widgets/attendance_guidance.dart';
+import '../../widgets/course_notices.dart';
 import '../../widgets/shimmer_loading.dart';
 import 'face_scanner_screen.dart';
 import 'full_timetable_screen.dart';
@@ -16,6 +21,20 @@ import '../system/notifications_screen.dart';
 import '../../services/live_updates.dart';
 import '../../services/academic_calendar.dart';
 import '../../services/attendance_parity.dart';
+
+String? _toastSessionToken;
+final Set<String> _toastedNoticeIds = {};
+
+/// Notices already popped up during this sign-in. Kept outside the dashboard, which is rebuilt on every
+/// Home / Student / Staff switch; a different token (a new sign-in) starts with an empty list.
+@visibleForTesting
+Set<String> toastedNoticesFor(String token) {
+  if (_toastSessionToken != token) {
+    _toastSessionToken = token;
+    _toastedNoticeIds.clear();
+  }
+  return _toastedNoticeIds;
+}
 
 // -----------------------------------------------------------------
 // SCREEN 2: Student Main Dashboard Shell (Tab Layout)
@@ -99,7 +118,7 @@ class _MainScreenState extends State<MainScreen> {
   LiveUpdates? _live;
   DateTime _lastRefresh = DateTime.now();
   final Set<String> _pendingTopics = {};
-  final Set<String> _shownNotificationIds = {};
+  Set<String> get _shownNotificationIds => toastedNoticesFor(widget.authToken);
   List<Map<String, dynamic>> _notifications = [];
 
   @override
@@ -158,32 +177,6 @@ class _MainScreenState extends State<MainScreen> {
       'December',
     ];
     return months[month - 1];
-  }
-
-  Widget _buildPublisherBadge(String publisher) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF), // soft blue
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFBFDBFE).withOpacity(0.5)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.person_outline, color: Color(0xFF2563EB), size: 10),
-          const SizedBox(width: 4),
-          Text(
-            publisher,
-            style: GoogleFonts.inter(
-              fontSize: 9,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFF2563EB),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   String _dayOfWeekName(int day) {
@@ -471,7 +464,7 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  "Face Registration Required",
+                  tr('Face Registration Required'),
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 13.5,
                     fontWeight: FontWeight.bold,
@@ -482,7 +475,7 @@ class _MainScreenState extends State<MainScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              "Register your live face before checking in. Once saved, only the administration office can reset it.",
+              tr('Register your live face before checking in. Once saved, only the administration office can reset it.'),
               style: GoogleFonts.inter(
                 fontSize: 11,
                 color: const Color(0xFF64748B),
@@ -492,7 +485,7 @@ class _MainScreenState extends State<MainScreen> {
             ElevatedButton.icon(
               onPressed: widget.onRegisterFace,
               icon: const Icon(Icons.face_retouching_natural, size: 14),
-              label: const Text("Register face"),
+              label: Text(tr('Register face')),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2563EB),
                 foregroundColor: Colors.white,
@@ -541,7 +534,7 @@ class _MainScreenState extends State<MainScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  "Timetable",
+                  tr('Timetable'),
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
@@ -574,7 +567,7 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      "No classes scheduled for today.",
+                      tr('No classes scheduled for today.'),
                       style: GoogleFonts.inter(
                         fontSize: 11,
                         color: const Color(0xFF64748B),
@@ -616,7 +609,7 @@ class _MainScreenState extends State<MainScreen> {
                       radius: 14,
                       backgroundColor: themeColor.withOpacity(0.15),
                       child: Text(
-                        badgeLetter,
+                        tr(badgeLetter),
                         style: GoogleFonts.spaceGrotesk(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
@@ -630,7 +623,7 @@ class _MainScreenState extends State<MainScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            "${item['startTime']} - ${item['endTime']} · Room ${item['room']}",
+                            tr('{v} - {v2} · Room {v3}', {'v': item['startTime'], 'v2': item['endTime'], 'v3': item['room']}),
                             style: GoogleFonts.inter(
                               fontSize: 9.5,
                               fontWeight: FontWeight.bold,
@@ -669,13 +662,13 @@ class _MainScreenState extends State<MainScreen> {
         ? Colors.white
         : const Color(0xFF0F172A);
     final secondaryTextColor = isDarkMode
-        ? const Color(0xFF94A3B8)
+        ? const Color(0xFFA0A0A0)
         : const Color(0xFF64748B);
     final pillBgColor = isDarkMode
-        ? const Color(0xFF0F172A)
+        ? const Color(0xFF181818)
         : const Color(0xFFF1F5F9);
     final borderColor = isDarkMode
-        ? const Color(0xFF334155)
+        ? const Color(0xFF333333)
         : const Color(0xFFE2E8F0);
 
     return SafeArea(
@@ -726,7 +719,7 @@ class _MainScreenState extends State<MainScreen> {
                             ),
                             const SizedBox(width: 5),
                             Text(
-                              _dayOfWeekName(ApiConfig.now.weekday),
+                              tr(_dayOfWeekName(ApiConfig.now.weekday)),
                               style: GoogleFonts.inter(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w700,
@@ -738,7 +731,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          "Smart Attendance Portal Client",
+                          tr('Smart Attendance Portal Client'),
                           style: GoogleFonts.inter(
                             fontSize: 8,
                             fontWeight: FontWeight.w600,
@@ -783,7 +776,7 @@ class _MainScreenState extends State<MainScreen> {
                       clipBehavior: Clip.none,
                       children: [
                         IconButton(
-                          tooltip: 'Notifications',
+                          tooltip: tr('Notifications'),
                           onPressed: _openNotificationsScreen,
                           icon: const Icon(
                             Icons.notifications_none_rounded,
@@ -851,9 +844,9 @@ class _MainScreenState extends State<MainScreen> {
                       0xFF2563EB,
                     ).withValues(alpha: 0.1),
                     child: Text(
-                      widget.studentName
+                      tr(widget.studentName
                           .substring(0, min(2, widget.studentName.length))
-                          .toUpperCase(),
+                          .toUpperCase()),
                       style: GoogleFonts.spaceGrotesk(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
@@ -867,7 +860,7 @@ class _MainScreenState extends State<MainScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Welcome, ${widget.studentName}",
+                          tr('Welcome, {studentName}', {'studentName': widget.studentName}),
                           style: GoogleFonts.spaceGrotesk(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -876,7 +869,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          "ID: ${widget.studentCode} · ${widget.studentEmail}",
+                          tr('ID: {studentCode} · {studentEmail}', {'studentCode': widget.studentCode, 'studentEmail': widget.studentEmail}),
                           style: GoogleFonts.inter(
                             fontSize: 10,
                             color: secondaryTextColor,
@@ -1006,12 +999,12 @@ class _MainScreenState extends State<MainScreen> {
                           ? Colors.white
                           : const Color(0xFF2563EB))
                     : (Theme.of(context).brightness == Brightness.dark
-                          ? const Color(0xFF94A3B8)
+                          ? const Color(0xFFA0A0A0)
                           : const Color(0xFF64748B)),
               ),
               const SizedBox(width: 6),
               Text(
-                label,
+                tr(label),
                 style: GoogleFonts.inter(
                   fontSize: 10,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
@@ -1020,7 +1013,7 @@ class _MainScreenState extends State<MainScreen> {
                             ? Colors.white
                             : const Color(0xFF0F172A))
                       : (Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF94A3B8)
+                            ? const Color(0xFFA0A0A0)
                             : const Color(0xFF64748B)),
                 ),
               ),
@@ -1032,7 +1025,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildCheckInTab() {
-    return RefreshIndicator(
+    return BrandRefresh(
       onRefresh: () async {
         await widget.onSyncRequested();
         await fetchActiveSessions();
@@ -1048,7 +1041,7 @@ class _MainScreenState extends State<MainScreen> {
             const SizedBox(height: 4),
             // Active Lectures from backend
             Text(
-              "Available Session Windows",
+              tr('Available Session Windows'),
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
@@ -1164,7 +1157,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          sessionsError!,
+                          tr(sessionsError!),
                           textAlign: TextAlign.center,
                           style: GoogleFonts.inter(
                             fontSize: 11,
@@ -1175,7 +1168,7 @@ class _MainScreenState extends State<MainScreen> {
                         OutlinedButton.icon(
                           onPressed: fetchActiveSessions,
                           icon: const Icon(Icons.refresh, size: 14),
-                          label: const Text("Retry"),
+                          label: Text(tr('Retry')),
                         ),
                       ],
                     ),
@@ -1238,21 +1231,21 @@ class _MainScreenState extends State<MainScreen> {
                     final diff = startDt.difference(now);
                     if (diff.inHours > 0) {
                       remainingHint =
-                          "Class starts in ${diff.inHours}h ${diff.inMinutes % 60}m";
+                          tr('Class starts in {h}h {m}m', {'h': diff.inHours, 'm': diff.inMinutes % 60});
                     } else {
-                      remainingHint = "Class starts in ${diff.inMinutes}m";
+                      remainingHint = tr('Class starts in {m}m', {'m': diff.inMinutes});
                     }
                   } else if (!classEnded) {
                     final diff = endDt.difference(now);
                     if (diff.inHours > 0) {
                       remainingHint =
-                          "Class ends in ${diff.inHours}h ${diff.inMinutes % 60}m";
+                          tr('Class ends in {h}h {m}m', {'h': diff.inHours, 'm': diff.inMinutes % 60});
                     } else {
-                      remainingHint = "Class ends in ${diff.inMinutes}m";
+                      remainingHint = tr('Class ends in {m}m', {'m': diff.inMinutes});
                     }
                   } else {
                     remainingHint =
-                        "Class ended at ${_formatDisplayTime(endTimeStr)}";
+                        tr('Class ended at {time}', {'time': _formatDisplayTime(endTimeStr)});
                   }
                 }
 
@@ -1292,7 +1285,7 @@ class _MainScreenState extends State<MainScreen> {
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
-                                  isThisSessionCheckedIn
+                                  tr(isThisSessionCheckedIn
                                       ? "COMPLETED"
                                       : isSessionOpen
                                       ? (classStarted
@@ -1300,7 +1293,7 @@ class _MainScreenState extends State<MainScreen> {
                                                   ? "CLOSED"
                                                   : "ACTIVE WINDOW")
                                             : "UPCOMING (OPEN)")
-                                      : "SESSION NOT ACTIVE",
+                                      : "SESSION NOT ACTIVE"),
                                   style: GoogleFonts.inter(
                                     fontSize: 8,
                                     fontWeight: FontWeight.bold,
@@ -1315,7 +1308,7 @@ class _MainScreenState extends State<MainScreen> {
                                 ),
                               ),
                               Text(
-                                "Tut Group: $classGroup",
+                                tr('Tut Group: {classGroup}', {'classGroup': classGroup}),
                                 style: GoogleFonts.inter(
                                   fontSize: 9,
                                   color:
@@ -1340,7 +1333,7 @@ class _MainScreenState extends State<MainScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            "${_formatDisplayTime(startTimeStr)} - ${_formatDisplayTime(endTimeStr)} · Room $room",
+                            tr('{v} - {v2} · Room {room}', {'v': _formatDisplayTime(startTimeStr), 'v2': _formatDisplayTime(endTimeStr), 'room': room}),
                             style: GoogleFonts.inter(
                               fontSize: 10,
                               color: const Color(0xFF64748B),
@@ -1363,7 +1356,7 @@ class _MainScreenState extends State<MainScreen> {
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  remainingHint,
+                                  tr(remainingHint),
                                   style: GoogleFonts.inter(
                                     fontSize: 9.5,
                                     fontWeight: FontWeight.w600,
@@ -1404,7 +1397,7 @@ class _MainScreenState extends State<MainScreen> {
                                       ),
                                       const SizedBox(width: 6),
                                       Text(
-                                        "CHECK-IN REGISTERED",
+                                        tr('CHECK-IN REGISTERED'),
                                         style: GoogleFonts.inter(
                                           fontSize: 10,
                                           fontWeight: FontWeight.bold,
@@ -1418,11 +1411,15 @@ class _MainScreenState extends State<MainScreen> {
                                   onPressed: !canCheckIn
                                       ? null
                                       : () {
-                                          Navigator.push(
+      // A local function, so a failed check-in can offer Try again with this same scan.
+      Future<void> openScan() async {
+        var scanFailed = false;
+
+                                          await Navigator.push(
                                             context,
                                             MaterialPageRoute(
                                               builder: (context) => FaceScannerScreen(
-                                                title: "$courseCode Check-In",
+                                                title: tr('{courseCode} Check-In', {'courseCode': courseCode}),
                                                 sessionId: sessionId.toString(),
                                                 authToken: widget.authToken,
                                                 apiBaseUrl: ApiConfig.getEffectiveUrl(),
@@ -1436,19 +1433,7 @@ class _MainScreenState extends State<MainScreen> {
                                                       if (imageBase64 == null ||
                                                           imageBase64.isEmpty ||
                                                           !livenessPassed) {
-                                                        ScaffoldMessenger.of(
-                                                          context,
-                                                        ).showSnackBar(
-                                                          const SnackBar(
-                                                            content: Text(
-                                                              "Check-in cancelled: face scan or liveness was not completed.",
-                                                            ),
-                                                            backgroundColor:
-                                                                Color(
-                                                                  0xFFDC2626,
-                                                                ),
-                                                          ),
-                                                        );
+                                                        scanFailed = true;
                                                         return;
                                                       }
                                                       widget.onCheckInComplete(
@@ -1462,6 +1447,7 @@ class _MainScreenState extends State<MainScreen> {
                                                             challengeMs,
                                                         extraDetails: {
                                                           'challenge_token': challengeToken,
+'retry': openScan,
                                                           'timeSlot':
                                                               "$startTimeStr - $endTimeStr",
                                                           'room': room,
@@ -1483,7 +1469,18 @@ class _MainScreenState extends State<MainScreen> {
                                               ),
                                             ),
                                           );
-                                        },
+                                        
+        if (scanFailed && mounted) {
+          showCheckInFailedDialog(
+            context,
+            message: 'Check-in cancelled: face scan or liveness was not completed.',
+            onRetry: openScan,
+          );
+        }
+      }
+
+      openScan();
+},
                                   icon: Icon(
                                     isSessionOpen
                                         ? (classStarted
@@ -1495,13 +1492,13 @@ class _MainScreenState extends State<MainScreen> {
                                     size: 14,
                                   ),
                                   label: Text(
-                                    isSessionOpen
+                                    tr(isSessionOpen
                                         ? (classStarted
                                               ? (classEnded
                                                     ? "Attendance Closed"
                                                     : "Perform Face & WiFi Check-In")
-                                              : "Opens at ${_formatDisplayTime(startTimeStr)}")
-                                        : "Session Not Open",
+                                              : tr('Opens at {time}', {'time': _formatDisplayTime(startTimeStr)}))
+                                        : "Session Not Open"),
                                   ),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: themeColor,
@@ -1546,7 +1543,7 @@ class _MainScreenState extends State<MainScreen> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            "No active session windows available at this time.",
+                            tr('No active session windows available at this time.'),
                             style: GoogleFonts.inter(
                               fontSize: 11,
                               color: const Color(0xFF64748B),
@@ -1563,148 +1560,8 @@ class _MainScreenState extends State<MainScreen> {
             })(),
             const SizedBox(height: 20),
             _buildTodayTimetableSection(),
-            const SizedBox(height: 20), // Announcements Header
-            Text(
-              "Important Announcements",
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? Colors.white
-                    : const Color(0xFF0F172A),
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            if (widget.announcements.isEmpty)
-              GlassCard(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Center(
-                    child: Text(
-                      "No announcements published at this time.",
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: const Color(0xFF64748B),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ),
-              )
-            else
-              ...widget.announcements.map((ann) {
-                final dateRaw = ann['created_at'] as String?;
-                String dateStr = 'Unknown Date';
-                if (dateRaw != null) {
-                  final dt = DateTime.tryParse(dateRaw)?.toLocal();
-                  if (dt != null) {
-                    final months = const [
-                      'January',
-                      'February',
-                      'March',
-                      'April',
-                      'May',
-                      'June',
-                      'July',
-                      'August',
-                      'September',
-                      'October',
-                      'November',
-                      'December',
-                    ];
-                    dateStr = "${months[dt.month - 1]} ${dt.day}, ${dt.year}";
-                  }
-                }
-
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12.0),
-                  child: GlassCard(
-                    padding: EdgeInsets.zero,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Banner image hidden inside student dashboard per user request
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: const Color(
-                                        0xFF2563EB,
-                                      ).withValues(alpha: 0.1),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.campaign_outlined,
-                                      color: Color(0xFF2563EB),
-                                      size: 20,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                ann['title'] ?? 'Notice',
-                                                style: GoogleFonts.spaceGrotesk(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: const Color(
-                                                    0xFF1E293B,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            _buildPublisherBadge(
-                                              ann['target_scope'] == 'course'
-                                                  ? 'COURSE'
-                                                  : 'GENERAL',
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          "Posted: $dateStr",
-                                          style: GoogleFonts.inter(
-                                            fontSize: 9,
-                                            color: const Color(0xFF64748B),
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                ann['content'] ?? '',
-                                style: GoogleFonts.inter(
-                                  fontSize: 10.5,
-                                  color: const Color(0xFF64748B),
-                                  height: 1.4,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }),
+            const SizedBox(height: 20),
+            CourseNoticesSection(announcements: widget.announcements),
             const SizedBox(height: 16),
           ],
         ),
@@ -1727,11 +1584,11 @@ class _MainScreenState extends State<MainScreen> {
       final unread = notifications.where(
         (item) =>
             item['is_read'] != true &&
-            !_shownNotificationIds.contains(item['id']),
+            !_shownNotificationIds.contains('${item['id']}'),
       );
       if (unread.isEmpty) return;
       final item = unread.first;
-      _shownNotificationIds.add(item['id'].toString());
+      _shownNotificationIds.add('${item['id']}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -1749,11 +1606,11 @@ class _MainScreenState extends State<MainScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      item['title'] ?? 'Attendance update',
+                      tr(item['title'] ?? 'Attendance update'),
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      item['body'] ?? '',
+                      tr(item['body'] ?? ''),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1802,7 +1659,7 @@ class _MainScreenState extends State<MainScreen> {
         final color = active
             ? const Color(0xFF2563EB)
             : finished
-            ? const Color(0xFF10B981)
+            ? const Color(0xFF64748B)
             : const Color(0xFFCBD5E1);
         return Expanded(
           child: Padding(
@@ -1810,7 +1667,7 @@ class _MainScreenState extends State<MainScreen> {
             child: Column(
               children: [
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 260),
+                  duration: MediaQuery.disableAnimationsOf(context) ? Duration.zero : const Duration(milliseconds: 260),
                   height: 5,
                   decoration: BoxDecoration(
                     color: color,
@@ -1819,7 +1676,7 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  meeting['courseCode']?.toString() ?? '',
+                  tr(meeting['courseCode']?.toString() ?? ''),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.inter(
@@ -1828,13 +1685,13 @@ class _MainScreenState extends State<MainScreen> {
                     color: active || finished
                         ? color
                         : dark
-                        ? const Color(0xFF94A3B8)
+                        ? const Color(0xFFA0A0A0)
                         : const Color(0xFF64748B),
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _formatDisplayTime(meeting['startTime']),
+                  tr(_formatDisplayTime(meeting['startTime'])),
                   maxLines: 1,
                   style: GoogleFonts.inter(
                     fontSize: 8,
@@ -1862,7 +1719,7 @@ class _MainScreenState extends State<MainScreen> {
     ][now.weekday - 1];
     final monthAbbrev = _monthAbbreviation(now.month);
     final todayLabelStr =
-        "$dayAbbrev, ${now.day} $monthAbbrev ${now.year} (today)";
+        tr('{day}, {date} {month} {year} (today)', {'day': tr(dayAbbrev), 'date': now.day, 'month': tr(monthAbbrev), 'year': now.year});
 
     final reportDayOfWeek = _dayOfWeekName(now.weekday);
     final reportMonthName = _monthFullName(now.month);
@@ -1906,7 +1763,7 @@ class _MainScreenState extends State<MainScreen> {
       return true;
     }).toList();
 
-    return RefreshIndicator(
+    return BrandRefresh(
       onRefresh: () async {
         await widget.onSyncRequested();
         await fetchActiveSessions();
@@ -1921,7 +1778,7 @@ class _MainScreenState extends State<MainScreen> {
             _buildFaceVerificationNotice(),
             // 1. Daily Attendance Report Section
             Text(
-              "Daily Attendance Report",
+              tr('Daily Attendance Report'),
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 15,
                 fontWeight: FontWeight.bold,
@@ -1932,12 +1789,12 @@ class _MainScreenState extends State<MainScreen> {
             ),
             const SizedBox(height: 2),
             Text(
-              reportDateLabelStr,
+              tr(reportDateLabelStr),
               style: GoogleFonts.inter(
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
                 color: Theme.of(context).brightness == Brightness.dark
-                    ? const Color(0xFF94A3B8)
+                    ? const Color(0xFFA0A0A0)
                     : const Color(0xFF64748B),
               ),
             ),
@@ -1950,19 +1807,19 @@ class _MainScreenState extends State<MainScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
                       color: Theme.of(context).brightness == Brightness.dark
-                          ? const Color(0xFF1E293B)
+                          ? const Color(0xFF222222)
                           : const Color(0xFFEFF6FF),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF334155)
+                            ? const Color(0xFF333333)
                             : const Color(0xFFBFDBFE).withValues(alpha: 0.5),
                       ),
                     ),
                     child: Column(
                       children: [
                         Text(
-                          "Marked",
+                          tr('Marked'),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             color: const Color(0xFF2563EB),
@@ -1983,7 +1840,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          "of $todayClassCount today",
+                          tr('of {todayClassCount} today', {'todayClassCount': todayClassCount}),
                           style: GoogleFonts.inter(
                             fontSize: 9,
                             color: const Color(0xFF64748B),
@@ -2000,19 +1857,19 @@ class _MainScreenState extends State<MainScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
                       color: Theme.of(context).brightness == Brightness.dark
-                          ? const Color(0xFF1E293B)
+                          ? const Color(0xFF222222)
                           : const Color(0xFFEFF6FF),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF334155)
+                            ? const Color(0xFF333333)
                             : const Color(0xFFBFDBFE).withValues(alpha: 0.5),
                       ),
                     ),
                     child: Column(
                       children: [
                         Text(
-                          "Remaining",
+                          tr('Remaining'),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             color: hasRemainingClasses
@@ -2034,7 +1891,7 @@ class _MainScreenState extends State<MainScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          hasRemainingClasses ? "still to attend" : "all done",
+                          tr(hasRemainingClasses ? "still to attend" : "all done"),
                           style: GoogleFonts.inter(
                             fontSize: 9,
                             color: const Color(0xFF64748B),
@@ -2083,11 +1940,11 @@ class _MainScreenState extends State<MainScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          todayClassCount == 0
+                          tr(todayClassCount == 0
                               ? "No classes today"
                               : hasRemainingClasses
-                              ? "$remainingCount ${remainingCount == 1 ? 'class' : 'classes'} left today"
-                              : "All classes marked",
+                              ? (remainingCount == 1 ? tr('1 class left today') : tr('{n} classes left today', {'n': remainingCount}))
+                              : "All classes marked"),
                           style: GoogleFonts.inter(
                             fontSize: 11,
                             fontWeight: FontWeight.w800,
@@ -2100,7 +1957,7 @@ class _MainScreenState extends State<MainScreen> {
                         if (hasRemainingClasses) ...[
                           const SizedBox(height: 2),
                           Text(
-                            "Check the next class time.",
+                            tr('Check the next class time.'),
                             style: GoogleFonts.inter(
                               fontSize: 9.5,
                               color: const Color(0xFF64748B),
@@ -2117,7 +1974,7 @@ class _MainScreenState extends State<MainScreen> {
 
             // 2. Live Attendance Section
             Text(
-              "Live attendance",
+              tr('Live attendance'),
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
@@ -2142,9 +1999,9 @@ class _MainScreenState extends State<MainScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          todayLabelStr,
+                          tr(todayLabelStr),
                           style: GoogleFonts.inter(
-                            fontSize: 11,
+                            fontSize: 14,
                             fontWeight: FontWeight.w700,
                             color:
                                 Theme.of(context).brightness == Brightness.dark
@@ -2167,15 +2024,15 @@ class _MainScreenState extends State<MainScreen> {
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          sessionStatus == 'active'
+                          tr(sessionStatus == 'active'
                               ? 'Current class'
                               : sessionStatus == 'before'
                               ? 'Next class'
                               : sessionStatus == 'after'
                               ? 'Classes finished'
-                              : 'No class',
+                              : 'No class'),
                           style: GoogleFonts.inter(
-                            fontSize: 9,
+                            fontSize: 12,
                             fontWeight: FontWeight.w800,
                             color: sessionStatus == 'active'
                                 ? const Color(0xFF2563EB)
@@ -2213,18 +2070,17 @@ class _MainScreenState extends State<MainScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                todaySession['courseCode']?.toString() ?? '',
+                                tr(todaySession['courseCode']?.toString() ?? ''),
                                 style: GoogleFonts.spaceGrotesk(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w800,
                                 ),
                               ),
                               Text(
-                                todaySession['courseName']?.toString() ?? '',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                tr(todaySession['courseName']?.toString() ?? ''),
+                                softWrap: true,
                                 style: GoogleFonts.inter(
-                                  fontSize: 10,
+                                  fontSize: 14,
                                   color: const Color(0xFF64748B),
                                 ),
                               ),
@@ -2266,21 +2122,36 @@ class _MainScreenState extends State<MainScreen> {
                     const SizedBox(height: 16),
                   ] else
                     Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: Text(
-                        'No scheduled class today',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          color: const Color(0xFF64748B),
-                        ),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2563EB).withValues(alpha: Theme.of(context).brightness == Brightness.dark ? .18 : .08),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.event_available_rounded, color: Color(0xFF2563EB), size: 22),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            tr('No scheduled class today'),
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0F172A),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   if (todayClasses.isNotEmpty) ...[
                     Text(
-                      'Today’s progress',
+                      tr('Today’s progress'),
                       style: GoogleFonts.inter(
-                        fontSize: 9.5,
+                        fontSize: 12,
                         fontWeight: FontWeight.w800,
                         color: const Color(0xFF64748B),
                       ),
@@ -2290,15 +2161,21 @@ class _MainScreenState extends State<MainScreen> {
                     const SizedBox(height: 16),
                   ],
 
+                  AttendanceGuidance(recorded: hasCheckedInToday, open: canClockIn, faceRegistered: widget.isFaceRegistered),
+                  const SizedBox(height: 16),
                   ElevatedButton.icon(
                     onPressed: (!hasCheckedInToday && !canClockIn)
                         ? null // disabled outside the class window / no class
                         : () {
+      // A local function, so a failed check-in can offer Try again with this same scan.
+      Future<void> openScan() async {
+        var scanFailed = false;
+
                             if (hasCheckedInToday) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
-                                    "You have already checked in today at $todayCheckInTime!",
+                                    tr('You have already checked in today at {todayCheckInTime}!', {'todayCheckInTime': todayCheckInTime}),
                                   ),
                                   backgroundColor: const Color(0xFF10B981),
                                 ),
@@ -2306,11 +2183,11 @@ class _MainScreenState extends State<MainScreen> {
                               return;
                             }
 
-                            Navigator.push(
+                            await Navigator.push(
                               context,
                               MaterialPageRoute(
                                 builder: (context) => FaceScannerScreen(
-                                  title: "Daily Attendance Scan",
+                                  title: tr('Daily Attendance Scan'),
                                   sessionId: (matchingOpenSession ?? activeSessions.first)['sessionId'].toString(),
                                   authToken: widget.authToken,
                                   apiBaseUrl: ApiConfig.getEffectiveUrl(),
@@ -2324,27 +2201,16 @@ class _MainScreenState extends State<MainScreen> {
                                         if (imageBase64 == null ||
                                             imageBase64.isEmpty ||
                                             !livenessPassed) {
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                "Check-in cancelled: face scan or liveness was not completed.",
-                                              ),
-                                              backgroundColor: Color(
-                                                0xFFDC2626,
-                                              ),
-                                            ),
-                                          );
+                                          scanFailed = true;
                                           return;
                                         }
                                         if (activeSessions.isEmpty) {
                                           ScaffoldMessenger.of(
                                             context,
                                           ).showSnackBar(
-                                            const SnackBar(
+                                            SnackBar(
                                               content: Text(
-                                                "No open session to check in to right now.",
+                                                tr('No open session to check in to right now.'),
                                               ),
                                               backgroundColor: Color(
                                                 0xFFF59E0B,
@@ -2364,13 +2230,24 @@ class _MainScreenState extends State<MainScreen> {
                                           imageBase64,
                                           livenessPassed,
                                           challengeMs: challengeMs,
-                                          extraDetails: {'challenge_token': challengeToken},
+                                          extraDetails: {'challenge_token': challengeToken, 'retry': openScan},
                                         );
                                       },
                                 ),
                               ),
                             );
-                          },
+                          
+        if (scanFailed && mounted) {
+          showCheckInFailedDialog(
+            context,
+            message: 'Check-in cancelled: face scan or liveness was not completed.',
+            onRetry: openScan,
+          );
+        }
+      }
+
+      openScan();
+},
                     icon: Icon(
                       hasCheckedInToday
                           ? Icons.check_circle
@@ -2380,35 +2257,36 @@ class _MainScreenState extends State<MainScreen> {
                       size: 14,
                     ),
                     label: Text(
-                      hasCheckedInToday
-                          ? "Clocked In Successfully"
+                      tr(hasCheckedInToday
+                          ? "Attendance recorded"
                           : sessionStatus == 'active' &&
                                 matchingOpenSession != null
-                          ? "Clock in"
+                          ? "Check in"
                           : sessionStatus == 'active' && isLoadingSessions
                           ? "Checking session..."
                           : sessionStatus == 'active'
                           ? "Session unavailable"
                           : sessionStatus == 'before'
-                          ? "Opens at $sessionStartLabel"
+                          ? tr('Opens at {time}', {'time': sessionStartLabel})
                           : sessionStatus == 'after'
                           ? "Attendance closed"
-                          : "No class today",
+                          : "No class today"),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: hasCheckedInToday
                           ? const Color(0xFF10B981)
                           : const Color(0xFF2563EB),
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: const Color(0xFF94A3B8),
-                      disabledForegroundColor: Colors.white,
+                      // Unavailable reads as a quiet grey state, not a heavy slab.
+                      disabledBackgroundColor: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF2D2D2D) : const Color(0xFFEEF2F7),
+                      disabledForegroundColor: Theme.of(context).brightness == Brightness.dark ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                      elevation: 1,
+                      elevation: 0,
                       textStyle: GoogleFonts.inter(
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2423,7 +2301,7 @@ class _MainScreenState extends State<MainScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  "Attendance Log",
+                  tr('Attendance Log'),
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
@@ -2450,7 +2328,7 @@ class _MainScreenState extends State<MainScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 24.0),
                         child: Center(
                           child: Text(
-                            "No attendance logs recorded today.",
+                            tr('No attendance logs recorded today.'),
                             style: GoogleFonts.inter(
                               fontSize: 11,
                               color: const Color(0xFF94A3B8),
@@ -2484,10 +2362,10 @@ class _MainScreenState extends State<MainScreen> {
                             ? logDate.split(',').last.trim()
                             : logDate;
                         final timeRoomHeader =
-                            "$timePart, Room ${log['group']}";
+                            tr('{time}, Room {room}', {'time': timePart, 'room': log['group']});
 
                         final footerLabel = isVerified
-                            ? "Registered at $timePart"
+                            ? tr('Registered at {time}', {'time': timePart})
                             : isExcused
                             ? "Excused (approved leave)"
                             : "Absent";
@@ -2512,7 +2390,7 @@ class _MainScreenState extends State<MainScreen> {
                                   0xFF2563EB,
                                 ).withValues(alpha: 0.1),
                                 child: Text(
-                                  firstChar,
+                                  tr(firstChar),
                                   style: GoogleFonts.spaceGrotesk(
                                     fontSize: 12,
                                     fontWeight: FontWeight.bold,
@@ -2526,7 +2404,7 @@ class _MainScreenState extends State<MainScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      timeRoomHeader,
+                                      tr(timeRoomHeader),
                                       style: GoogleFonts.inter(
                                         fontSize: 9,
                                         fontWeight: FontWeight.w600,
@@ -2556,7 +2434,7 @@ class _MainScreenState extends State<MainScreen> {
                                         ),
                                         const SizedBox(width: 4),
                                         Text(
-                                          lecturerName,
+                                          tr(lecturerName),
                                           style: GoogleFonts.inter(
                                             fontSize: 9.5,
                                             fontWeight: FontWeight.w500,
@@ -2575,7 +2453,7 @@ class _MainScreenState extends State<MainScreen> {
                                 children: [
                                   const SizedBox(height: 26),
                                   Text(
-                                    footerLabel,
+                                    tr(footerLabel),
                                     style: GoogleFonts.inter(
                                       fontSize: 9,
                                       fontWeight: FontWeight.bold,
@@ -2610,7 +2488,7 @@ class _MainScreenState extends State<MainScreen> {
         width: 48,
         child: Center(
           child: Text(
-            'No data',
+            tr('No data'),
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF94A3B8)),
           ),
@@ -2660,7 +2538,7 @@ class _MainScreenState extends State<MainScreen> {
           padding: const EdgeInsets.symmetric(vertical: 24.0),
           child: Center(
             child: Text(
-              "No current courses assigned.",
+              tr('No current courses assigned.'),
               style: GoogleFonts.inter(
                 fontSize: 11,
                 color: const Color(0xFF94A3B8),
@@ -2711,7 +2589,7 @@ class _MainScreenState extends State<MainScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        courseName,
+                        tr(courseName),
                         style: GoogleFonts.spaceGrotesk(
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
@@ -2722,7 +2600,7 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        courseCode,
+                        tr(courseCode),
                         style: GoogleFonts.inter(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -2765,7 +2643,7 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
         child: Text(
-          label,
+          tr(label),
           style: GoogleFonts.inter(
             fontSize: 9,
             fontWeight: FontWeight.bold,
@@ -2791,10 +2669,10 @@ class _LiveDetailChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+        color: dark ? const Color(0xFF222222) : const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: dark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+          color: dark ? const Color(0xFF333333) : const Color(0xFFE2E8F0),
         ),
       ),
       child: Row(
@@ -2803,7 +2681,7 @@ class _LiveDetailChip extends StatelessWidget {
           Icon(icon, size: 13, color: const Color(0xFF2563EB)),
           const SizedBox(width: 5),
           Text(
-            label,
+            tr(label),
             style: GoogleFonts.inter(
               fontSize: 9,
               fontWeight: FontWeight.w700,
@@ -2874,7 +2752,7 @@ class _CurrentTimeState extends State<_CurrentTime> {
           ),
           const SizedBox(width: 7),
           Text(
-            'Time is',
+            tr('Now'),
             style: GoogleFonts.inter(
               fontSize: 11,
               fontWeight: FontWeight.w600,
@@ -2883,7 +2761,7 @@ class _CurrentTimeState extends State<_CurrentTime> {
           ),
           const SizedBox(width: 7),
           Text(
-            _format(ApiConfig.now),
+            tr(_format(ApiConfig.now)),
             style: GoogleFonts.spaceGrotesk(
               fontSize: 17,
               fontWeight: FontWeight.w800,
@@ -2940,7 +2818,7 @@ class _LiveCountdownState extends State<_LiveCountdown> {
     final minutes = (seconds % 3600) ~/ 60;
     final remainingSeconds = seconds % 60;
     return hours > 0
-        ? '${hours}h ${minutes}m'
+        ? tr('{h}h {m}m', {'h': hours, 'm': minutes})
         : '${minutes}m ${remainingSeconds.toString().padLeft(2, '0')}s';
   }
 
@@ -2957,9 +2835,9 @@ class _LiveCountdownState extends State<_LiveCountdown> {
     final upcoming = start != null && now.isBefore(start);
     final color = active ? const Color(0xFF2563EB) : const Color(0xFF64748B);
     final label = upcoming
-        ? 'Starts in ${_duration(start.difference(now))}'
+        ? tr('Starts in {time}', {'time': _duration(start.difference(now))})
         : active
-        ? 'Ends in ${_duration(end.difference(now))}'
+        ? tr('Ends in {time}', {'time': _duration(end.difference(now))})
         : 'Class ended';
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
@@ -2979,7 +2857,7 @@ class _LiveCountdownState extends State<_LiveCountdown> {
           ),
           const SizedBox(width: 7),
           Text(
-            label,
+            tr(label),
             style: GoogleFonts.spaceGrotesk(
               fontSize: 14,
               fontWeight: FontWeight.w800,

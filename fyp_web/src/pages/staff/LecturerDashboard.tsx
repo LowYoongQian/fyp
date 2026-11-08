@@ -4,6 +4,10 @@ import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { useLiveRefresh } from '../../hooks/useLiveRefresh';
 import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
+import { useOpenRecord } from '../../hooks/useOpenRecord';
+import { AnnouncementDetailsDialog } from '../../components/AnnouncementDetailsDialog';
+import { CardOpenButton } from '../../components/CardOpenButton';
+import { relativeTime } from '../../utils/announcementMeta';
 import { isLiveConnected, subscribeLive } from '../../services/liveUpdates';
 import { swalSuccess } from '../../utils/swal';
 import { ShimmerTableRows } from '../../components/Shimmer';
@@ -30,6 +34,8 @@ import {
   Calendar,
   Sparkles,
   Bell,
+  ChevronRight,
+  Flag,
   Mail,
   Check,
   Clock,
@@ -417,12 +423,16 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
 
   const displayRate = monitoredSessionId ? rate : (dashboardSummary?.overall_attendance_rate ?? 0);
 
+  const noticeView = useOpenRecord(realAnnouncements);
   const announcements = realAnnouncements.map(a => ({
     id: a.id,
     title: a.title,
     body: a.content,
     date: new Date(a.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
-    type: a.publisher || 'ADMIN'
+    type: a.publisher || 'ADMIN',
+    ago: relativeTime(a.created_at),
+    important: a.priority === 'High',
+    source: a,
   }));
 
   const recentShortcuts = user
@@ -1312,17 +1322,23 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
 
             <div className="space-y-3">
               {announcements.map((notice) => (
-                <div key={notice.id} data-notice-record={String(notice.id)} className="min-w-0 overflow-hidden p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                <div key={notice.id} data-notice-record={String(notice.id)} className="group relative min-w-0 overflow-hidden p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 transition-all hover:-translate-y-px hover:border-blue-300 hover:bg-white hover:shadow-md">
+                  <CardOpenButton label={`Open notice: ${notice.title}`} onOpen={button => noticeView.show(notice.source, button)} />
                   <div className="flex items-center justify-between gap-3 min-w-0">
-                    <span className="text-[9px] font-extrabold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full uppercase tracking-wider truncate">
+                    <span className="text-[11px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full truncate">
                       {notice.type}
                     </span>
-                    <span className="text-[9px] font-bold text-slate-500 shrink-0">{notice.date}</span>
+                    <span className="text-xs font-semibold text-slate-500 shrink-0">{notice.date}</span>
                   </div>
-                  <h5 className="text-xs font-extrabold text-slate-900 leading-snug break-words">{notice.title}</h5>
-                  <p className="text-[10.5px] font-medium text-slate-600 leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                  {notice.important && <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700"><Flag className="h-3 w-3" />High priority</span>}
+                  <h5 className="text-sm font-extrabold text-slate-900 leading-snug break-words">{notice.title}</h5>
+                  <p className="line-clamp-3 text-xs font-medium text-slate-600 leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                     {notice.body}
                   </p>
+                  <div className="flex items-center justify-between gap-3 pt-1 text-xs">
+                    <span className="text-slate-500">{notice.ago ? `Posted ${notice.ago}` : ''}</span>
+                    <span className="inline-flex items-center gap-1 font-semibold text-brand-blue transition-transform group-hover:translate-x-0.5">View details<ChevronRight className="h-4 w-4" /></span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1331,6 +1347,9 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
         </div>
 
       </div>
+
+      <AnnouncementDetailsDialog notice={noticeView.record} gone={noticeView.gone} viewer="staff" onClose={noticeView.close}
+        loadAttachment={(notice, signal) => apiService.lecturerDownloadAnnouncementAttachment(notice.id, signal)} />
 
     </div>
   );

@@ -18,6 +18,18 @@ const ERRORS: Record<number, { name: string; title: string; text: string; retry?
   504: { name: 'Gateway Timeout', title: 'USAS did not answer in time', text: 'The system took too long to reply. Please try again.', retry: true },
 };
 
+const SECRET_PARAM = /token|key|secret|pass|auth|session|sig|code|otp|reset/i;
+
+/** The same address without anything secret: no user:password part, and the values of secret-looking query fields replaced. */
+function safeAddress(href: string) {
+  try {
+    const url = new URL(href);
+    url.username = ''; url.password = '';
+    for (const name of [...url.searchParams.keys()]) if (SECRET_PARAM.test(name)) url.searchParams.set(name, '•••');
+    return url.href.replace(/%E2%80%A2/g, '•');
+  } catch { return href; }
+}
+
 /** The address shown to the visitor: the page they asked for. A `from` link is shown only if it is a web address. */
 function requestedUrl() {
   const from = new URLSearchParams(window.location.search).get('from');
@@ -44,6 +56,48 @@ function Glyph({ code }: { code: number }) {
 }
 
 /**
+ * Page not found (ERROR-PAGES-10, revision 11): a monitor whose own screen says 404 and "Page not found", with a server rack standing
+ * BEHIND it. The browser asks, the rack's lights search, and the answer comes back empty. Pure CSS; with reduced motion it is still.
+ * The rack is drawn first and lower, so it can never cover the screen, the words or the buttons.
+ */
+function MonitorScene({ path }: { path: string }) {
+  return (
+    <div className="ep-scene" aria-hidden="true">
+      <div className="ep-rack">
+        <div className="ep-rack-top" />
+        {[0, 1, 2, 3, 4, 5].map(unit => (
+          <div key={unit} className="ep-rack-unit" style={{ ['--u' as string]: unit }}>
+            <span className="ep-led" /><span className="ep-led ep-led-2" />
+            <span className="ep-vent" /><span className="ep-vent" /><span className="ep-vent" />
+          </div>
+        ))}
+      </div>
+      <div className="ep-monitor">
+        <div className="ep-bezel">
+          <div className="ep-screen" data-monitor-screen>
+            <div className="ep-browser">
+              <span className="ep-dot-r" /><span className="ep-dot-y" /><span className="ep-dot-g" />
+              <span className="ep-address">{path.length > 34 ? `${path.slice(0, 33)}…` : path}</span>
+            </div>
+            <div className="ep-screen-body">
+              <span className="ep-screen-code">404</span>
+              <span className="ep-screen-title">Page not found</span>
+              <span className="ep-search"><span className="ep-search-bar" /></span>
+              <span className="ep-search-result">No page at this address</span>
+            </div>
+            <span className="ep-glare" />
+          </div>
+          <span className="ep-power" />
+        </div>
+        <div className="ep-neck" />
+        <div className="ep-base" />
+      </div>
+      <div className="ep-floor-glow" />
+    </div>
+  );
+}
+
+/**
  * Every error page (404, 500 and the others in ERRORS): glossy 3D tiles spell the code over the same night-blue stage as the information page,
  * the middle tile shows what happened, and a label reads "404: Not Found" with the address the visitor tried underneath. It never claims more
  * than the code says. With reduced motion everything is still.
@@ -51,7 +105,7 @@ function Glyph({ code }: { code: number }) {
 export function ErrorPage({ code: asked = 404 }: { code?: number }) {
   const code = ERRORS[asked] ? asked : 500;
   const info = ERRORS[code];
-  const url = requestedUrl();
+  const url = safeAddress(requestedUrl());
   const [copied, setCopied] = useState(false);
   const digits = String(code).split('');
   const copy = () => navigator.clipboard?.writeText(url).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1600); }, () => undefined);
@@ -62,14 +116,14 @@ export function ErrorPage({ code: asked = 404 }: { code?: number }) {
       <PublicHeader />
       <div className="ep-sky" aria-hidden="true"><div className="ep-stars" /><div className="ep-cone" /><div className="ep-floor"><div className="ep-grid" /></div></div>
       <main className="relative z-10 mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center px-4 pb-14 pt-24 text-center">
-        <div className="ep-tiles" aria-hidden="true">
+        {code === 404 ? <MonitorScene path={(() => { try { return new URL(url).pathname; } catch { return '/'; } })()} /> : <div className="ep-tiles" aria-hidden="true">
           {digits.map((digit, index) => (
             <div key={index} className={`ep-tile ${index === 1 ? 'ep-tile-middle' : ''}`} style={{ ['--i' as string]: index }}>
               <div className="ep-tile-face">{index === 1 && digit === '0' ? <Glyph code={code} /> : <span className="ep-digit">{digit}</span>}</div>
             </div>
           ))}
           <div className="ep-shadow" />
-        </div>
+        </div>}
         <p className="ep-label"><span className="ep-dot" aria-hidden="true" />{`${code}: ${info.name}`}</p>
         <h1 className="mt-4 font-display text-[clamp(1.9rem,6vw,3.1rem)] font-extrabold leading-tight tracking-tight text-white">{info.title}</h1>
         <p className="mt-3 max-w-xl text-base font-medium text-blue-100/85">{info.text}</p>

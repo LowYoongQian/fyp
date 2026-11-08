@@ -592,7 +592,10 @@ class StudentFeedback(Base):
     subject       = Column(String, nullable=False)
     category      = Column(String, nullable=False, default="General")  # 'Attendance Issue', 'App Bug', 'Network Error', 'General'
     message       = Column(Text, nullable=False)
+    # Severity is the administrator's call. `priority` keeps whatever the old form stored, but it only counts as a triage once
+    # `priority_set_at` is set by an admin; until then the report is unreviewed and the stored label is not shown as a severity.
     priority      = Column(String, nullable=False, default="Medium", server_default="Medium")
+    priority_set_at = Column(DateTime, nullable=True)
     attachment_path = Column(String, nullable=True)
     attachment_name = Column(String, nullable=True)
     attachment_type = Column(String, nullable=True)

@@ -1,30 +1,27 @@
 import React from 'react';
-import { motion } from 'motion/react';
 
 interface TextShimmerProps {
   children: string;
   className?: string;
   duration?: number;
+  spread?: number;
 }
 
-export const TextShimmer: React.FC<TextShimmerProps> = ({
-  children,
-  className = '',
-  duration = 1.6,
-}) => (
-  <motion.span
-    role="status"
-    aria-label={children}
-    className={`inline-block bg-clip-text text-transparent ${className}`}
-    style={{
-      backgroundImage:
-        'linear-gradient(90deg, var(--theme-text-primary) 0%, var(--theme-text-primary) 35%, #2563eb 50%, var(--theme-text-primary) 65%, var(--theme-text-primary) 100%)',
-      backgroundSize: '240% 100%',
-      WebkitBackgroundClip: 'text',
-    }}
-    animate={{ backgroundPosition: ['120% 0%', '-120% 0%'] }}
-    transition={{ duration, ease: 'linear', repeat: Infinity }}
-  >
-    {children}
-  </motion.span>
-);
+/**
+ * Text with a soft light passing across it (adapted from prompt-kit's TextShimmer, MIT: a muted-to-strong-to-muted gradient clipped to the text).
+ * Decorative only: the caller announces what it means. Reduced motion shows the text still.
+ */
+export const TextShimmer: React.FC<TextShimmerProps> = ({ children, className = '', duration = 2.4, spread = 22 }) => {
+  const edge = Math.min(Math.max(spread, 5), 45);
+  return (
+    <span
+      className={`text-shimmer ${className}`}
+      style={{
+        backgroundImage: `linear-gradient(to right, var(--theme-text-secondary) ${50 - edge}%, var(--theme-text-primary) 50%, var(--theme-text-secondary) ${50 + edge}%)`,
+        animationDuration: `${duration}s`,
+      }}
+    >
+      {children}
+    </span>
+  );
+};

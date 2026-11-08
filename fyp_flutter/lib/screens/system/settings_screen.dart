@@ -1,11 +1,12 @@
 // ignore_for_file: use_build_context_synchronously
+import '../../i18n/tr.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../widgets/theme_mode_preview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../main.dart';
 import '../../services/user_service.dart';
 import '../../services/mobile_push.dart';
-import 'account_security_card.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../../i18n/app_localizations.dart';
@@ -90,7 +91,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
       }
 
-      // 2. Background sync with backend profile if available
+      // 2. Background sync with backend profile if available. Wait for saves still on their way first, or a quick
+      // switch-close-reopen reads the old value back from the server and the buttons stop matching the app.
+      await _remoteQueue;
       final profile = widget.authToken.isEmpty ? null : await UserService.fetchUserProfile(authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl);
       if (profile != null && mounted) {
         setState(() {
@@ -111,6 +114,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await prefs.setBool('email_notifications', _emailNotifications);
         await prefs.setBool('push_notifications', _pushNotifications);
         await prefs.setBool('in_app_notifications', _inAppNotifications);
+        if (!mounted) return;
+        // The selected button and the app's theme always agree (the server copy may come from another device).
+        if (_themeModeStr != localTheme) await MainApp.of(context).updateThemePreference(_themeModeStr);
+        if (!mounted) return;
+        if (_fontSizeStr != localFontSize) await MainApp.of(context).updateFontSize(_fontSizeStr);
+        if (!mounted) return;
         await MainApp.of(context).updateLanguage(_languageStr);
       }
     } catch (e) {
@@ -119,15 +128,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Server saves run one after another, so a quick light-dark-light reaches the server in the order it was tapped.
+  /// Static: the queue outlives this page, so reopening Settings waits for saves made before it closed.
+  static Future<void> _remoteQueue = Future.value();
+
   Future<void> _saveThemeMode(String mode) async {
     setState(() => _themeModeStr = mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme_mode', mode);
 
-    final theme = mode == 'dark'
-        ? ThemeMode.dark
-        : (mode == 'system' ? ThemeMode.system : ThemeMode.light);
-    await MainApp.of(context).updateThemeMode(theme);
+    await MainApp.of(context).updateThemePreference(mode);
     
     // Async background sync so theme animation remains 60fps buttery smooth
     _saveRemote({'theme_preference': mode});
@@ -135,13 +145,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveFontSize(String size) async {
     setState(() => _fontSizeStr = size);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('font_size', size);
+    await MainApp.of(context).updateFontSize(size);
     _saveRemote({'font_size_preference': size});
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Font size updated to ${size.toUpperCase()}'),
+          content: Text(tr('Font size updated to {v}', {'v': size.toUpperCase()})),
           duration: const Duration(seconds: 1),
           backgroundColor: const Color(0xFF2563EB),
         ),
@@ -164,7 +173,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('App Language set to ${langItem['name']} (${langItem['flag']})'),
+          content: Text(tr('App Language set to {v} ({v2})', {'v': langItem['name'], 'v2': langItem['flag']})),
           duration: const Duration(seconds: 2),
           backgroundColor: const Color(0xFF059669),
         ),
@@ -199,13 +208,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  Future<void> _saveRemote(Map<String, dynamic> settings) async {
+  Future<void> _saveRemote(Map<String, dynamic> settings) {
+    final run = _remoteQueue.then((_) => _sendRemote(settings));
+    _remoteQueue = run.catchError((Object _) {});
+    return run;
+  }
+
+  Future<void> _sendRemote(Map<String, dynamic> settings) async {
     if (widget.authToken.isEmpty) return; // Signed-out appearance preferences remain local.
     final saved = await UserService.updateUserSettings(settings, authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl);
     if (saved && (settings.containsKey('push_notifications') || settings.containsKey('notifications_enabled'))) {
       await MobilePush.bind(widget.authToken, widget.apiBaseUrl);
     }
-    if (!saved && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Changed locally; server save failed. Please retry.')));
+    if (!saved && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Changed locally; server save failed. Please retry.'))));
   }
 
   void _showLanguageDropdownModal() {
@@ -229,7 +244,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             return Container(
               height: MediaQuery.of(context).size.height * 0.70,
               decoration: BoxDecoration(
-                color: isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+                color: isDarkMode ? const Color(0xFF222222) : Colors.white,
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
                 boxShadow: [
                   BoxShadow(
@@ -247,7 +262,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: isDarkMode ? const Color(0xFF475569) : const Color(0xFFCBD5E1),
+                      color: isDarkMode ? const Color(0xFF404040) : const Color(0xFFCBD5E1),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -263,7 +278,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             const Text("🌐", style: TextStyle(fontSize: 20)),
                             const SizedBox(width: 8),
                             Text(
-                              "Select App Language",
+                              tr('Select App Language'),
                               style: GoogleFonts.spaceGrotesk(
                                 fontSize: 17,
                                 fontWeight: FontWeight.bold,
@@ -274,7 +289,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         IconButton(
                           onPressed: () => Navigator.pop(ctx),
-                          icon: Icon(Icons.close_rounded, color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                          icon: Icon(Icons.close_rounded, color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B)),
                         ),
                       ],
                     ),
@@ -287,19 +302,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onChanged: (val) => setModalState(() => searchQuery = val),
                       style: GoogleFonts.inter(fontSize: 13, color: isDarkMode ? Colors.white : const Color(0xFF0F172A)),
                       decoration: InputDecoration(
-                        hintText: "Search language or country...",
+                        hintText: tr('Search language or country...'),
                         hintStyle: GoogleFonts.inter(fontSize: 12, color: isDarkMode ? const Color(0xFF64748B) : const Color(0xFF94A3B8)),
                         prefixIcon: const Icon(Icons.search_rounded, size: 18, color: Color(0xFF2563EB)),
                         filled: true,
-                        fillColor: isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                        fillColor: isDarkMode ? const Color(0xFF181818) : const Color(0xFFF1F5F9),
                         contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                          borderSide: BorderSide(color: isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0)),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                          borderSide: BorderSide(color: isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0)),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -316,7 +331,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: ListView.separated(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       itemCount: filtered.length,
-                      separatorBuilder: (c, i) => Divider(height: 1, color: isDarkMode ? const Color(0xFF334155).withValues(alpha: 0.5) : const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
+                      separatorBuilder: (c, i) => Divider(height: 1, color: isDarkMode ? const Color(0xFF333333).withValues(alpha: 0.5) : const Color(0xFFE2E8F0).withValues(alpha: 0.5)),
                       itemBuilder: (c, idx) {
                         final item = filtered[idx];
                         final isSelected = item['code'] == _languageStr;
@@ -337,14 +352,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             child: Row(
                               children: [
-                                Text(item['flag']!, style: const TextStyle(fontSize: 22)),
+                                Text(tr(item['flag']!), style: const TextStyle(fontSize: 22)),
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        item['name']!,
+                                        tr(item['name']!),
                                         style: GoogleFonts.spaceGrotesk(
                                           fontSize: 13.5,
                                           fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
@@ -354,10 +369,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         ),
                                       ),
                                       Text(
-                                        item['native']!,
+                                        tr(item['native']!),
                                         style: GoogleFonts.inter(
                                           fontSize: 11,
-                                          color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                          color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
                                         ).copyWith(fontFamilyFallback: kScriptFontFallbacks),
                                       ),
                                     ],
@@ -392,7 +407,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final borderColor = isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final borderColor = isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0);
 
     final selectedLangItem = kSupportedLanguages.firstWhere(
       (l) => l['code'] == _languageStr,
@@ -419,10 +434,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // -------------------------------------------------------------
-                  if (widget.authToken.isNotEmpty) ...[
-                    AccountSecurityCard(authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl),
-                    const SizedBox(height: 24),
-                  ],
                   // 1. APPEARANCE SECTION
                   // -------------------------------------------------------------
                   _buildSectionHeader(
@@ -435,20 +446,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       children: [
                         _buildSegmentedOption(
-                          label: 'Theme Mode',
-                          subtitle: 'Choose your visual app interface theme',
+                          label: tr('Theme Mode'),
+                          subtitle: tr('Choose your visual app interface theme'),
                           currentValue: _themeModeStr,
                           options: const [
                             {'label': 'Light', 'value': 'light'},
                             {'label': 'Dark', 'value': 'dark'},
+                            {'label': 'Day/Night', 'value': 'cycle'},
                             {'label': 'System', 'value': 'system'},
                           ],
+                          icons: const {
+                            'light': Icons.light_mode_rounded,
+                            'dark': Icons.dark_mode_rounded,
+                            'cycle': Icons.brightness_6_rounded,
+                            'system': Icons.smartphone_rounded,
+                          },
                           onSelected: _saveThemeMode,
+                          // A preview of the chosen mode under the buttons; it cross-fades when the choice changes.
+                          footer: Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 260),
+                              child: ThemeModePreview(key: ValueKey(_themeModeStr), mode: _themeModeStr),
+                            ),
+                          ),
                         ),
                         Divider(height: 1, color: borderColor),
                         _buildSegmentedOption(
-                          label: 'Font Size',
-                          subtitle: 'Adjust text size scaling across dashboard cards',
+                          label: tr('Font Size'),
+                          subtitle: tr('Adjust text size scaling across dashboard cards'),
                           currentValue: _fontSizeStr,
                           options: const [
                             {'label': 'Small', 'value': 'small'},
@@ -476,8 +502,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       children: [
                         _buildSwitchTile(
-                          title: 'Master Notification Switch',
-                          subtitle: 'Enable or disable all app notifications globally',
+                          title: tr('Master Notification Switch'),
+                          subtitle: tr('Enable or disable all app notifications globally'),
                           value: _notificationsEnabled,
                           icon: Icons.power_settings_new_rounded,
                           onChanged: (val) => _saveNotificationSettings(master: val),
@@ -485,24 +511,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         if (_notificationsEnabled) ...[
                           Divider(height: 1, color: borderColor),
                           _buildSwitchTile(
-                            title: 'In-App Toasts & Alerts',
-                            subtitle: 'Show attendance & session popups while inside app',
+                            title: tr('In-App Toasts & Alerts'),
+                            subtitle: tr('Show attendance & session popups while inside app'),
                             value: _inAppNotifications,
                             icon: Icons.notifications_active_outlined,
                             onChanged: (val) => _saveNotificationSettings(inApp: val),
                           ),
                           Divider(height: 1, color: borderColor),
                           _buildSwitchTile(
-                            title: 'Push Notifications',
-                            subtitle: 'Receive class reminders on your phone lock screen',
+                            title: tr('Push Notifications'),
+                            subtitle: tr('Receive class reminders on your phone lock screen'),
                             value: _pushNotifications,
                             icon: Icons.mobile_friendly_rounded,
                             onChanged: (val) => _saveNotificationSettings(push: val),
                           ),
                           Divider(height: 1, color: borderColor),
                           _buildSwitchTile(
-                            title: 'Email Notifications',
-                            subtitle: 'Receive weekly attendance summaries & notices',
+                            title: tr('Email Notifications'),
+                            subtitle: tr('Receive weekly attendance summaries & notices'),
                             value: _emailNotifications,
                             icon: Icons.mail_outline_rounded,
                             onChanged: (val) => _saveNotificationSettings(email: val),
@@ -530,7 +556,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'App Language',
+                            tr('App Language'),
                             style: GoogleFonts.spaceGrotesk(
                               fontSize: 13.5,
                               fontWeight: FontWeight.bold,
@@ -539,10 +565,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Select default system localization language',
+                            tr('Select default system localization language'),
                             style: GoogleFonts.inter(
                               fontSize: 10.5,
-                              color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                              color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -552,20 +578,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                               decoration: BoxDecoration(
-                                color: isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                                color: isDarkMode ? const Color(0xFF181818) : const Color(0xFFF1F5F9),
                                 borderRadius: BorderRadius.circular(14),
                                 border: Border.all(color: borderColor),
                               ),
                               child: Row(
                                 children: [
-                                  Text(selectedLangItem['flag']!, style: const TextStyle(fontSize: 20)),
+                                  Text(tr(selectedLangItem['flag']!), style: const TextStyle(fontSize: 20)),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          selectedLangItem['name']!,
+                                          tr(selectedLangItem['name']!),
                                           style: GoogleFonts.spaceGrotesk(
                                             fontSize: 13,
                                             fontWeight: FontWeight.bold,
@@ -573,10 +599,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                           ),
                                         ),
                                         Text(
-                                          selectedLangItem['native']!,
+                                          tr(selectedLangItem['native']!),
                                           style: GoogleFonts.inter(
                                             fontSize: 10.5,
-                                            color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                            color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
                                           ).copyWith(fontFamilyFallback: kScriptFontFallbacks),
                                         ),
                                       ],
@@ -589,7 +615,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Text(
-                                      selectedLangItem['code']!.toUpperCase(),
+                                      tr(selectedLangItem['code']!.toUpperCase()),
                                       style: GoogleFonts.inter(
                                         fontSize: 10,
                                         fontWeight: FontWeight.bold,
@@ -600,7 +626,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   const SizedBox(width: 8),
                                   Icon(
                                     Icons.keyboard_arrow_down_rounded,
-                                    color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                                    color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
                                   ),
                                 ],
                               ),
@@ -633,7 +659,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(width: 10),
           Text(
-            title,
+            tr(title),
             style: GoogleFonts.spaceGrotesk(
               fontSize: 15,
               fontWeight: FontWeight.bold,
@@ -651,6 +677,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required List<Map<String, String>> options,
     required String currentValue,
     required Function(String) onSelected,
+    Map<String, IconData> icons = const {},
+    Widget? footer,
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     return Container(
@@ -659,7 +687,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            label,
+            tr(label),
             style: GoogleFonts.spaceGrotesk(
               fontSize: 13.5,
               fontWeight: FontWeight.bold,
@@ -668,19 +696,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            subtitle,
+            tr(subtitle),
             style: GoogleFonts.inter(
               fontSize: 10.5,
-              color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+              color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
             ),
           ),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+              color: isDarkMode ? const Color(0xFF181818) : const Color(0xFFF1F5F9),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: isDarkMode ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+              border: Border.all(color: isDarkMode ? const Color(0xFF333333) : const Color(0xFFE2E8F0)),
             ),
             child: Row(
               children: options.map((opt) {
@@ -706,17 +734,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ]
                             : [],
                       ),
-                      child: Center(
-                        child: Text(
-                          opt['label']!,
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                            color: isSelected
-                                ? (isDarkMode ? Colors.white : const Color(0xFF2563EB))
-                                : (isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (icons[opt['value']] != null) ...[
+                            Icon(
+                              icons[opt['value']],
+                              size: 17,
+                              color: isSelected
+                                  ? (isDarkMode ? Colors.white : const Color(0xFF2563EB))
+                                  : (isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B)),
+                            ),
+                            const SizedBox(height: 3),
+                          ],
+                          Text(
+                            tr(opt['label']!),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                              color: isSelected
+                                  ? (isDarkMode ? Colors.white : const Color(0xFF2563EB))
+                                  : (isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B)),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ),
@@ -724,6 +767,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }).toList(),
             ),
           ),
+          ?footer,
         ],
       ),
     );
@@ -745,10 +789,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: isDarkMode ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                color: isDarkMode ? const Color(0xFF181818) : const Color(0xFFF1F5F9),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(icon, size: 16, color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+              child: Icon(icon, size: 16, color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B)),
             ),
             const SizedBox(width: 12),
           ],
@@ -757,7 +801,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  tr(title),
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
@@ -766,10 +810,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  subtitle,
+                  tr(subtitle),
                   style: GoogleFonts.inter(
                     fontSize: 10.5,
-                    color: isDarkMode ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    color: isDarkMode ? const Color(0xFFA0A0A0) : const Color(0xFF64748B),
                   ),
                 ),
               ],
@@ -795,7 +839,7 @@ class ShimmerSettingsSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final baseColor = isDarkMode ? const Color(0xFF1E293B) : Colors.grey.shade200;
+    final baseColor = isDarkMode ? const Color(0xFF222222) : Colors.grey.shade200;
 
     Widget buildSkeletonCard(double height) {
       return Container(

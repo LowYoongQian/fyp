@@ -1,3 +1,4 @@
+import '../../i18n/tr.dart';
 import 'package:flutter/material.dart';
 
 /// Account setup cannot be skipped, but camera errors never prevent sign-out.
@@ -40,14 +41,14 @@ class FaceRegistrationRequired extends StatelessWidget {
                     ),
                     const SizedBox(height: 20),
                     Text(
-                      'Register your face',
+                      tr('Register your face'),
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Welcome, $studentName. Complete a live camera scan to finish setting up your student account.',
+                      tr('Welcome, {studentName}. Complete a live camera scan to finish setting up your student account.', {'studentName': studentName}),
                       textAlign: TextAlign.center,
                       style: const TextStyle(height: 1.5),
                     ),
@@ -59,7 +60,7 @@ class FaceRegistrationRequired extends StatelessWidget {
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Text(
-                        'Use good lighting and keep only your face in view. Once registered, you cannot change your face in the app. Visit the administration office if you need a reset.',
+                        tr('Use good lighting and keep only your face in view. Once registered, you cannot change your face in the app. Visit the administration office if you need a reset.'),
                         style: TextStyle(
                           height: 1.5,
                           color: colors.onPrimaryContainer,
@@ -71,20 +72,20 @@ class FaceRegistrationRequired extends StatelessWidget {
                       onPressed: busy ? null : onRegister,
                       icon: const Icon(Icons.camera_alt_outlined),
                       label: Text(
-                        busy
+                        tr(busy
                             ? 'Preparing or verifying your scan…'
-                            : 'Start live registration',
+                            : 'Start live registration'),
                       ),
                     ),
                     const SizedBox(height: 8),
                     TextButton.icon(
                       onPressed: busy ? null : () => onRefresh(),
                       icon: const Icon(Icons.refresh),
-                      label: const Text('Refresh registration status'),
+                      label: Text(tr('Refresh registration status')),
                     ),
                     TextButton(
                       onPressed: onLogout,
-                      child: const Text('Sign out'),
+                      child: Text(tr('Sign out')),
                     ),
                   ],
                 ),

@@ -15,9 +15,9 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
-from sqlalchemy import String, cast, case, literal, select
+from sqlalchemy import String, cast, case, func, literal, select
 
 from db.database import get_db
 from db.models import (
@@ -52,7 +52,8 @@ class StudentFeedbackResponse(BaseModel):
     subject: str
     category: str
     message: str
-    priority: str = "Medium"
+    priority: Optional[str] = None   # the administrator's severity; None while the report has not been reviewed
+    priority_set_at: Optional[datetime] = None
     attachment_name: Optional[str] = None
     attachment_type: Optional[str] = None
     status: str
@@ -63,8 +64,22 @@ class StudentFeedbackResponse(BaseModel):
     class Config:
         from_attributes = True
 
+    @model_validator(mode="after")
+    def _hide_unreviewed_severity(self):
+        # A stored default (or an old student-chosen label) is not a review: never present it as the admin's severity.
+        if self.priority_set_at is None:
+            self.priority = None
+        return self
+
+
+# What a student never sees about their own report: the admin's private notes and the admin's triage.
+STUDENT_HIDDEN = {"admin_notes", "priority", "priority_set_at"}
+
+
 class FeedbackUpdate(BaseModel):
     status: Literal["Pending", "In Progress", "Resolved"]
+    priority: Optional[Literal["Low", "Medium", "High", "Urgent"]] = None   # the admin's severity, saved with the status change
+    expected_status: Optional[Literal["Pending", "In Progress", "Resolved"]] = None   # the status the admin was looking at
     admin_notes: Optional[str] = Field(None, max_length=5000)
     student_response: Optional[str] = Field(None, max_length=5000)
 
@@ -116,18 +131,17 @@ def _feedback_attachment(item):
     })
 
 
-@student_router.get("", response_model=List[StudentFeedbackResponse], response_model_exclude={"__all__": {"admin_notes"}})
+@student_router.get("", response_model=List[StudentFeedbackResponse], response_model_exclude={"__all__": STUDENT_HIDDEN})
 def student_feedback_list(db: Session = Depends(get_db), user: User = Depends(require_student)):
     student = _feedback_student(db, user)
     return db.query(StudentFeedback).filter(StudentFeedback.student_id == student.id).order_by(StudentFeedback.created_at.desc()).all()
 
 
-@student_router.post("", response_model=StudentFeedbackResponse, response_model_exclude={"admin_notes"}, status_code=201)
+@student_router.post("", response_model=StudentFeedbackResponse, response_model_exclude=STUDENT_HIDDEN, status_code=201)
 async def student_feedback_create(
     subject: str = Form(..., min_length=1, max_length=200),
     message: str = Form(..., min_length=1, max_length=10000),
     category: Literal["Attendance Discrepancy", "Face Verification Issue", "Lecturer Feedback", "System Bug", "General Inquiry"] = Form(...),
-    priority: Literal["Low", "Medium", "High", "Urgent"] = Form("Medium"),
     attachment: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db), user: User = Depends(require_student),
 ):
@@ -136,7 +150,7 @@ async def student_feedback_create(
         raise HTTPException(422, "Subject and message cannot be blank")
     item = StudentFeedback(id=str(uuid.uuid4()), student_id=student.id, student_name=student.name,
                            student_code=student.student_code, subject=subject.strip(), message=message.strip(),
-                           category=category, priority=priority, status="Pending")
+                           category=category, status="Pending")   # severity is the admin's: a submitted `priority` field is ignored
     if attachment:
         data = await attachment.read(feedback_files.MAX_SIZE + 1)
         mime = attachment.content_type
@@ -182,7 +196,7 @@ def feedback_page(db, filters, student_id=None, category="All"):
     query = filters.apply(query, StudentFeedback.created_at, [StudentFeedback.id, StudentFeedback.student_name,
         StudentFeedback.student_code, StudentFeedback.subject, StudentFeedback.message, StudentFeedback.category])
     return filters.fetch(query, [StudentFeedback.created_at.desc(), StudentFeedback.id.desc()],
-        lambda row: StudentFeedbackResponse.model_validate(row).model_dump(exclude={"admin_notes"} if student_id else set()), stats,
+        lambda row: StudentFeedbackResponse.model_validate(row).model_dump(exclude=STUDENT_HIDDEN if student_id else set()), stats,
         id_column=StudentFeedback.id)
 
 
@@ -267,21 +281,40 @@ def update_feedback_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
+    """Triage: the admin's severity and the status move are saved together, once. A repeat of what is already saved writes, notifies and
+    logs nothing; a move from a status the admin was not really looking at is refused instead of silently undoing someone else's change."""
     item = db.query(StudentFeedback).filter_by(id=str(feedback_id)).populate_existing().with_for_update().first()
     if not item:
         raise HTTPException(404, "Feedback report not found")
-    previous_status, previous_response = item.status, item.student_response
-    item.status = body.status
-    if body.admin_notes is not None:
+    moves = body.status != item.status
+    if moves and body.expected_status and body.expected_status != item.status:
+        raise HTTPException(409, "This report was updated by someone else. Reload it and check its latest status before changing it.")
+    if moves and body.status == "Pending":
+        raise HTTPException(422, "A reviewed report cannot go back to Pending.")
+    if moves and item.status == "Pending" and item.priority_set_at is None and body.priority is None:
+        raise HTTPException(422, "Choose a severity before moving this report forward.")
+    severity_changes = body.priority is not None and (item.priority_set_at is None or item.priority != body.priority)
+    notes_change = body.admin_notes is not None and body.admin_notes != (item.admin_notes or "")
+    response_change = body.student_response is not None and body.student_response != (item.student_response or "")
+    if not (moves or severity_changes or notes_change or response_change):
+        return item
+    previous_status = item.status
+    if moves:
+        item.status = body.status
+    if severity_changes:
+        item.priority, item.priority_set_at = body.priority, func.now()
+    if notes_change:
         item.admin_notes = body.admin_notes
-    if body.student_response is not None:
+    if response_change:
         item.student_response = body.student_response
-    if item.status != previous_status or item.student_response != previous_response:
+    if moves or response_change:
         student = db.get(Student, item.student_id)
         if student and student.user_id:
             db.add(UserNotification(user_id=student.user_id, kind="feedback_response",
                 title="Your feedback has an update", body="An administrator updated your feedback report. Open Contact Admin to view it.",
                 dedupe_key=f"feedback:{item.id}:update:{uuid.uuid4()}", payload=json.dumps({"feedback_id": item.id})))
+    log_admin_action(db, current_user, "TRIAGE_FEEDBACK",
+                     f"Feedback {item.id}: {previous_status} -> {item.status}" + (f", severity {item.priority}" if severity_changes else ""), commit=False)
     db.commit()
     db.refresh(item)
     return item

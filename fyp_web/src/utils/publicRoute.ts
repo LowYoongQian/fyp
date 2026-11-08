@@ -9,9 +9,12 @@ export function surfaceFor(pathname: string, hash: string, appRoutes: Record<str
   if (!route) return hash.replace(/^#\/?/, '') ? 'app' : 'public';
   if (route === 'portal') return 'portal';
   if (/^error\/\d{3}$/.test(route)) return 'error';   // /error/500 and the like: an error page the hosting or the app can send people to
-  if (route === 'login' || route in appRoutes) return 'app';
+  if (isSignInPath(pathname) || route in appRoutes) return 'app';
   return 'notfound';
 }
+
+/** The signed-out pages: sign-in, its second step (/login/verify) and password recovery (/login/reset). */
+export const isSignInPath = (pathname: string) => /^\/login(\/(verify|reset))?\/?$/.test(pathname);
 
 /** Moves to another top-level page in this tab (no reload) and tells the shell to switch surface. */
 export function goTo(path: string, replace = false) {

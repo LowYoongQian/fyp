@@ -160,3 +160,27 @@ def create_semester(body: SemesterWrite, db: Session = Depends(get_db), current_
 @router.put("/admin/semesters/{semester_id}")
 def update_semester(semester_id: UUID, body: SemesterWrite, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return save_semester(db, current_user, body, str(semester_id))
+
+
+@router.delete("/admin/semesters/{semester_id}")
+def delete_semester(semester_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """Removes a semester, ongoing ones included. Its courses are kept with their students, classes and attendance; they only
+    leave the semester (so its dates and credit limit stop applying), which then lets the admin delete them or the programme."""
+    row = db.get(AcademicSemester, str(semester_id))
+    if row is None:
+        raise HTTPException(404, "Semester not found")
+    lock_programme(db, row.programme_id)
+    courses = db.query(Course).filter(Course.semester_id == row.id).all()
+    if courses and db.query(ClassSession.id).filter(ClassSession.course_id.in_([c.id for c in courses]),
+                                                    ClassSession.is_open.is_(True)).first():
+        raise HTTPException(409, "A class in this semester is open for check-in; close it before deleting the semester")
+    before = semester_dict(row)
+    for course in courses:
+        course.semester_id = None
+    db.flush()
+    db.delete(row)
+    log_audit_event(db, user_id=current_user.id, user_name=current_user.profile_name or current_user.email, user_role="admin",
+        category="admin", action="DELETE_SEMESTER",
+        details=f"semester={before}; detached courses={sorted(c.course_code for c in courses)}", commit=False)
+    db.commit()
+    return {"message": f"{before['name']} was deleted", "detached_courses": len(courses)}
