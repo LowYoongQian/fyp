@@ -12,6 +12,7 @@ from db.database import get_db
 from db.models import AcademicSemester, ClassSession, Course, Enrolment, Lecturer, Programme, Student, User
 from domain import semester_rollover, timetable_access
 from domain.audit import log_audit_event
+from domain.class_lifecycle import class_is_live
 from domain.semesters import campus_date, lock_programme, semester_dict, validate_credit_loads
 from utils.db_helpers import my_course_ids, require_own_profile
 from utils.security import get_current_user, require_admin
@@ -134,7 +135,11 @@ def save_semester(db, user, body, semester_id=None):
     assigned = db.query(Course).filter(Course.semester_id == row.id).all() if row.id else []
     if any(c.id not in ids for c in assigned):
         raise HTTPException(409, "Previously assigned courses cannot be detached from their semester history")
+    # Only a class open right now can have students checking in; one left marked open after its end (never closed) must not block.
+    now = utcnow()
     for lesson in db.query(ClassSession).filter(ClassSession.course_id.in_(ids), ClassSession.is_open.is_(True)).all():
+        if not class_is_live(lesson, now):
+            continue
         start, end = lesson.scheduled_start or lesson.opened_at, lesson.scheduled_end or lesson.opened_at
         if not start or not end or not (body.start_date <= campus_date(start) <= campus_date(end) <= body.end_date):
             raise HTTPException(409, "Close the open class before changing semester dates to exclude its attendance window")
@@ -171,8 +176,9 @@ def delete_semester(semester_id: UUID, db: Session = Depends(get_db), current_us
         raise HTTPException(404, "Semester not found")
     lock_programme(db, row.programme_id)
     courses = db.query(Course).filter(Course.semester_id == row.id).all()
-    if courses and db.query(ClassSession.id).filter(ClassSession.course_id.in_([c.id for c in courses]),
-                                                    ClassSession.is_open.is_(True)).first():
+    now = utcnow()
+    if courses and any(class_is_live(lesson, now) for lesson in db.query(ClassSession).filter(
+            ClassSession.course_id.in_([c.id for c in courses]), ClassSession.is_open.is_(True)).all()):
         raise HTTPException(409, "A class in this semester is open for check-in; close it before deleting the semester")
     before = semester_dict(row)
     for course in courses:

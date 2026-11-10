@@ -75,21 +75,41 @@ const moonArc = (hour: number, compact: boolean) => arc(clamp((hour >= SUN_DOWN 
  * width (0 to 1) it is strongest. The sun, the glow of the horizon after it sets or before it rises, and the moon all feed one blend, so the
  * direction turns smoothly through dusk and dawn instead of flipping.
  */
-export type Light = { x: number; y: number; strength: number; intensity: number; at: number };
+export type Light = { x: number; y: number; strength: number; intensity: number; at: number; left: number; top: number };
+// `left` / `top`: where the light comes from, in % of the scene (the sun, the moon, or the glow where the sun has just set or is about to
+// rise, blended like the direction). Each object lights itself from its own position toward this point, so a cloud on the far side of the
+// sun is lit from the other side, and every tree casts its shadow its own way.
 
 const direction = (body: Arc) => { const side = clamp((body.left - 50) / 45, -1, 1), angle = body.elevation * 1.25; return [side * Math.cos(angle), -Math.sin(angle)]; };
 
 const lightAt = (hour: number, compact: boolean): Light => {
   const sun = sunArc(hour, compact), moon = moonArc(hour, compact);
   const sources = [
-    { w: along(SUN, hour) * (0.55 + 0.45 * sun.elevation), d: direction(sun), at: sun.left / 100 },
-    { w: along(TWILIGHT, hour), d: [hour < 12 ? -0.998 : 0.998, -0.06], at: hour < 12 ? 0.02 : 0.98 },   // the glow where the sun is, just beyond the horizon
-    { w: along(MOON, hour) * 0.5 * (0.7 + 0.3 * moon.elevation), d: direction(moon), at: moon.left / 100 },
+    { w: along(SUN, hour) * (0.55 + 0.45 * sun.elevation), d: direction(sun), at: sun.left / 100, pos: [sun.left, sun.top] },
+    // the glow where the sun is, just beyond the horizon
+    { w: along(TWILIGHT, hour), d: [hour < 12 ? -0.998 : 0.998, -0.06], at: hour < 12 ? 0.02 : 0.98, pos: [hour < 12 ? 2 : 98, 97] },
+    { w: along(MOON, hour) * 0.5 * (0.7 + 0.3 * moon.elevation), d: direction(moon), at: moon.left / 100, pos: [moon.left, moon.top] },
   ];
   const total = sources.reduce((sum, item) => sum + item.w, 0);
-  if (total < 1e-4) return { x: 0, y: -1, strength: 0, intensity: 0, at: 0.5 };
+  if (total < 1e-4) return { x: 0, y: -1, strength: 0, intensity: 0, at: 0.5, left: 50, top: -40 };
   const x = sources.reduce((sum, item) => sum + item.w * item.d[0], 0) / total, y = sources.reduce((sum, item) => sum + item.w * item.d[1], 0) / total;
-  return { x, y, strength: clamp(Math.hypot(x, y)), intensity: clamp(total), at: sources.reduce((sum, item) => sum + item.w * item.at, 0) / total };
+  // Where the light comes from: the sun's own disc while it is up; the glow beyond the horizon takes over only as the disc goes, so shadows
+  // always point away from the sun that is actually on screen.
+  const disc = along(SUN, hour), place = sources.map((item, i) => i === 1 ? item.w * (1 - disc) : item.w);
+  const placed = place.reduce((sum, w) => sum + w, 0) || 1;
+  const blend = (i: 0 | 1) => sources.reduce((sum, item, n) => sum + place[n] * item.pos[i], 0) / placed;
+  return { x, y, strength: clamp(Math.hypot(x, y)), intensity: clamp(total), at: sources.reduce((sum, item) => sum + item.w * item.at, 0) / total,
+    left: blend(0), top: blend(1) };
+};
+
+/**
+ * The direction from a point of the scene (in % of its width and height) toward the light, as a unit vector in screen terms
+ * (y negative when the light is above). The scene's size in pixels keeps the angle true on a wide or a tall screen.
+ */
+export const towardLight = (light: Light, x: number, y: number, width: number, height: number) => {
+  const dx = ((light.left - x) / 100) * width, dy = ((light.top - y) / 100) * height;
+  const length = Math.hypot(dx, dy) || 1;
+  return { lx: dx / length, ly: dy / length };
 };
 
 /** The sun's disc colours: pale and bright high up, soft peach at the horizon (never a hard red). */
@@ -147,8 +167,17 @@ export const lookAt = (hourInput: number, compact = false): Look => {
   };
 };
 
-/** The pull of a drop shadow cast on the ground away from the light: long and strong when the light is low and one-sided. */
-export const shadowOffset = (light: Light, reach = 1) => ({ x: -light.x * (3 + 12 * Math.abs(light.x)) * reach, y: (2 + 3 * (1 - Math.abs(light.x))) * reach });
+/**
+ * Where an upright thing's shadow falls, given its own direction to the light (from `towardLight`). The scene looks toward the sky the light is
+ * in, so a shadow is cast on the ground toward the viewer (down the screen) and to the side away from the light: short and nearly under it when
+ * the light stands high, long and slanting when it is low. A point `h` above the foot lands `h * slant` sideways and `h * length` down.
+ */
+export const castShadow = (lx: number, ly: number) => {
+  const up = clamp(-ly, 0.12, 1);                                  // how high the light stands over it (0 = on the horizon)
+  const length = clamp(0.12 + (0.42 * (1 - up)) / Math.max(up, 0.35), 0.12, 0.62);
+  const slant = clamp((-lx / up) * 0.55, -1.9, 1.9);              // away from the light
+  return { length, slant };
+};
 
 /** The darkness of a shadow, from how dense the air makes shade and how much light there is to cast one. */
 export const shadowAlpha = (look: Look) => clamp(0.12 + look.shade * 0.34 * (0.35 + 0.65 * look.light.intensity), 0, 0.6);

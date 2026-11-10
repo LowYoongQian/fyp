@@ -1,5 +1,5 @@
-import React from 'react';
-import { mix, shadowAlpha, shadowOffset, type Look } from './loginLighting';
+import React, { useEffect, useRef, useState } from 'react';
+import { castShadow, mix, shadowAlpha, towardLight, type Look } from './loginLighting';
 import { footAt, MID } from './loginRidge';
 
 // The land under the sign-in sky: two ridges, a few trees and a foreground hill, all lit by the one light in `look` (the side facing the sun or
@@ -19,6 +19,12 @@ const TREES: Tree[] = [
 ];
 
 const ease = (t: number) => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
+
+/** The top of a tree's crown, in its own drawing units (the shadow is as long as the tree is tall). */
+const crownTop = ({ circles, points }: Tree) => Math.min(
+  ...(circles ?? []).map(([, cy, r]) => cy - r),
+  ...(points ?? []).flatMap(([list]) => list.split(' ').map(pair => Number(pair.split(',')[1]))),
+);
 
 /** A gradient across a surface: brightest where the light is strongest, falling toward shade on the far side. */
 const Lit: React.FC<{ id: string; color: string; look: Look }> = ({ id, color, look }) => {
@@ -43,14 +49,23 @@ const Layer: React.FC<{ depth: number; children: React.ReactNode }> = ({ depth, 
 
 export const LoginLandscape: React.FC<{ look: Look }> = ({ look }) => {
   const { ground, light, shade } = look;
-  const cast = shadowOffset(light), alpha = shadowAlpha(look);
-  const treeShadow = { filter: `drop-shadow(${cast.x.toFixed(1)}px ${cast.y.toFixed(1)}px 2.5px rgba(2, 6, 23, ${alpha.toFixed(2)}))` };
-  // The brighter foliage sits on the side the light comes from.
+  const alpha = shadowAlpha(look) * (0.45 + 0.55 * light.intensity);
   const [dark, mid, bright] = ground.leaves;
-  const leaf: Record<Foliage, string> = { dark, mid, left: light.x < 0 ? bright : mid, right: light.x < 0 ? mid : bright };
   const rim = 0.55 * light.intensity * (0.4 + 0.6 * light.strength);
+  // The stage's size and the land's height, so each tree's angle to the light is the true one on any screen (read again on resize).
+  const land = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 1280, height: 800, land: 384 });
+  useEffect(() => {
+    const read = () => {
+      const node = land.current, stage = node?.closest('[data-login-stage]');
+      if (node && stage) setSize({ width: stage.clientWidth, height: stage.clientHeight, land: node.clientHeight });
+    };
+    read();
+    window.addEventListener('resize', read);
+    return () => window.removeEventListener('resize', read);
+  }, []);
   return (
-    <div className="absolute inset-x-0 bottom-0 h-56 sm:h-72 md:h-96">
+    <div ref={land} className="absolute inset-x-0 bottom-0 h-56 sm:h-72 md:h-96">
       <Layer depth={6}>
         <svg viewBox="0 0 1440 320" preserveAspectRatio="none" className="h-full w-full">
           <defs><Lit id="login-ridge-back" color={ground.far} look={look} /></defs>
@@ -62,16 +77,44 @@ export const LoginLandscape: React.FC<{ look: Look }> = ({ look }) => {
           <defs><Lit id="login-ridge-mid" color={ground.near} look={look} /></defs>
           <path d={MID} fill="url(#login-ridge-mid)" />
         </svg>
-        {TREES.map(({ at, box, trunk: [x, y, height], circles, points }) => (
-          // The foot sits a pixel into the ridge so no sliver of sky shows under the trunk.
-          <div key={at} data-tree className="absolute" style={{ left: `${at}%`, bottom: `${footAt(at)}%`, transform: 'translate(-50%, 1px)' }}>
-            <svg viewBox={box} className="block h-[clamp(3rem,5.2vw,6.5rem)] w-auto overflow-visible" style={treeShadow}>
-              <rect x={x} y={y} width="4" height={height} rx="1" fill={ground.trunk} />
-              {circles?.map(([cx, cy, r, tone]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={r} fill={leaf[tone]} />)}
-              {points?.map(([list, tone]) => <polygon key={list} points={list} fill={leaf[tone]} />)}
-            </svg>
-          </div>
-        ))}
+        {TREES.map(tree => {
+          const { at, box, trunk: [x, y, height], circles, points } = tree;
+          // This tree's own direction to the light: a tree left of the sun is lit from its right, one right of it from its left.
+          const footY = 100 - ((footAt(at) / 100) * size.land / size.height) * 100;
+          const { lx, ly } = towardLight(light, at, footY, size.width, size.height);
+          const lightFromRight = lx > 0;
+          const leaf: Record<Foliage, string> = { dark, mid, left: lightFromRight ? mid : bright, right: lightFromRight ? bright : mid };
+          const fx = x + 2, fy = y + height, tall = fy - crownTop(tree);
+          const { length, slant } = castShadow(lx, ly);
+          const lay = `matrix(1 0 ${(-slant).toFixed(3)} ${(-length).toFixed(3)} ${(slant * fy).toFixed(2)} ${((1 + length) * fy).toFixed(2)})`;
+          const id = `login-tree-${String(at).replace('.', '-')}`;
+          const silhouette = <>
+            <rect x={x} y={y} width="4" height={height} />
+            {circles?.map(([cx, cy, r]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={r} />)}
+            {points?.map(([list]) => <polygon key={list} points={list} />)}
+          </>;
+          return (
+            // The foot sits a pixel into the ridge so no sliver of sky shows under the trunk.
+            <div key={at} data-tree className="absolute" style={{ left: `${at}%`, bottom: `${footAt(at)}%`, transform: 'translate(-50%, 1px)' }}>
+              <svg viewBox={box} className="block h-[clamp(3rem,5.2vw,6.5rem)] w-auto overflow-visible">
+                <defs>
+                  {/* Darkest at the foot, fading toward the far end; slightly soft-edged. */}
+                  <linearGradient id={`${id}-shadow`} gradientUnits="userSpaceOnUse" x1={fx} y1={fy} x2={fx + slant * tall} y2={fy + length * tall}>
+                    <stop offset="0" stopColor={ground.shadow} stopOpacity={alpha.toFixed(3)} />
+                    <stop offset="1" stopColor={ground.shadow} stopOpacity={(alpha * 0.3).toFixed(3)} />
+                  </linearGradient>
+                  <filter id={`${id}-soft`} x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="0.7" /></filter>
+                </defs>
+                {alpha > 0.01 && <g data-tree-shadow transform={lay} fill={`url(#${id}-shadow)`} filter={`url(#${id}-soft)`}>{silhouette}</g>}
+                <rect x={x} y={y} width="4" height={height} rx="1" fill={ground.trunk} />
+                {/* The trunk's side away from the light is in shade. */}
+                <rect x={lightFromRight ? x : x + 2} y={y} width="2" height={height} rx="1" fill={ground.shadow} opacity={(0.35 * light.intensity * light.strength).toFixed(3)} />
+                {circles?.map(([cx, cy, r, tone]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={r} fill={leaf[tone]} />)}
+                {points?.map(([list, tone]) => <polygon key={list} points={list} fill={leaf[tone]} />)}
+              </svg>
+            </div>
+          );
+        })}
       </Layer>
       <Layer depth={14}>
         <svg viewBox="0 0 1440 320" preserveAspectRatio="none" className="absolute bottom-0 h-[62%] w-full animate-mountain-wave">

@@ -1,5 +1,66 @@
 # Changelog
 
+## Push recheck — 2026-11-10 21:01 MYT
+- Production web build and 19 backend semester tests passed. The deployed API now accepts school email alone for password reset and exposes the Academics programmes route.
+- The new course editor needs the backend course-list update before it goes live to preserve lecturer assignments. The prior clean-install and release-content findings remain open.
+
+## Staff Analytics page redesign — 2026-11-10 20:14
+- Stat cards with meters, an 80% target line on both charts, colour-coded weekday bars and class-group meters.
+- Clear empty states instead of bare axes, "0% verified" and red dashes when nothing has been completed yet.
+- Lighter and steadier: no hidden chart series, throttled resizing, motion off with reduced motion, proper dark mode.
+- Checks (self-reported): tsc clean; staff analytics browser tests 5/5. ChatGPT review pending.
+
+
+## Semester save fix; field hints behind an (i) — 2026-11-10 19:57
+- A class left marked open long after it ended no longer stops a semester from being saved or deleted; a class open right now still does.
+- Academics and Semesters forms: the explanation under each field is now a small (i) beside its label that shows the details on hover.
+- Pop-up messages keep their text clear of the close button.
+- Checks (self-reported): backend 546 passed / 22 skipped; Academics browser tests 33/33. ChatGPT review pending.
+
+
+## Signing in/out bar no longer stops at the end — 2026-11-10 19:37
+- The blue segment on the signing-in and signing-out screen now slides fully off the track before starting again, on web and mobile.
+- Checks (self-reported): measured at both ends in Chrome; flutter test 58/58 with a new end-to-end bar test. ChatGPT review pending.
+
+
+## Academics: edit a course and its programme — 2026-11-10 19:33
+- Each course has an Edit button: change its code, title and credits, and put it in any programme, move it, or take it out.
+- A course in a semester keeps its programme; the dialog says why. Saving keeps the course's lecturer.
+- Checks (self-reported): backend 544 passed / 22 skipped; Academics browser tests 15/15. ChatGPT review pending.
+
+
+## Sign-in scene: per-object light, tree shadows, real birds — 2026-11-10 18:34
+- Each cloud and tree is lit from where it is: a cloud passing the sun turns its bright side to it, and its soft shadow falls away.
+- Trees cast their own shadow on the ground away from the light: short at noon, long and slanting when the sun or moon is low.
+- The birds are real bird shapes with flapping and gliding wings instead of M strokes.
+- Checks (self-reported): tsc clean; lighting tests 11/11, scene browser tests 13/13. ChatGPT review pending.
+
+
+## Web login: password eye, demo auto-fill removed — 2026-11-10 18:12
+- The web password field has a show/hide eye at its right; the demo auto-fill button is gone. The mobile login already had the eye and no demo button.
+- Checks (self-reported): tsc clean; toggle checked in Chrome; loginFlow 35/37 (two status-count failures, most likely the updated test tool). ChatGPT review pending.
+
+
+## Web sign-in/out: time limit, Back to sign in, errors on the form — 2026-11-09 06:57
+- If signing in or out is still waiting after 10 seconds, the cover offers Back to sign in; sign-in and sign-out requests give up after 9 seconds.
+- Going back stops the sign-in for good: a late server answer starts no session and its token is revoked.
+- A failed sign-in stays on the same portal with the typed email and password and shows the reason in a red Sign-in failed box (no popup).
+- Checks (self-reported): tsc clean; loginFlow browser tests 37/37, accountPages 64/67 (3 older menu-timing failures, unrelated). ChatGPT review pending.
+
+
+## Student enrolments paging; sign-in cover time limit and inline errors — 2026-11-09 06:38
+- Admin web: the Student enrolments list shows 3 students per page.
+- Mobile: if signing in or out is still waiting after 10 seconds, the cover offers Back to sign in; a late answer is ignored.
+- Mobile: a failed sign-in returns to the same portal with the typed ID and password kept and the reason in a red card on the form.
+- Checks (self-reported): web tsc clean, academic browser tests 14/14; flutter analyze clean, flutter test 57/57. Not checked on a real phone. ChatGPT review pending.
+
+
+## Mobile sign-in/sign-out cover; Academics lists on Azure — 2026-11-09 06:32
+- Mobile: pressing Log in or Logout shows the web's cover (logo, "Signing in…" / "Signing out…" with a sliding bar, then a tick and a soft fade). Logout now waits for the server to confirm, and says so if it could not.
+- Azure: the Academics lists use the new /admin/records endpoints from the latest commit; they work on PostgreSQL locally and the app starts with them, so the deployed backend is most likely still the previous version. Check the live route and restart or redeploy the backend.
+- Checks (self-reported): flutter analyze clean, flutter test 54/54; cover rendered in light and dark. ChatGPT review pending.
+
+
 ## Release readiness checks — 2026-11-09 06:09 MYT
 - The production web build passed with existing dependencies. A clean npm install rejected five registry mirror entries. Backend tests passed 543 with 22 skipped, all 17 semester browser checks passed, and Flutter analysis and the Android release build passed.
 - The live site and API health responded with HTTP 200. Password reset requires the new backend before the new frontend can send school email alone. The feedback migration generated SQL locally. Azure deployment and execution of the migration remain unverified.

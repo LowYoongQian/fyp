@@ -16,6 +16,16 @@ def close_class_if_due(class_record, now) -> bool:
     return True
 
 
+def class_is_live(class_record, now) -> bool:
+    """Open for check-in at `now`: marked open and not yet past its end. A class still marked open after its end is only waiting for the
+    sync to complete it (classes older than the sync's 7-day look-back never are), so it no longer has students to interrupt; a legacy row
+    with no scheduled end counts as open for 12 hours from when it was opened."""
+    if not class_record.is_open:
+        return False
+    end = class_record.scheduled_end or (class_record.opened_at + timedelta(hours=12) if class_record.opened_at else None)
+    return end is not None and now < end
+
+
 def barred_list_readiness(classes) -> dict:
     unresolved = sum(1 for item in classes if item.status == "needs_attention")
     return {"ready": unresolved == 0, "unresolved_count": unresolved}

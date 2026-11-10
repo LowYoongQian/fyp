@@ -1,13 +1,13 @@
 import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, type SessionData } from '../../context/AuthContext';
-import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check } from 'lucide-react';
-import { swalError, swalSuccess } from '../../utils/swal';
+import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check, X, Eye, EyeOff } from 'lucide-react';
+import { swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
 import Swal from 'sweetalert2';
 import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
 import sasLogoLocal from '../../assets/saslogo.webp';
-import { Aurora, BlackHole, ConstellationFigure, CrescentMoon, Cloud, FullMoon, PlanetBody, StarField, type PlacedConstellation } from './LoginSky';
+import { Aurora, BlackHole, ConstellationFigure, CrescentMoon, FullMoon, BirdFlock, PlanetBody, StarField, SunlitCloud, type PlacedConstellation } from './LoginSky';
 import { LoginLandscape } from './LoginLandscape';
 import { lookAt, sunColors, withAlpha } from './loginLighting';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
@@ -436,6 +436,7 @@ export const Login: React.FC = () => {
     return () => window.removeEventListener('popstate', sync);
   }, []);
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const submittingRef = useRef(false);   // set before React re-renders, so a double click or a second Enter cannot send twice
 
   // Active Hour from Live Malaysia Clock Time
@@ -595,6 +596,8 @@ export const Login: React.FC = () => {
     '--login-glass-dark': (0.86 - 0.22 * look.darkness).toFixed(3),
   } as React.CSSProperties;
   const lightDirection = { lx: Math.round(look.light.x * 100) / 100, ly: Math.round(look.light.y * 100) / 100 };
+  // How dark a cloud's shadow is: clear under a strong, one-sided light, faint under the moon, none in the dark.
+  const cloudShadow = 0.2 * look.light.intensity * (0.45 + 0.55 * look.light.strength);
   const sun = sunColors(look.sun.elevation);
 
   // Validation Logic Helpers
@@ -670,22 +673,6 @@ export const Login: React.FC = () => {
     setSubmitting(false);
   };
 
-  const handleDemoFill = () => {
-    setError(null);
-    setEmailError(null);
-    setPasswordError(null);
-
-    if (portalMode === 'student') {
-      setEmail('low@student.school.edu');
-      setPassword('1111');
-      setInfo('Autofilled Student Demo (Alice)');
-    } else {
-      setEmail('low@staff.school.edu');
-      setPassword('1111');
-      setInfo('Autofilled Staff Demo (Mr. Lee)');
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submittingRef.current) return;
@@ -719,11 +706,10 @@ export const Login: React.FC = () => {
     } catch (err: any) {
       console.error(err);
       const detail = err.response?.data?.detail || err.message || 'Sign-in is not available right now. Please try again later.';
-      // The button is usable again at once; the toast is not waited for.
+      // Back on the same portal with what was typed still in the fields; the reason shows on the form, not in a popup.
       submittingRef.current = false;
       setSubmitting(false);
       setError(detail);
-      void swalError('Login Failed', detail);
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -1040,7 +1026,7 @@ export const Login: React.FC = () => {
                 style={{ top: `${compact ? cloud.top * 0.6 : cloud.top}%`, animationDelay: cloud.delay, opacity: (layer === 'far' ? 0.6 : 0.92) * look.clouds }}
               >
                 <div className="w-28 sm:w-36 md:w-48" style={{ transform: `scale(${cloud.scale})`, transformOrigin: 'top left' }}>
-                  <Cloud id={`login-cloud-${cloud.id}`} {...look.cloud} {...lightDirection} />
+                  <SunlitCloud id={`login-cloud-${cloud.id}`} {...look.cloud} light={look.light} shadow={cloudShadow} />
                 </div>
               </div>
             ))}
@@ -1063,27 +1049,8 @@ export const Login: React.FC = () => {
                     animationDelay: flock.delay,
                   }}
                 >
-                  <svg
-                    className="h-12 w-36"
-                    viewBox="0 0 140 50"
-                    style={{ transform: `scale(${flock.scale})`, transformOrigin: 'top left', color: `rgba(30, 41, 59, ${0.4 + 0.3 * look.shade})` }}
-                  >
-                    {/* Leader Bird */}
-                    <path className="animate-wing-flap" d="M10,25 Q20,10 30,25 Q40,10 50,25" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-                    {/* Right Follower Bird */}
-                    <path className="animate-wing-flap-stagger1" d="M55,14 Q63,4 71,14 Q79,4 87,14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    {/* Left Follower Bird */}
-                    <path className="animate-wing-flap-stagger2" d="M35,38 Q42,28 50,38 Q58,28 66,38" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                    {flock.birdCount >= 4 && (
-                      <path className="animate-wing-flap-stagger3" d="M92,26 Q98,18 104,26 Q110,18 116,26" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                    )}
-                    {flock.birdCount >= 5 && (
-                      <path className="animate-wing-flap-stagger1" d="M15,44 Q20,38 25,44 Q30,38 35,44" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                    )}
-                    {flock.birdCount >= 6 && (
-                      <path className="animate-wing-flap-stagger2" d="M120,18 Q125,12 130,18 Q135,12 140,18" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    )}
-                  </svg>
+                  <BirdFlock className="h-12 w-36" count={flock.birdCount} color={`rgba(30, 41, 59, ${0.45 + 0.3 * look.shade})`}
+                    style={{ transform: `scale(${flock.scale})`, transformOrigin: 'top left' }} />
                 </div>
               );
             })}
@@ -1138,9 +1105,10 @@ export const Login: React.FC = () => {
           {/* While signing in, everything in the form is locked (typing, clearing, autofill, Remember Me, Forgot password) and the card greys out. */}
           <fieldset disabled={submitting} className="m-0 min-w-0 space-y-4 border-0 p-0">
           {error && (
-            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex gap-3 text-xs text-rose-600 dark:text-rose-400 animate-in fade-in duration-200">
-              <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div role="alert" className="flex gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 py-3 pl-4 pr-2 text-xs text-rose-600 animate-in fade-in duration-200 dark:text-rose-400">
+              <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span className="min-w-0 flex-1"><span className="block font-bold">Sign-in failed</span><span className="mt-0.5 block leading-relaxed">{error}</span></span>
+              <button type="button" aria-label="Dismiss" onClick={() => setError(null)} className="h-7 w-7 shrink-0 rounded-lg text-rose-500 transition-colors hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50"><X aria-hidden="true" className="mx-auto h-4 w-4" /></button>
             </div>
           )}
 
@@ -1201,17 +1169,21 @@ export const Login: React.FC = () => {
                 passwordError ? 'text-rose-500' : 'text-slate-400'
               }`} />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={handlePasswordChange}
                 onBlur={handlePasswordBlur}
                 placeholder="••••••••"
-                className={`w-full uipro-input !pl-11 transition-all ${
+                className={`w-full uipro-input !pl-11 !pr-11 transition-all ${
                   passwordError
                     ? '!border-rose-500 focus:!border-rose-500 ring-2 ring-rose-500/20'
                     : ''
                 }`}
               />
+              <button type="button" onClick={() => setShowPassword(shown => !shown)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}
+                className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition-colors hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 dark:hover:text-slate-200">
+                {showPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+              </button>
             </div>
             {passwordError && (
               <p className="text-[11px] font-medium text-rose-500 dark:text-rose-400 flex items-center gap-1 mt-1 animate-in fade-in duration-150">
@@ -1221,7 +1193,7 @@ export const Login: React.FC = () => {
             )}
           </div>
 
-          {/* Submit and Quick Demo Autofill Panel */}
+          {/* Submit */}
           <div className="flex gap-3 mt-2">
             <button
               type="submit"
@@ -1241,14 +1213,6 @@ export const Login: React.FC = () => {
               ) : (
                 <>Sign In</>
               )}
-            </button>
-            <button
-              type="button"
-              onClick={handleDemoFill}
-              className="px-4 uipro-button uipro-button-secondary text-xs flex items-center justify-center cursor-pointer min-h-[44px]"
-              title={portalMode === 'student' ? 'Auto-fill Student Demo' : 'Auto-fill Staff Demo'}
-            >
-              <Sparkles className="h-4 w-4 text-brand-blue" />
             </button>
           </div>
 

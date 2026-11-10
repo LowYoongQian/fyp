@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { towardLight, type Light } from './loginLighting';
 import type { AuroraEpisode, ConstellationPattern } from './loginSkyData';
 
 // Decorative login-sky artwork. Every piece is aria-hidden and pointer-transparent; the parent positions and animates it.
@@ -199,7 +200,8 @@ export const Cloud: React.FC<{ id: string; lit: string; base: string; shade: str
   return (
     <svg viewBox="0 0 120 60" className="h-full w-full overflow-visible" aria-hidden="true">
       <path fill={`url(#${id})`} d="M16 50 C6 50 3 41 11 36 C8 27 18 20 28 25 C31 13 47 8 57 16 C64 7 82 9 85 22 C96 20 106 29 102 39 C110 41 109 50 100 50 Z" />
-      <path fill={lit} opacity="0.6" transform={lx > 0 ? 'translate(120 0) scale(-1 1)' : undefined} d="M30 30 C33 20 46 15 55 22 C62 14 76 16 79 25 C70 22 63 26 60 31 C52 25 40 25 30 30 Z" />
+      {/* The brightest cap sits on the side toward the light, nudged a little toward it. */}
+      <path fill={lit} opacity="0.6" transform={`translate(${(lx * 3).toFixed(2)} ${(Math.min(0, ly) * 2).toFixed(2)})${lx > 0 ? ' translate(120 0) scale(-1 1)' : ''}`} d="M30 30 C33 20 46 15 55 22 C62 14 76 16 79 25 C70 22 63 26 60 31 C52 25 40 25 30 30 Z" />
       <defs>
         <linearGradient id={id} x1={0.5 - dx} y1={0.5 - dy} x2={0.5 + dx} y2={0.5 + dy}>
           <stop offset="0%" stopColor={lit} />
@@ -210,6 +212,71 @@ export const Cloud: React.FC<{ id: string; lit: string; base: string; shade: str
     </svg>
   );
 };
+
+/**
+ * A drifting cloud lit from where it is now. It measures its own place on the stage a few times a second (one layout read, and a re-render
+ * only when the angle has really changed), so as it passes the sun its bright side turns to face it, and its soft shadow falls away from it.
+ */
+export const SunlitCloud: React.FC<{ id: string; lit: string; base: string; shade: string; light: Light; shadow: number }> = ({ id, lit, base, shade, light, shadow }) => {
+  const box = useRef<HTMLDivElement>(null);
+  const [toward, setToward] = useState<LightDirection>({ lx: light.x, ly: light.y });
+  const { left, top } = light;
+  useEffect(() => {
+    const measure = () => {
+      const node = box.current, stage = node?.closest('[data-login-stage]');
+      if (!node || !stage || document.hidden) return;
+      const self = node.getBoundingClientRect(), area = stage.getBoundingClientRect();
+      if (!area.width || !area.height || !self.width) return;
+      const x = ((self.left + self.width / 2 - area.left) / area.width) * 100, y = ((self.top + self.height / 2 - area.top) / area.height) * 100;
+      const next = towardLight({ ...light, left, top }, x, y, area.width, area.height);
+      setToward(current => Math.abs(current.lx - next.lx) + Math.abs(current.ly - next.ly) < 0.04 ? current : next);
+    };
+    measure();
+    const timer = window.setInterval(measure, 400);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the light's position matters here, not the object's identity
+  }, [left, top]);
+  // The shadow is cast away from the light: below and to the far side, softer the dimmer the light.
+  const reach = 7;
+  return (
+    <div ref={box} className="h-full w-full" style={{ filter: shadow > 0.01 ? `drop-shadow(${(-toward.lx * reach).toFixed(1)}px ${(Math.max(0.35, -toward.ly) * reach).toFixed(1)}px 7px rgba(15, 23, 42, ${shadow.toFixed(3)}))` : undefined }}>
+      <Cloud id={id} lit={lit} base={base} shade={shade} lx={toward.lx} ly={toward.ly} />
+    </div>
+  );
+};
+
+// ---- Birds ------------------------------------------------------------------------------------------------------
+// A small bird in side view, flying to the right (the flock is mirrored to fly left): a tapered body with a head and a short beak, a forked
+// tail, and two wings with a bend at the wrist and a pointed tip. The near wing sweeps back, the far wing (slightly paler) reaches forward;
+// both turn at the shoulder, so a downstroke really brings the tips down rather than squashing the drawing.
+const BIRD_BODY = 'M-5,0.6 C-3,-0.9 2,-1.3 4.2,-0.5 C5.2,-0.3 6.2,-0.1 7,0.2 C6,0.5 5,0.6 4,0.8 C1.5,1.6 -2.5,1.6 -5,0.6 Z';
+const BIRD_TAIL = 'M-4.6,0.4 L-8.6,-0.7 L-7.5,0.8 L-8.8,2.1 Z';
+const NEAR_WING = 'M0,-0.4 C-1.4,-3.2 -4,-6 -7.6,-7.4 C-8.6,-7.8 -9.8,-7.6 -10.6,-7.1 C-8.4,-6 -6.4,-4.4 -5,-3 C-3.6,-1.8 -2,-0.6 -0.8,0.4 Z';
+const FAR_WING = 'M0.6,-0.5 C1.6,-3 3.4,-5.4 5.8,-6.6 C6.6,-7 7.4,-6.9 8,-6.5 C6.4,-5.4 4.8,-3.6 3.6,-2 C2.8,-1 2,-0.3 1.4,0.2 Z';
+// [x, y, size, wingbeat cycle in s, offset in s, shown from flock size]: a loose V, the leader largest and the rest smaller with distance.
+const FLOCK: [number, number, number, number, number, number][] = [
+  [30, 24, 1.35, 1.7, 0, 1], [71, 13, 1.1, 1.55, -0.4, 1], [50, 36, 1.05, 1.8, -0.9, 1],
+  [104, 23, 0.85, 1.6, -1.2, 4], [24, 43, 0.72, 1.75, -0.6, 5], [128, 16, 0.62, 1.5, -1.0, 6],
+];
+
+/** A flock of `count` birds in one 140 x 50 drawing, coloured by `color` (they read as dark shapes against the bright sky). */
+export const BirdFlock: React.FC<{ count: number; color: string; className?: string; style?: React.CSSProperties }> = ({ count, color, className, style }) => (
+  <svg className={className} viewBox="0 0 140 50" style={{ ...style, color }} aria-hidden="true">
+    {FLOCK.filter(([, , , , , from]) => count >= from).map(([x, y, size, beat, offset]) => {
+      const timing = { animationDuration: `${beat}s`, animationDelay: `${offset}s` };
+      return (
+        <g key={`${x}-${y}`} transform={`translate(${x} ${y}) scale(${size})`}>
+          <g className="login-bird" style={timing}>
+            <path className="login-bird-wing-far" style={timing} d={FAR_WING} fill="currentColor" opacity="0.72" />
+            <path d={BIRD_TAIL} fill="currentColor" />
+            <path d={BIRD_BODY} fill="currentColor" />
+            <path className="login-bird-wing-near" style={timing} d={NEAR_WING} fill="currentColor" />
+          </g>
+        </g>
+      );
+    })}
+  </svg>
+);
 
 /** A fixed field of faint distant stars, a few of which twinkle slowly. */
 // Placed once per page load; the field never reshuffles while the page is open.

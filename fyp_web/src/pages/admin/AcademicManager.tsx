@@ -1,5 +1,8 @@
 import { TextInput } from '../../components/LimitedTextField';
 import { SemestersPanel } from '../../components/SemestersPanel';
+import { DialogShell } from '../../components/DialogShell';
+import { InfoTip } from '../../components/InfoTip';
+import { AnimatePresence } from 'motion/react';
 import { FloatingPanel } from '../../components/FloatingPanel';
 import { RecordPagination } from '../../components/RecordPagination';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -8,7 +11,7 @@ import type { Programme, Course, LookupKind, LookupStudent, LookupStaff, LookupP
 import { useLookup } from '../../hooks/useLookup';
 import { useRecordPage } from '../../hooks/useRecordPage';
 import { swalSuccess, swalError, swalConfirm } from '../../utils/swal';
-import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays } from 'lucide-react';
+import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays } from 'lucide-react';
 import { LoadingRegion, ShimmerAcademics, ShimmerText } from '../../components/Shimmer';
 
 /** A bespoke picker's open list in the CustomDropdown look: pale selected and hover rows, rounded and padded, the scrollbar inside the rounded shell. */
@@ -86,6 +89,8 @@ type SubTab = 'programmes' | 'courses' | 'staff' | 'students' | 'semesters';
 type ListTab = Exclude<SubTab, 'semesters'>;
 type Errors = Record<string, string | undefined>;
 const PER_PAGE = 10;
+// Each student card lists every course they take, so three cards already fill a screen.
+const PAGE_SIZE: Record<ListTab, number> = { programmes: PER_PAGE, courses: PER_PAGE, staff: PER_PAGE, students: 3 };
 const RECORD_KIND = { programmes: 'programmes', courses: 'courses', staff: 'assignments', students: 'students' } as const;
 const TABS: { id: SubTab; label: string; icon: React.ElementType }[] = [
   { id: 'programmes', label: 'Programmes', icon: Layers },
@@ -102,11 +107,14 @@ const detailOf = (error: unknown, fallback: string) => {
 };
 
 /** One labelled field: the label, the control, a short hint, and the field's own error right under it. */
+// A field's explanation sits behind an (i) beside its label, shown on hover or focus, so the form stays compact; errors stay in view below.
 const Field: React.FC<{ label: string; htmlFor?: string; error?: string; hint?: React.ReactNode; children: React.ReactNode }> = ({ label, htmlFor, error, hint, children }) => (
   <div className="min-w-0 space-y-1.5">
-    <label htmlFor={htmlFor} className="block text-xs font-semibold text-slate-700 dark:text-slate-200">{label}</label>
+    <div className="flex items-center gap-1">
+      <label htmlFor={htmlFor} className="block text-xs font-semibold text-slate-700 dark:text-slate-200">{label}</label>
+      {hint && <InfoTip label={`About ${label}`}>{hint}</InfoTip>}
+    </div>
     {children}
-    {hint && !error && <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{hint}</p>}
     {error && <p id={htmlFor ? `${htmlFor}-error` : undefined} role="alert" className="flex items-center gap-1 text-xs font-semibold text-rose-600 dark:text-rose-400"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{error}</p>}
   </div>
 );
@@ -143,6 +151,98 @@ const StatusPill: React.FC<{ status: string }> = ({ status }) => {
   return <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${look}`}>{text}</span>;
 };
 
+/** A row's edit button, the same size as its delete button. */
+const RowEdit: React.FC<{ label: string; onClick: () => void }> = ({ label, onClick }) => (
+  <button type="button" onClick={onClick} aria-label={label} title={label}
+    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-blue-50 hover:text-brand-blue focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 dark:hover:bg-blue-500/10">
+    <Pencil className="h-4 w-4" />
+  </button>
+);
+
+/**
+ * Edit a saved course: code, title, credits and programme (put it in a programme, move it to another, or take it out). A course in a
+ * semester keeps its programme (the server refuses a move, since the semester belongs to that programme), so the picker says so instead.
+ * The course's lecturer is sent back unchanged.
+ */
+function EditCourseDialog({ row, onClose, onSaved }: { row: CourseRecord; onClose: () => void; onSaved: (code: string) => void }) {
+  const [code, setCode] = useState(row.course_code);
+  const [name, setName] = useState(row.course_name);
+  const [credits, setCredits] = useState(String(row.credit_hours ?? 3));
+  const [programme, setProgramme] = useState<{ id: string; label: string } | null>(
+    row.programme_id ? { id: String(row.programme_id), label: `${row.programme_code} - ${row.programme_name}` } : null);
+  const [open, setOpen] = useState(false);
+  const [errors, setErrors] = useState<Errors>({});
+  const [failure, setFailure] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const locked = !!row.semester;
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (saving) return;
+    const value = Number(credits);
+    const next: Errors = {
+      code: code.trim() ? undefined : 'Enter a course code.',
+      name: name.trim() ? undefined : 'Enter the course title.',
+      credits: credits && Number.isFinite(value) && value >= 0.5 && value <= 12 && value * 2 === Math.round(value * 2) ? undefined : 'Use 0.5 to 12 credits, in steps of 0.5.',
+    };
+    setErrors(next);
+    setFailure(null);
+    if (focusFirstError(next, { code: 'edit-course-code', name: 'edit-course-name', credits: 'edit-course-credits' })) return;
+    setSaving(true);
+    try {
+      const saved = await apiService.adminUpdateCourse(row.id, {
+        course_code: code.trim(), course_name: name.trim(), credit_hours: value, lecturer_id: row.lecturer_id ?? null, programme_id: programme?.id ?? null,
+      } as never);
+      onSaved(saved.course_code ?? code.trim());
+    } catch (error) {
+      const status = (error as ApiFailure).response?.status, detail = detailOf(error, '');
+      if (status && /code/i.test(detail)) { setErrors({ code: detail }); focusById('edit-course-code'); }
+      else setFailure(status ? detail || 'The course was not saved. Check the fields and try again.' : 'The connection failed, so the change may not have been saved. Close and check the list before trying again.');
+    } finally { setSaving(false); }
+  };
+  return (
+    <DialogShell labelledBy="edit-course-title" onClose={() => { if (!saving) onClose(); }}>
+      <form noValidate onSubmit={save} className="flex min-h-0 flex-1 flex-col">
+        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+          <div className="min-w-0">
+            <h3 id="edit-course-title" className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white"><Pencil className="h-4 w-4 text-brand-blue" />Edit course</h3>
+            <p className="mt-0.5 break-words text-xs text-slate-500">{row.course_code} · {row.enrolment_count} enrolled · {row.session_count} class session{row.session_count === 1 ? '' : 's'}</p>
+          </div>
+          <button type="button" aria-label="Close" disabled={saving} onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+        </header>
+        <fieldset disabled={saving} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
+          {failure && <p role="alert" className="flex gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-400"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{failure}</p>}
+          <Field label="Course code" htmlFor="edit-course-code" error={errors.code}>
+            <TextInput id="edit-course-code" type="text" value={code} aria-invalid={!!errors.code || undefined} aria-describedby={errors.code ? 'edit-course-code-error' : undefined}
+              onChange={event => { setCode(event.target.value.toUpperCase()); setErrors(current => ({ ...current, code: undefined })); }} className={`${INPUT} ${errors.code ? INVALID : ''}`} />
+          </Field>
+          <Field label="Course title" htmlFor="edit-course-name" error={errors.name}>
+            <TextInput id="edit-course-name" type="text" value={name} aria-invalid={!!errors.name || undefined} aria-describedby={errors.name ? 'edit-course-name-error' : undefined}
+              onChange={event => { setName(event.target.value); setErrors(current => ({ ...current, name: undefined })); }} className={`${INPUT} ${errors.name ? INVALID : ''}`} />
+          </Field>
+          <Field label="Credits" htmlFor="edit-course-credits" error={errors.credits} hint={locked ? 'Academic credits, 0.5 to 12. Students in its semester must still fit its credit limit.' : 'Academic credits, 0.5 to 12.'}>
+            <input id="edit-course-credits" type="number" min="0.5" max="12" step="0.5" value={credits} aria-invalid={!!errors.credits || undefined} aria-describedby={errors.credits ? 'edit-course-credits-error' : undefined}
+              onChange={event => { setCredits(event.target.value); setErrors(current => ({ ...current, credits: undefined })); }} className={`${INPUT} ${errors.credits ? INVALID : ''}`} />
+          </Field>
+          <Field label="Programme" htmlFor="edit-course-programme"
+            hint={locked ? `It is in the semester ${row.semester!.name}, which belongs to this programme, so it cannot move. Delete that semester first to change it.`
+              : 'Choose any programme to add the course to, or No programme. Only that programme’s students can then take it.'}>
+            <Picker id="edit-course-programme" name="edit-course-programme" value={programme?.label ?? ''} placeholder="No programme" open={open} setOpen={setOpen} disabled={locked}>
+              <LookupMenu<LookupProgramme> kind="programmes" placeholder="Search programme code or name"
+                before={<MenuOption primary="No programme" selected={!programme} onSelect={() => { setProgramme(null); setOpen(false); }} />}
+                option={p => ({ primary: p.code, secondary: p.name })} selectedId={programme?.id ?? ''}
+                onSelect={p => { setProgramme({ id: String(p.id), label: `${p.code} - ${p.name}` }); setOpen(false); }} />
+            </Picker>
+          </Field>
+        </fieldset>
+        <footer className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4 dark:border-slate-800">
+          <button type="button" disabled={saving} onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
+          <button type="submit" disabled={saving} className="rounded-xl bg-brand-blue px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save changes'}</button>
+        </footer>
+      </form>
+    </DialogShell>
+  );
+}
+
 /** A row's delete button: a real target with a name that says what it removes. */
 const RowDelete: React.FC<{ label: string; onClick: () => void }> = ({ label, onClick }) => (
   <button type="button" onClick={onClick} aria-label={label} title={label}
@@ -159,7 +259,7 @@ function RecordsPanel<T extends { id: string }>({ tab, title, search, onSearch, 
   tab: ListTab; title: string; search: string; onSearch: (value: string) => void; page: number; onPage: (page: number) => void; version: number;
   highlight?: string; placeholder: string; empty: string; children: (row: T, highlighted: boolean) => React.ReactNode; onSettled: () => void;
 }) {
-  const records = useRecordPage<T>(RECORD_KIND[tab], search, page, PER_PAGE, version);
+  const records = useRecordPage<T>(RECORD_KIND[tab], search, page, PAGE_SIZE[tab], version);
   const data = records.data;
   useEffect(() => { if (records.status !== 'loading') onSettled(); }, [records.status, onSettled]);
   // The server answers with the page it really showed (a page past the end after a delete becomes the last page): keep them in step.
@@ -202,7 +302,7 @@ function RecordsPanel<T extends { id: string }>({ tab, title, search, onSearch, 
             : data.items.map(row => <React.Fragment key={row.id}>{children(row, row.id === highlight)}</React.Fragment>)}
         </div>
       )}
-      {data && total > 0 && <RecordPagination page={data.page} pageSize={PER_PAGE} total={total} onChange={onPage} />}
+      {data && total > 0 && <RecordPagination page={data.page} pageSize={PAGE_SIZE[tab]} total={total} onChange={onPage} />}
     </section>
   );
 }
@@ -323,6 +423,13 @@ export const AcademicManager: React.FC = () => {
       else void swalError(status ? 'Course not added' : 'Could not confirm', status ? detail || 'Check the fields and try again.' : 'The connection failed. Check the list before trying again; your entries are kept.');
       if (!status) refresh();
     } finally { setSavingCourse(false); }
+  };
+  const [editingCourse, setEditingCourse] = useState<CourseRecord | null>(null);
+  const courseSaved = (code: string) => {
+    setEditingCourse(null);
+    refresh();
+    if (referenceState !== 'idle') void loadReference();
+    void swalSuccess('Course updated', `${code} was saved.`);
   };
   const deleteCourse = async (row: CourseRecord) => {
     const parts = [row.enrolment_count && `${row.enrolment_count} enrolment${row.enrolment_count === 1 ? '' : 's'}`, row.session_count && `${row.session_count} class session${row.session_count === 1 ? '' : 's'} with their attendance`].filter(Boolean);
@@ -529,7 +636,7 @@ export const AcademicManager: React.FC = () => {
           </div>
         )}
       </RecordsPanel>
-    ) : tab === 'courses' ? (
+    ) : tab === 'courses' ? (<>
       <RecordsPanel<CourseRecord> tab="courses" key="courses" title="Courses" placeholder="Search code, title or programme" empty="No courses yet. Add the first one with the form."
         search={search.courses} onSearch={searchFor('courses')} page={page.courses} onPage={pageFor('courses')} version={version} onSettled={listSettled}
         highlight={highlight?.tab === 'courses' ? highlight.id : undefined}>
@@ -541,11 +648,17 @@ export const AcademicManager: React.FC = () => {
               <p className="text-xs text-slate-500 dark:text-slate-400">{row.credit_hours ?? 0} credits · {row.programme_code ? `${row.programme_code} - ${row.programme_name}` : 'No programme'}{row.semester ? ` · ${row.semester.name} (${row.semester.start_date} – ${row.semester.end_date})` : ''}</p>
               <p className="text-xs text-slate-500 dark:text-slate-400">{row.enrolment_count} enrolled · {row.session_count} class session{row.session_count === 1 ? '' : 's'}</p>
             </div>
-            <RowDelete label={`Delete course ${row.course_code}`} onClick={() => void deleteCourse(row)} />
+            <div className="flex shrink-0 gap-1">
+              <RowEdit label={`Edit course ${row.course_code}`} onClick={() => setEditingCourse(row)} />
+              <RowDelete label={`Delete course ${row.course_code}`} onClick={() => void deleteCourse(row)} />
+            </div>
           </div>
         )}
       </RecordsPanel>
-    ) : tab === 'staff' ? (
+      <AnimatePresence>
+        {editingCourse && <EditCourseDialog key={editingCourse.id} row={editingCourse} onClose={() => setEditingCourse(null)} onSaved={courseSaved} />}
+      </AnimatePresence>
+    </>) : tab === 'staff' ? (
       <RecordsPanel<AssignmentRecord> tab="staff" key="staff" title="Teaching roles" placeholder="Search staff, course or role" empty="No teaching roles yet. Assign staff with the form."
         search={search.staff} onSearch={searchFor('staff')} page={page.staff} onPage={pageFor('staff')} version={version} onSettled={listSettled}
         highlight={highlight?.tab === 'staff' ? highlight.id : undefined}>
@@ -696,7 +809,7 @@ export const AcademicManager: React.FC = () => {
                   aria-invalid={!!allocErrors.semester || undefined} className={`${INPUT} ${allocErrors.semester ? INVALID : ''}`} />
               </Field>
         )}
-        <Field label="Group" htmlFor="alloc-group" error={allocErrors.group} hint={!course ? 'Choose a course first.' : checkState === 'error' ? 'Group seats could not be loaded.' : undefined}>
+        <Field label="Group" htmlFor="alloc-group" error={allocErrors.group ?? (course && checkState === 'error' ? 'Group seats could not be loaded.' : undefined)} hint={!course ? 'Choose a course first.' : undefined}>
           <Picker id="alloc-group" name="group" value={group ? `${groupLabel(group)}${chosenGroup ? ` · ${chosenGroup.count} of 25` : ''}` : ''} placeholder={checkState === 'loading' ? 'Loading groups…' : 'Choose a group'}
             open={openPicker === 'group'} setOpen={pickerOpen('group')} disabled={!course || checkState !== 'ready'} invalid={!!allocErrors.group}>
             <MenuPanel footer={

@@ -15,6 +15,7 @@ import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/attendance_parity.dart';
 import 'widgets/check_in_success_dialog.dart';
+import 'widgets/auth_transition_overlay.dart';
 import 'services/offline_checkin_sync.dart';
 import 'services/server_discovery_service.dart';
 import 'services/user_service.dart';
@@ -484,6 +485,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // The portal being signed in to ('student' / 'staff'), so its sign-in shows that portal's skeleton even when the
   // other portal is already signed in (the old check hid the skeleton as soon as either account was signed in).
   String? _signingInPortal;
+  // The web-style sign-in / sign-out cover; null when hidden.
+  AuthCover? _authCover;
+  bool _coverSigningIn = true;
+  // Each sign-in or sign-out gets a number; one the user has given up on (Back to sign in) can no longer change anything.
+  int _loginAttempt = 0;
+  int _signOutAttempt = 0;
+  bool _signingOutStudent = false;
+  // The last sign-in error per portal, shown on that portal's login card until the next try or until dismissed.
+  final Map<String, String> _loginErrors = {};
 
   /// A login page is busy only while it is signing in itself, or while the app starts and nobody is signed in.
   /// The shared isSyncing flag is also set by the other portal's background refresh, which must not lock this form.
@@ -859,9 +869,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     String portalType,
     BuildContext context,
   ) async {
+    final attempt = ++_loginAttempt;
     setState(() {
       isSyncing = true;
       _signingInPortal = portalType;
+      _coverSigningIn = true;
+      _authCover = AuthCover.pending;
+      _loginErrors.remove(portalType);
     });
     try {
       final String rawInput = emailOrId.trim();
@@ -885,7 +899,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 'portal': portalType,
               }),
             )
-            .timeout(const Duration(seconds: 12));
+            // Under the cover's 10 s limit, so a slow server normally ends as an error on the login card.
+            .timeout(const Duration(seconds: 9));
       } on TimeoutException {
         throw Exception(
           "The server took too long to respond. Check your connection and that the backend is running.",
@@ -896,6 +911,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         );
       }
 
+      if (attempt != _loginAttempt) return;
       if (response.statusCode == 401) {
         throw Exception(_detailOf(response, 'Invalid email or password'));
       }
@@ -906,12 +922,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       var authData = jsonDecode(response.body);
       if (authData['requires_two_factor'] == true) {
         if (!context.mounted) return;
+        // The code prompt needs the screen; the cover returns while the code is checked.
+        setState(() => _authCover = null);
         final verified = await AccountSecurity.verifyLogin(
           context,
           apiUrl,
           authData['challenge_token'],
         );
-        if (verified == null) return;
+        if (verified == null || attempt != _loginAttempt) return;
+        setState(() => _authCover = AuthCover.pending);
         authData = verified;
       }
       final role = authData['role'] as String;
@@ -965,6 +984,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           if (staffRole.toLowerCase() == 'tutor') staffRole = 'Tutor';
           isStaffLoggedIn = true;
         }
+        _authCover = AuthCover.done;
       });
 
       unawaited(MobilePush.bind(token, apiUrl));
@@ -984,13 +1004,37 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         unawaited(refreshStudentFaceStatus().catchError((Object _) {}));
       }
     } catch (e) {
-      showErrorDialog(_friendlyError(e), context);
-    } finally {
+      if (attempt != _loginAttempt || !mounted) return;
+      // Back on the same portal, with what was typed still in the fields and the reason on the card.
       setState(() {
-        isSyncing = false;
-        _signingInPortal = null;
+        _authCover = null;
+        _loginErrors[portalType] = _friendlyError(e);
       });
+    } finally {
+      if (attempt == _loginAttempt && mounted) {
+        setState(() {
+          isSyncing = false;
+          _signingInPortal = null;
+          // A sign-in that stopped without an answer (2FA cancelled) leaves no cover behind.
+          if (_coverSigningIn && _authCover == AuthCover.pending) _authCover = null;
+        });
+      }
     }
+  }
+
+  /// Back to sign in, after the cover waited 10 s: the attempt is abandoned (a late answer is ignored, so nobody is
+  /// signed in behind the user's back) and the portal shows why, with the fields as they were.
+  void _cancelSignIn() {
+    final portal = _signingInPortal;
+    _loginAttempt++;
+    setState(() {
+      _authCover = null;
+      isSyncing = false;
+      _signingInPortal = null;
+      if (portal != null) {
+        _loginErrors[portal] = 'Signing in took longer than 10 seconds, so it was stopped. Check your connection and try again.';
+      }
+    });
   }
 
   Future<void> _setupRecoveryEmail(BuildContext context, String token) =>
@@ -1922,8 +1966,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _endServerSession(String token) async {
-    if (token.isEmpty) return;
+  /// True when the server confirmed the sign-out (or the session had already ended there).
+  Future<bool> _endServerSession(String token, {bool notify = true}) async {
+    if (token.isEmpty) return true;
     // Request revocation immediately, independently of device unregistration.
     unawaited(MobilePush.unbind(token));
     try {
@@ -1932,12 +1977,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         token,
         '/auth/logout',
         body: {},
-      );
+      ).timeout(const Duration(seconds: 9));
+      return true;
     } catch (failure) {
       if (failure is SecurityFailure && [401, 403].contains(failure.status)) {
-        return;
+        return true;
       }
-      if (mounted) {
+      if (notify && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -1946,12 +1992,40 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           ),
         );
       }
+      return false;
     }
   }
 
+  /// Logout pressed by the user: "Signing out…" until the server answers, then "Signed out" (or, if it could not
+  /// confirm, "Signed out on this device" with Continue). The account is cleared under the cover either way.
+  Future<void> _signOutWithCover(bool student) async {
+    if (_authCover != null) return;
+    final attempt = ++_signOutAttempt;
+    final token = student ? studentAuthToken : staffAuthToken;
+    setState(() {
+      _coverSigningIn = false;
+      _signingOutStudent = student;
+      _authCover = AuthCover.pending;
+    });
+    final confirmed = await _endServerSession(token, notify: false);
+    if (!mounted || attempt != _signOutAttempt) return;
+    student ? _clearStudentSession() : _clearStaffSession();
+    setState(() => _authCover = confirmed ? AuthCover.done : AuthCover.local);
+  }
+
+  /// Back to sign in, after signing out waited 10 s: this device signs out now; the server request may still finish.
+  void _cancelSignOut() {
+    _signOutAttempt++;
+    _signingOutStudent ? _clearStudentSession() : _clearStaffSession();
+    setState(() => _authCover = null);
+  }
+
   void handleStudentLogout() {
-    final token = studentAuthToken;
-    unawaited(_endServerSession(token));
+    unawaited(_endServerSession(studentAuthToken));
+    _clearStudentSession();
+  }
+
+  void _clearStudentSession() {
     setState(() {
       studentAuthToken = "";
       _studentUserId = "";
@@ -1978,8 +2052,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   void handleStaffLogout() {
-    final token = staffAuthToken;
-    unawaited(_endServerSession(token));
+    unawaited(_endServerSession(staffAuthToken));
+    _clearStaffSession();
+  }
+
+  void _clearStaffSession() {
     final previousStaffId = staffId;
     setState(() {
       staffAuthToken = "";
@@ -2108,7 +2185,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       studentName: studentName,
                       busy: _registeringFace || _savingFace || isSyncing,
                       onRegister: () => registerFace(context),
-                      onLogout: handleStudentLogout,
+                      onLogout: () => _signOutWithCover(true),
                       onRefresh: () async {
                         try {
                           await refreshStudentFaceStatus();
@@ -2132,7 +2209,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       announcements: studentAnnouncements,
                       isDatabaseOffline: isDatabaseOffline,
                       isSyncing: isSyncing,
-                      onLogout: handleStudentLogout,
+                      onLogout: () => _signOutWithCover(true),
                       onSyncRequested: () => syncData(context),
                       onTimetableRefresh: refreshStudentTimetable,
                       onAttendanceRefresh: refreshStudentAttendance,
@@ -2164,6 +2241,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             : LoginScreen(
                 portalType: 'student',
                 isSyncing: _portalBusy('student'),
+                error: _loginErrors['student'],
+                onDismissError: () => setState(() => _loginErrors.remove('student')),
                 onLogin: (emailOrId, pass, portal) =>
                     handleLogin(emailOrId, pass, portal, context),
                 onBackPressed: () => setState(() => selectedTab = 0),
@@ -2181,13 +2260,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 apiBaseUrl: ApiConfig.getEffectiveUrl(),
                 isDatabaseOffline: isDatabaseOffline,
                 isSyncing: isSyncing,
-                onLogout: handleStaffLogout,
+                onLogout: () => _signOutWithCover(false),
                 onSyncRequested: () =>
                     syncData(context), // Reuses direct check syncs
               )
             : LoginScreen(
                 portalType: 'staff',
                 isSyncing: _portalBusy('staff'),
+                error: _loginErrors['staff'],
+                onDismissError: () => setState(() => _loginErrors.remove('staff')),
                 onLogin: (emailOrId, pass, portal) =>
                     handleLogin(emailOrId, pass, portal, context),
                 onBackPressed: () => setState(() => selectedTab = 0),
@@ -2220,8 +2301,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           ),
 
           // Loading Overlay (Shimmer Skeleton Screen)
-          if (_signingInPortal != null ||
-              (isSyncing && !isStudentLoggedIn && !isStaffLoggedIn))
+          if (_authCover == null &&
+              _signingInPortal == null &&
+              isSyncing &&
+              !isStudentLoggedIn &&
+              !isStaffLoggedIn)
             Positioned.fill(
               child: Container(
                 color: isDarkMode
@@ -2232,13 +2316,21 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                     isLoading: true,
                     // Each portal previews its own dashboard while signing in.
                     child:
-                        (_signingInPortal ??
-                                (selectedTab == 2 ? 'staff' : 'student')) ==
-                            'staff'
+                        selectedTab == 2
                         ? const ShimmerStaffSkeleton()
                         : const ShimmerSkeleton(),
                   ),
                 ),
+              ),
+            ),
+
+          if (_authCover != null)
+            Positioned.fill(
+              child: AuthTransitionOverlay(
+                signingIn: _coverSigningIn,
+                state: _authCover!,
+                onDone: () => setState(() => _authCover = null),
+                onCancel: _coverSigningIn ? _cancelSignIn : _cancelSignOut,
               ),
             ),
         ],

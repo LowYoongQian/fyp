@@ -5,6 +5,7 @@ import { apiService } from '../services/api';
 import type { AcademicSemester, Course, Programme, SemesterWrite } from '../services/api';
 import { CustomDropdown } from './CustomDropdown';
 import { DialogShell } from './DialogShell';
+import { InfoTip } from './InfoTip';
 import { LoadingRegion, ShimmerSemesterCards, ShimmerText } from './Shimmer';
 import { DatePicker } from './DatePicker';
 import { SemesterRolloverPreview } from './SemesterRolloverPreview';
@@ -101,22 +102,24 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
   };
 
   const fields = <>
-    <div className={label}><span>Study programme</span>{editing ? <p className={field}>{programmes.find(p => String(p.id) === form.programme_id)?.name}</p> : <CustomDropdown fullWidth className="w-full" ariaLabel="Semester programme" value={form.programme_id}
+    <div className={label}><span className="flex items-center gap-1">Study programme{editing && <InfoTip label="About Study programme">The saved programme is fixed to preserve history.</InfoTip>}</span>{editing ? <p className={field}>{programmes.find(p => String(p.id) === form.programme_id)?.name}</p> : <CustomDropdown fullWidth className="w-full" ariaLabel="Semester programme" value={form.programme_id}
       options={[{ value: '', label: 'Select programme' }, ...programmes.map(p => ({ value: String(p.id), label: `${p.code} · ${p.name}` }))]}
       onChange={value => setForm({ ...form, programme_id: value, course_ids: [] })} />}
-      {editing && <p className="text-[10px] text-slate-400">The saved programme is fixed to preserve history.</p>}</div>
+</div>
     <label className={`block ${label}`}>Semester name<TextInput required aria-label="Semester name" className={field} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="2026 Semester 2" /></label>
     <div className="space-y-2">
       <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${editing ? '' : 'lg:grid-cols-1'}`}>
-        <div className={label}><span>Start date</span><DatePicker label="Semester start date" value={form.start_date} today={today} min={today} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={start_date => setForm({ ...form, start_date })} /></div>
-        <div className={label}><span>End date</span><DatePicker label="Semester end date" value={form.end_date} today={today} min={endMin} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={end_date => setForm({ ...form, end_date })} /></div>
+        <div className={label}><span className="flex items-center gap-1">Start date<InfoTip label="About the semester dates">Dates before today cannot be chosen (Malaysia time; today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''} Choose both a start and an end date.</InfoTip></span><DatePicker label="Semester start date" value={form.start_date} today={today} min={today} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={start_date => setForm({ ...form, start_date })} /></div>
+        <div className={label}><span className="flex items-center gap-1">End date<InfoTip label="About End date">The semester ends at the end of this date (Malaysia time).</InfoTip></span><DatePicker label="Semester end date" value={form.end_date} today={today} min={endMin} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={end_date => setForm({ ...form, end_date })} /></div>
       </div>
-      <p id={`${idPrefix}-date-help`} className="text-[11px] text-slate-500">Dates before today are not selectable (Malaysia time, today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''}</p>
+      {/* Read out with the date pickers; shown to everyone else behind the (i) beside Start date. */}
+      <p id={`${idPrefix}-date-help`} className="sr-only">Dates before today are not selectable (Malaysia time, today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''}</p>
       {dateError && <p role="alert" className="text-xs font-semibold text-rose-600">{dateError}</p>}
-      {!dateError && (!form.start_date || !form.end_date) && <p className="text-[11px] text-slate-400">Choose both a start and an end date.</p>}
     </div>
-    <label className={`block ${label}`}>Maximum academic credits per student<input required type="number" min="0.5" max="60" step="0.5" aria-label="Maximum student credits" className={field} value={form.max_student_credits} onChange={event => setForm({ ...form, max_student_credits: Number(event.target.value) })} /></label>
-    <p className="text-[11px] text-slate-500">The most credits a student can enrol in.</p>
+    <div className={label}>
+      <span className="flex items-center gap-1"><label htmlFor={`${idPrefix}-credits`}>Maximum academic credits per student</label><InfoTip label="About Maximum academic credits">The most credits a student can enrol in this semester.</InfoTip></span>
+      <input id={`${idPrefix}-credits`} required type="number" min="0.5" max="60" step="0.5" aria-label="Maximum student credits" className={field} value={form.max_student_credits} onChange={event => setForm({ ...form, max_student_credits: Number(event.target.value) })} />
+    </div>
     <fieldset className="space-y-3"><legend className="mb-2 text-xs font-semibold">Courses in this semester</legend>
       <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">{courseList()}</div>
     </fieldset>
@@ -126,7 +129,6 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
   if (!editing) return <form onSubmit={save} className="uipro-card min-w-0 space-y-5 p-6 lg:col-span-1">
     <fieldset disabled={saving} className="min-w-0 space-y-5">
       <h3 className="flex items-center gap-2 text-sm font-bold"><CalendarDays className="h-5 w-5 text-brand-blue" />Create semester</h3>
-      <p className="text-xs leading-relaxed text-slate-500">The semester ends at the end of this date (Malaysia time).</p>
       {fields}
       {saveButton('w-full')}
     </fieldset>

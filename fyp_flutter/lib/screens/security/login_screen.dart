@@ -9,6 +9,9 @@ class LoginScreen extends StatefulWidget {
   final Function(String, String, String)
   onLogin; // (email or staff ID, password, portalType)
   final VoidCallback onBackPressed;
+  /// Why the last sign-in on this portal failed; shown at the top of the card until the next try or dismissed.
+  final String? error;
+  final VoidCallback? onDismissError;
 
   const LoginScreen({
     super.key,
@@ -16,6 +19,8 @@ class LoginScreen extends StatefulWidget {
     required this.isSyncing,
     required this.onLogin,
     required this.onBackPressed,
+    this.error,
+    this.onDismissError,
   });
 
   @override
@@ -195,6 +200,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // The reason the last sign-in failed, right where the user will try again.
+                      AnimatedSize(
+                        duration: Duration(milliseconds: MediaQuery.disableAnimationsOf(context) ? 0 : 220),
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topCenter,
+                        child: widget.error == null
+                            ? const SizedBox(width: double.infinity)
+                            : Padding(
+                                padding: const EdgeInsets.only(bottom: 16),
+                                child: _LoginError(message: widget.error!, isDark: isDarkMode, onDismiss: widget.onDismissError),
+                              ),
+                      ),
                       Text(
                         tr(idLabel),
                         style: GoogleFonts.spaceGrotesk(
@@ -386,6 +403,58 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
       errorStyle: const TextStyle(fontSize: 12),
       errorMaxLines: 3,
+    );
+  }
+}
+
+/// The sign-in error card: a red-tinted box with the reason and a dismiss button, read out once by screen readers.
+class _LoginError extends StatelessWidget {
+  final String message;
+  final bool isDark;
+  final VoidCallback? onDismiss;
+  const _LoginError({required this.message, required this.isDark, this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = isDark ? const Color(0xFFFECACA) : const Color(0xFF991B1B);
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF3B1414) : const Color(0xFFFEF2F2),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: isDark ? const Color(0xFF7F1D1D) : const Color(0xFFFECACA)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(Icons.error_outline_rounded, size: 20, color: isDark ? const Color(0xFFF87171) : const Color(0xFFDC2626)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr('Sign-in failed'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: ink)),
+                  const SizedBox(height: 2),
+                  Text(tr(message), style: TextStyle(fontSize: 12.5, height: 1.35, color: ink)),
+                ],
+              ),
+            ),
+            if (onDismiss != null)
+              IconButton(
+                onPressed: onDismiss,
+                tooltip: tr('Dismiss'),
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.close_rounded, size: 18, color: ink),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -178,7 +178,7 @@ export interface Enrolment {
 export type LookupKind = 'students' | 'staff' | 'programmes' | 'courses';
 export type RecordKind = 'programmes' | 'courses' | 'assignments' | 'students';
 export type ProgrammeRecord = { id: string; code: string; name: string; student_count: number; course_count: number };
-export type CourseRecord = { id: string; course_code: string; course_name: string; credit_hours: number | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
+export type CourseRecord = { id: string; course_code: string; course_name: string; credit_hours: number | null; lecturer_id: string | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
 export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; role: string };
 export type StudentRecord = { id: string; name: string; student_code: string; programme_id: string | null; programme_code: string | null; programme_name: string | null;
   enrolments: { id: string; course_id: string; course_code: string; course_name: string; class_group: string; semester_name: string | null; status: 'active' | 'upcoming' | 'ended' | 'undated' }[] };
@@ -602,8 +602,9 @@ export const apiService = {
   adminMedicalPage: async (params: RecordPageQuery, signal?: AbortSignal): Promise<RecordPage<MCReportItem>> =>
     (await api.get('/admin/reports/mc/page', { params, signal, timeout: 15000 })).data,
   // Real Backend Auth APIs
-  login: async (email: string, password: string, portal?: string) => {
-    const response = await api.post('/auth/login', { email, password, portal });
+  // 9 s: inside the sign-in cover's 10 s limit, so a slow server normally ends as an error on the form.
+  login: async (email: string, password: string, portal?: string, signal?: AbortSignal) => {
+    const response = await api.post('/auth/login', { email, password, portal }, { timeout: 9000, signal });
     return response.data;
   },
   forgotPassword: async (schoolEmail: string) =>

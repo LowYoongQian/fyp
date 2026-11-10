@@ -54,6 +54,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [signInState, setSignInState] = useState<'pending' | 'done' | null>(null);
+  // Each sign-in gets a number; one given up on (Back to sign in on the cover) can no longer start a session.
+  const signInAttempt = useRef(0);
+  const signInAbort = useRef<AbortController | null>(null);
+  // Ends the waiting sign-in at once when the user goes back (the work behind it may still be finishing).
+  const signInStop = useRef<(() => void) | null>(null);
+  // The token of a session this sign-in has already started but not finished opening (account settings still loading).
+  const signInStarted = useRef<string | null>(null);
 
   useEffect(() => token ? startLiveUpdates(token) : undefined, [token]);
   useEffect(() => user && token ? subscribeLive(['account'], () => { void syncAccountPreferences(user.user_id); }) : undefined, [token, user?.user_id]);
@@ -231,34 +238,77 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Keep the cover above route changes while preserving the form on failed sign-in.
   // An account with 2FA gets back only its pending challenge: nothing is stored and no session starts until verifyLogin succeeds.
-  const login = async (email: string, password: string, portal?: string): Promise<LoginResult> => {
+  // A sign-in the user gave up on: the server may still answer, but no session may start from it, and a token it
+  // returned is revoked so it does not linger on the server.
+  const abandoned = (attempt: number, data?: SessionData) => {
+    if (attempt === signInAttempt.current) return false;
+    if (data?.access_token) void api.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${data.access_token}` }, timeout: 9000 }).catch(() => {});
+    return true;
+  };
+  const STOPPED = 'Signing in took longer than 10 seconds, so it was stopped. Check your connection and try again.';
+  const TOO_SLOW = 'The server took too long to respond. Check your connection and try again.';
+  /** Runs one sign-in step under the cover: a time-out or a Back to sign in ends as a plain error for the form. */
+  const coveredSignIn = async <T,>(step: (signal: AbortSignal) => Promise<T>, finish: (value: T, attempt: number) => Promise<T>): Promise<T> => {
+    const attempt = ++signInAttempt.current;
+    const controller = new AbortController();
+    signInAbort.current = controller;
+    const stopped = new Promise<never>((_, reject) => { signInStop.current = () => reject(new Error(STOPPED)); });
     setSignInState('pending');
+    const work = (async () => finish(await step(controller.signal), attempt))();
+    work.catch(() => {});   // after a Back the form already has its answer; the late outcome of the work is not needed
     try {
-      const data = await apiService.login(email, password, portal);
+      return await Promise.race([work, stopped]);
+    } catch (error) {
+      if (attempt === signInAttempt.current) setSignInState(null);
+      const axiosError = error as { code?: string; response?: unknown };
+      if (controller.signal.aborted || attempt !== signInAttempt.current) throw new Error(STOPPED, { cause: error });
+      if (axiosError.code === 'ECONNABORTED' && !axiosError.response) throw new Error(TOO_SLOW, { cause: error });
+      throw error;
+    } finally {
+      if (signInAbort.current === controller) { signInAbort.current = null; signInStop.current = null; }
+    }
+  };
+  /** Back to sign in, after the cover waited 10 s: stop the request and return to the form, which shows why. */
+  const cancelSignIn = () => {
+    signInAttempt.current++;
+    signInAbort.current?.abort();
+    signInAbort.current = null;
+    // A session already started (the server said yes, the settings are still loading) is ended here and on the server.
+    const started = signInStarted.current;
+    signInStarted.current = null;
+    if (started) {
+      performLogoutStateCleanup();
+      void api.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${started}` }, timeout: 9000 }).catch(() => {});
+    }
+    setSignInState(null);
+    signInStop.current?.();
+    signInStop.current = null;
+  };
+  const begin = async (data: SessionData, email: string, attempt: number) => {
+    if (abandoned(attempt, data)) throw new Error(STOPPED);
+    signInStarted.current = data.access_token;
+    const session = await startSession(data, email);
+    // Given up on while the account settings were loading: cancelSignIn has already ended this session.
+    if (attempt !== signInAttempt.current) throw new Error(STOPPED);
+    signInStarted.current = null;
+    setSignInState('done');
+    return session;
+  };
+
+  const login = (email: string, password: string, portal?: string): Promise<LoginResult> => coveredSignIn<LoginResult>(
+    signal => apiService.login(email, password, portal, signal),
+    async (data, attempt) => {
+      if (abandoned(attempt)) throw new Error(STOPPED);
       if (data.requires_two_factor) {
         setSignInState(null);
         return { requires_two_factor: true, challenge_token: data.challenge_token, expires_in: data.expires_in };
       }
-      const session = await startSession(data, email);
-      setSignInState('done');
-      return session;
-    } catch (error) {
-      setSignInState(null);
-      throw error;
-    }
-  };
+      return begin(data as SessionData, email, attempt);
+    });
 
-  const verifyLogin = async (challenge: string, code: string, email: string) => {
-    setSignInState('pending');
-    try {
-      const session = await startSession((await api.post('/auth/login/verify', { challenge_token: challenge, code }, { timeout: 15000 })).data, email);
-      setSignInState('done');
-      return session;
-    } catch (error) {
-      setSignInState(null);
-      throw error;
-    }
-  };
+  const verifyLogin = (challenge: string, code: string, email: string) => coveredSignIn<SessionData>(
+    async signal => (await api.post('/auth/login/verify', { challenge_token: challenge, code }, { timeout: 9000, signal })).data,
+    (data, attempt) => begin(data, email, attempt));
 
   const startSession = async (data: SessionData, email: string) => {
     const sessionUser: UserSession = {
@@ -277,12 +327,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Remove any protected route left by a previous account or deep link.
     resetNavigationUrl();
 
-    setToken(data.access_token);
-    setUser(sessionUser);
-
     // Instantly clear API cache & sync fresh account theme from DB
     clearApiCache();
     await syncAccountPreferences(data.user_id);
+    // Only now does the app take over from the sign-in page: until then the form (with what was typed) stays mounted
+    // under the cover, so going back from a slow sign-in returns to it unchanged. A sign-in given up on meanwhile
+    // has already cleared the stored session, and must not open the app.
+    if (sessionStorage.getItem('auth_token') !== data.access_token) return data;
+    setToken(data.access_token);
+    // The settings load may have refreshed the stored user (a changed staff role); use that copy.
+    const stored = sessionStorage.getItem('auth_user');
+    setUser(stored ? JSON.parse(stored) as UserSession : sessionUser);
     return data;
   };
 
@@ -295,18 +350,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [signOutState, setSignOutState] = useState<SignOutState | null>(null);
   const signingOut = useRef(false);
+  const signOutAttempt = useRef(0);
   const signOut = async () => {
     if (signingOut.current) return;   // a second click while signing out does nothing
     signingOut.current = true;
+    const attempt = ++signOutAttempt.current;
     const endingToken = sessionStorage.getItem('auth_token');
     closeSwal();
     setSignOutState('pending');
     performLogoutStateCleanup();      // before any network wait: a refresh or Back can no longer reach this account
-    const revoked = !endingToken || await api.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${endingToken}` }, timeout: 12000 })
+    // 9 s: inside the cover's 10 s limit, so a slow server normally ends as "Signed out on this device".
+    const revoked = !endingToken || await api.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${endingToken}` }, timeout: 9000 })
       .then(() => true, error => error.response?.status === 401 || error.response?.status === 403);   // already ended on the server counts as ended
+    if (attempt !== signOutAttempt.current) return;   // the user already went back to sign in; a late answer changes nothing
     setSignOutState(revoked ? 'done' : 'local');
   };
-  const finishSignOut = () => { setSignOutState(null); signingOut.current = false; };
+  const finishSignOut = () => { signOutAttempt.current++; setSignOutState(null); signingOut.current = false; };
 
   return (
     <AuthContext.Provider
@@ -323,8 +382,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }}
     >
       <div style={{ display: 'contents' }} inert={signInState !== null}>{children}</div>
-      {signInState && <AuthTransitionOverlay action="in" state={signInState} onDone={() => setSignInState(null)} />}
-      {signOutState && <SignOutOverlay state={signOutState} onDone={finishSignOut} />}
+      {signInState && <AuthTransitionOverlay action="in" state={signInState} onDone={() => setSignInState(null)} onCancel={cancelSignIn} />}
+      {/* This device is already signed out before the server is asked, so going back is always safe. */}
+      {signOutState && <SignOutOverlay state={signOutState} onDone={finishSignOut} onCancel={finishSignOut} />}
     </AuthContext.Provider>
   );
 };
