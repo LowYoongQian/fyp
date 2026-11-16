@@ -42,19 +42,19 @@ function Splash({ p, range, logo }: { p: MotionValue<number>; range: [number, nu
 }
 
 /**
- * While the check-in screen waits for a face: an oval guide with a line scanning down it (an animation only: there is no camera and no person).
+ * While the check-in screen waits for a face: a line scanning down between the app's own corner guides (an animation only: there is no camera
+ * and no person). The guides are part of the capture (public/demo/app-checkin.webp: x 23-77%, y 26-59% of the screen).
  * No clipping and no large shadow, which would make the browser build a mask layer the first time it appears.
  */
 function FaceScan({ p, range, warm }: { p: MotionValue<number>; range: [number, number]; warm: boolean }) {
   const [a, b] = range;
   const shown = useRange(p, [a, a + 0.008, b - 0.012, b], [0, 1, 1, 0]);
   const opacity = useTransform(shown, value => (warm ? Math.max(value, 0.002) : value));
-  const along = useRange(p, [a + 0.004, (a + b) / 2, b - 0.012], [-1, 1, -1]);   // -1 top of the oval, 1 bottom
-  const y = useTransform(along, value => 90 + value * 86);                        // the oval is 40% of the 450 px screen high: 180 px
-  const width = useTransform(along, value => Math.sqrt(Math.max(0, 1 - value * value)));   // the line is as long as the oval is wide at that height
+  const along = useRange(p, [a + 0.004, (a + b) / 2, b - 0.012], [0, 1, 0]);   // 0 top of the guides, 1 bottom
+  const y = useTransform(along, value => 4 + value * 140);                       // the guides are 33% of the 450 px screen high: 148 px
   return (
-    <motion.div className="pointer-events-none absolute left-[17%] top-[27%] h-[40%] w-[66%] rounded-[50%] border-2 border-dashed border-white/90" style={{ opacity }}>
-      <motion.span className="absolute inset-x-0 top-0 -mt-px h-[3px] rounded bg-blue-400 shadow-[0_0_8px_1px_rgba(59,130,246,0.9)]" style={{ y, scaleX: width }} />
+    <motion.div className="pointer-events-none absolute left-[23%] top-[26%] h-[33%] w-[54%]" style={{ opacity }}>
+      <motion.span className="absolute inset-x-[6%] top-0 -mt-px h-[3px] rounded bg-blue-400 shadow-[0_0_8px_1px_rgba(59,130,246,0.9)]" style={{ y }} />
     </motion.div>
   );
 }
@@ -112,21 +112,32 @@ export function Slab({ w, h, radius, depth, edge, children, extras }: { w: numbe
   );
 }
 
+const PHONE_KEY = 'absolute rounded-full bg-gradient-to-b from-slate-400 via-slate-500 to-slate-600';
+
+/**
+ * A current Android phone: a thin even bezel of black glass inside a brushed-metal rim, the screen's corners following the body's, the front
+ * camera in the bezel above the screen and the keys on the rim (volume left, power right).
+ */
 export function Phone({ p, on, script, warm = false }: { p: MotionValue<number>; on: MotionValue<number>; script: DeviceScript; warm?: boolean }) {
-  const { x, y, w, h } = PHONE.screen;
-  const lit = useTransform(on, value => clamp01(value));
+  const { x, y, w, h, radius } = PHONE.screen;
   return (
-    <Slab w={PHONE.w} h={PHONE.h} radius={38} depth={11} edge="#3b4a63" extras={
+    <Slab w={PHONE.w} h={PHONE.h} radius={PHONE.radius} depth={10} edge="#27303f" extras={
       <>
-        <div className="absolute rounded-sm bg-slate-500" style={{ right: -3, top: 126, width: 3, height: 58, transform: 'translateZ(-6px)' }} />
-        <div className="absolute rounded-sm bg-slate-500" style={{ right: -3, top: 196, width: 3, height: 34, transform: 'translateZ(-6px)' }} />
+        <div className={PHONE_KEY} style={{ left: -2.5, top: 104, width: 3, height: 40, transform: 'translateZ(-5px)' }} />
+        <div className={PHONE_KEY} style={{ left: -2.5, top: 152, width: 3, height: 40, transform: 'translateZ(-5px)' }} />
+        <div className={PHONE_KEY} style={{ right: -2.5, top: 128, width: 3, height: 56, transform: 'translateZ(-5px)' }} />
       </>
     }>
-      <div className="absolute inset-0 rounded-[38px] bg-gradient-to-br from-slate-700 via-slate-900 to-slate-950 shadow-[inset_0_0_0_1.5px_rgba(148,163,184,0.5),inset_0_0_14px_rgba(0,0,0,0.6)]">
-        <div className="absolute rounded-full bg-black/80" style={{ left: PHONE.w / 2 - 22, top: 9, width: 44, height: 5 }} />
-        <motion.div className="absolute rounded-full bg-blue-400/80 shadow-[0_0_6px_rgba(96,165,250,0.9)]" style={{ left: PHONE.w / 2 + 30, top: 8, width: 7, height: 7, opacity: lit }} />
-        <div className="absolute" style={{ left: x, top: y, width: w, height: h }}>
-          <Display p={p} on={on} script={script} w={w} h={h} radius={6} slide tapSize={44} cursor={false} logo={58} warm={warm} />
+      {/* the metal rim (1.5 px of light catching the edge), then the black glass that holds the screen */}
+      <div className="absolute inset-0 p-[1.5px]" style={{ borderRadius: PHONE.radius, background: 'linear-gradient(150deg, #e2e8f0 0%, #64748b 22%, #1e293b 48%, #475569 74%, #cbd5e1 100%)' }}>
+        <div className="relative h-full w-full bg-[#04060b] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]" style={{ borderRadius: PHONE.radius - 1.5 }}>
+          <div className="absolute" style={{ left: x - 1.5, top: y - 1.5, width: w, height: h }}>
+            <Display p={p} on={on} script={script} w={w} h={h} radius={radius} slide tapSize={44} cursor={false} logo={58} warm={warm} />
+            {/* the front camera, in the bezel above the screen: on the screen it would cover the app's own header */}
+            <span className="pointer-events-none absolute left-1/2 top-[-6px] h-[5px] w-[5px] -translate-x-1/2 rounded-full bg-[#11151c] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
+              <span className="absolute left-[1px] top-[1px] h-[2px] w-[2px] rounded-full bg-blue-400/50" />
+            </span>
+          </div>
         </div>
       </div>
     </Slab>

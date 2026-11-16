@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useTransform, type MotionValue } from 'motion/react';
 
 /** Piecewise-linear map of `value` from `input` stops to `output` stops, held at the ends. */
@@ -19,4 +20,15 @@ export function interpolate(value: number, input: number[], output: number[]): n
  */
 export function useRange(value: MotionValue<number>, input: number[], output: number[]) {
   return useTransform(value, current => interpolate(current, input, output));
+}
+
+/** The window's size, kept current on resize. */
+export function useViewport() {
+  const [size, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  useEffect(() => {
+    const update = () => setSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  return size;
 }

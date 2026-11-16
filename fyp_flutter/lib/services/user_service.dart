@@ -1,29 +1,22 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 
 class UserService {
-  static Future<String?> _getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token');
-  }
-
-  static Future<Map<String, String>> _getHeaders([String? authToken]) async {
-    final token = authToken ?? await _getToken();
+  static Map<String, String> _getHeaders(String token) {
     return {
       'Content-Type': 'application/json',
-      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
 
   static Future<Map<String, dynamic>?> fetchUserProfile({
-    String? authToken,
+    required String authToken,
     String? apiBaseUrl,
   }) async {
     try {
-      final headers = await _getHeaders(authToken);
+      final headers = _getHeaders(authToken);
       final url = Uri.parse(
         '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me',
       );
@@ -35,7 +28,7 @@ class UserService {
         return jsonDecode(response.body) as Map<String, dynamic>;
       } else {
         debugPrint(
-          'Failed to fetch user profile: ${response.statusCode} ${response.body}',
+          'Failed to fetch user profile: HTTP ${response.statusCode}',
         );
         return null;
       }
@@ -48,11 +41,11 @@ class UserService {
   static Future<bool> changePassword({
     required String currentPassword,
     required String newPassword,
-    String? authToken,
+    required String authToken,
     String? apiBaseUrl,
   }) async {
     try {
-      final headers = await _getHeaders(authToken);
+      final headers = _getHeaders(authToken);
       final url = Uri.parse(
         '${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/change-password',
       );
@@ -76,9 +69,13 @@ class UserService {
     }
   }
 
-  static Future<bool> updateUserSettings(Map<String, dynamic> settings, {String? authToken, String? apiBaseUrl}) async {
+  static Future<bool> updateUserSettings(
+    Map<String, dynamic> settings, {
+    required String authToken,
+    String? apiBaseUrl,
+  }) async {
     try {
-      final headers = await _getHeaders(authToken);
+      final headers = _getHeaders(authToken);
       final url = Uri.parse('${apiBaseUrl ?? ApiConfig.getEffectiveUrl()}/auth/me/settings');
       final response = await http.put(
         url,
@@ -89,7 +86,7 @@ class UserService {
       if (response.statusCode == 200) {
         return true;
       } else {
-        debugPrint('Failed to update settings: ${response.body}');
+        debugPrint('Failed to update settings: HTTP ${response.statusCode}');
         return false;
       }
     } catch (e) {
@@ -101,10 +98,10 @@ class UserService {
   static Future<String> uploadAvatar(
     Uint8List imageBytes, {
     required String filename,
-    String? authToken,
+    required String authToken,
     String? apiBaseUrl,
   }) async {
-    final headers = await _getHeaders(authToken);
+    final headers = _getHeaders(authToken);
     headers.remove('Content-Type');
     final request = http.MultipartRequest(
       'POST',
@@ -140,7 +137,7 @@ class UserService {
           Uri.parse(
             '${ApiConfig.getEffectiveUrl()}/auth/recovery-email/request',
           ),
-          headers: await _getHeaders(authToken),
+          headers: _getHeaders(authToken),
           body: jsonEncode({'recovery_email': email}),
         )
         .timeout(const Duration(seconds: 12));
@@ -162,7 +159,7 @@ class UserService {
           Uri.parse(
             '${ApiConfig.getEffectiveUrl()}/auth/recovery-email/verify',
           ),
-          headers: await _getHeaders(authToken),
+          headers: _getHeaders(authToken),
           body: jsonEncode({'code': code}),
         )
         .timeout(const Duration(seconds: 12));
@@ -173,8 +170,10 @@ class UserService {
 
   static Future<Map<String, dynamic>?> fetchSystemLanguages() async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/v1/system/languages');
-      final response = await http.get(url);
+      final url = Uri.parse(
+        '${ApiConfig.getEffectiveUrl()}/api/v1/system/languages',
+      );
+      final response = await http.get(url).timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;

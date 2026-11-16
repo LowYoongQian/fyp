@@ -111,7 +111,7 @@ class _StartupIntroState extends State<StartupIntro>
                                           ],
                                         ),
                                         child: Image.asset(
-                                          'assets/images/sas_mark.png',
+                                          'assets/images/emblem.png',
                                           fit: BoxFit.contain,
                                           excludeFromSemantics: true,
                                         ),

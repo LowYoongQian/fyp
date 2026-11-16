@@ -1196,7 +1196,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
                   icon: Icons.location_on_rounded,
                   iconColor: const Color(0xFF059669),
                   title: tr('Class Location / Room'),
-                  value: item['room'] ?? 'Main Hall A',
+                  value: item['room'] ?? tr('TBA'),
                 ),
                 const SizedBox(height: 12),
 

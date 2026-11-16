@@ -1,5 +1,117 @@
 # Changelog
 
+## Edge regression recheck — 2026-11-17 03:45
+- Rechecked the Edge sign-in and admin menu fixes: no new change needed; sign-in tests 37/37 and admin menu tests 17/17 in Edge. ChatGPT review pending.
+
+
+## Edge regression fixes after the team update — 2026-11-17 03:38
+- Signing in is announced once to screen readers (the duplicate hidden status line stays removed).
+- The dark-mode staff menu test now waits for its list to load instead of counting too early; the app itself was not missing options.
+- Checks (self-reported): in Edge, sign-in flow tests 37/37 and admin menu tests 17/17; the staff menu check passed 5 of 5 in isolation. ChatGPT review pending.
+
+
+## The home page book closes with its back cover — 2026-11-11 22:35
+- After the last page the book shuts with its back cover, turns round to its front cover, then rises away before the phone.
+- The book's text is dark and easy to read again, with a blue shine that follows the pointer.
+- Checks (self-reported): tsc and lint clean; public page browser tests 31/32 on the build, the last passing on the development server. ChatGPT review pending.
+
+
+## The home page book closes before the phone — 2026-11-11 21:52
+- The book's text uses a shine effect that follows the pointer; it shows only while a spread lies open.
+- The book can be spun only while it is closed at the start.
+- After the last page the book shuts, the light rays and star warp fade away, and the closed book rises up and away before the phone appears.
+- Checks (self-reported): tsc and lint clean; public page browser tests 31/32 on the build, the last passing on the development server. ChatGPT review pending.
+
+
+## A more real 3D book on the home page — 2026-11-11 21:33
+- Pages bend as they turn and cast soft shadows; the book has a finished spine and back cover.
+- The words of each open spread condense out of blue smoke and drift away before the next page turns.
+- Light rays shine down and a glittering star warp starts behind the book as the cover opens; the existing background stays.
+- Drag (or use the arrow keys) to spin the book all the way round; it settles facing you again.
+- Checks (self-reported): tsc and lint clean; public page browser tests 30/31 on the build, the last passing on the development server. ChatGPT review pending.
+
+
+## Portal page background shows in development too — 2026-11-11 13:22
+- The flickering 0s and 1s on the Choose your portal page were missing on the development server; they now show there as well as in the build.
+- Checks (self-reported): checked on the running development server; portal browser test passes. ChatGPT review pending.
+
+
+## Home page side rays and a digital portal background — 2026-11-11 13:08
+- Light now pours in from the top right corner of the home page, kept clear of the emblem.
+- The portal choice page has a soft field of flickering 0s and 1s in the site's blues behind the two choices.
+- Checks (self-reported): tsc and lint clean; public page browser tests 27/28 on the build (the last runs only on the development server). ChatGPT review pending.
+
+
+## Home page: glowing button borders, a grid tunnel and light rays — 2026-11-11 12:38
+- The main buttons have a comet of light circling their border; the scroll story plays in a grid tunnel with a sweeping glow; light rays fall behind the dotted emblem.
+- The mobile app's splash and icon were already the new emblem; an old build on the emulator showed the old one.
+- Checks (self-reported): tsc and lint clean; public page browser tests 27/28 on the build (the last runs only on the development server). ChatGPT review pending.
+
+
+## Current app and portal screens in the README and on the home page — 2026-11-11 12:14
+- All eight phone and monitor screens were re-captured from the current mobile app and web portal, with sample data.
+- The home page's phone and monitor, the README and the fly-over film now show them.
+- Checks (self-reported): public page browser tests 28/28 (one on the development server). ChatGPT review pending.
+
+
+## README: the fly-over film — 2026-11-11 10:56
+- The README shows the 15-second fly-over of the home page above the features (an animated preview, as GitHub does not play repository video files).
+- The film is re-rendered with the new emblem. Checks (self-reported): the preview loops at the right speed with no black frame. ChatGPT review pending.
+
+
+## New emblem everywhere and a GitHub README — 2026-11-11 10:48
+- The new Smart Attend System emblem replaces the old logo in the web portal, the browser tab, the mobile app and its launcher icons; the old logo files are removed.
+- A new README with the emblem, badges, a hero image, screenshots of each feature, the architecture and how to run each part.
+- Checks (self-reported): tsc clean; flutter analyze clean and 58 tests passed; branding, sign-in and public page browser tests pass (except the development-server-only error page test). ChatGPT review pending.
+
+
+## Home page: brighter click waves and a flowing gradient headline — 2026-11-11 10:28
+- A click sends a bright ring all the way to the screen edges, fading with distance; quick clicks no longer cut earlier rings short.
+- The headline's second line has a slowly flowing blue gradient.
+- Checks (self-reported): tsc and lint clean; public page browser tests 27/28 on the build (the last runs only on the development server). ChatGPT review pending.
+
+
+## Home page: vapor headline — 2026-11-11 03:06
+- The home page headline now forms out of drifting vapor, and every few seconds its second line dissolves into the next phrase: made smart, made simple, made secure.
+- Still, plain text with reduced motion. Checks (self-reported): tsc and lint clean; public page browser tests 27/28 on the build (the last runs only on the development server). ChatGPT review pending.
+
+
+## Home page: smaller cursor glow — 2026-11-11 02:53
+- The glow around the cursor on the home page is about half as wide.
+- Checks (self-reported): tsc and lint clean; intro browser tests 4/4. ChatGPT review pending.
+
+
+## Promo film ghost box removed; home page dots with flowing light — 2026-11-11 02:48
+- The large blurred white box that passed the camera in the film is gone.
+- The home page is back to the dot field, now with flowing currents of light and a soft glow that follows the pointer and trails like smoke.
+- Checks (self-reported): tsc and lint clean; public page browser tests 25/26 on the build (the last runs only on the development server). ChatGPT review pending.
+
+
+## Promo film fixes and a richer home-page light field — 2026-11-11 02:13
+- The film now has one phone and one monitor; the monitor stands up and powers on, and the faint white boxes around lifted parts are gone.
+- The home page's field now looks like the reference: dense pill-shaped lights that brighten to near white along a soft, lingering mouse trail.
+- Checks (self-reported): tsc and lint clean; field unit tests 5/5; public page browser tests 25/26 on the build (the last runs only on the development server). ChatGPT review pending.
+
+
+## Promo film of the public home page (outside the repository) — 2026-11-11 01:40
+- A 14.5-second 3D fly-over video of the home page, ending on "Attendance, made smart. / for every class", in output/film (not tracked).
+- No project file changed. Checks (self-reported): stills approved before the render; camera path and video motion checked. ChatGPT review pending.
+
+
+## Public home page: the intro's light stays on your pointer, and the field flows like smoke — 2026-11-11 01:14
+- The light on the intro stays exactly where your pointer is and fades out when the pointer leaves the page; it no longer moves on its own.
+- Soft smoke drifts through the blue field, and moving the mouse leaves a glowing trail that flows on in the same direction and fades.
+- Checks (self-reported): tsc and lint clean; new field-motion unit tests 5/5; public page browser tests 25/26 on the build (the last one runs only on the development server). ChatGPT review pending.
+
+
+## Public home page: interactive intro and cleaner 3D story — 2026-11-11 00:13
+- A new first screen: the USAS emblem and a field of light that react to the pointer (or a tap), with Open Portal and Take the tour.
+- The book, phone and monitor stand in the middle of the screen; the words sit beside or below them, never over them.
+- The phone now looks like a current Android phone and stands upright; the whole monitor fits on screen at its closest.
+- No more dark shapes beside the web screen; each object leaves before the next arrives.
+- Checks (self-reported): tsc and lint clean; public page browser tests 23/24 on the build, the last one passes on the development server. ChatGPT review pending.
+
+
 ## Push recheck — 2026-11-10 21:01 MYT
 - Production web build and 19 backend semester tests passed. The deployed API now accepts school email alone for password reset and exposes the Academics programmes route.
 - The new course editor needs the backend course-list update before it goes live to preserve lecturer assignments. The prior clean-install and release-content findings remain open.

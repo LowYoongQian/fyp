@@ -18,7 +18,7 @@ export function PublicHeader({ action = true }: { action?: boolean }) {
           </span>
         </button>
         {action && (
-          <button type="button" onClick={() => goTo('/portal')} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl bg-brand-blue px-4 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2">
+          <button type="button" onClick={() => goTo('/portal')} className="ps-star inline-flex h-10 shrink-0 items-center gap-2 rounded-xl bg-brand-blue px-4 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2">
             Open Portal<ArrowRight className="h-4 w-4" />
           </button>
         )}

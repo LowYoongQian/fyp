@@ -171,7 +171,7 @@ class _AuthTransitionOverlayState extends State<AuthTransitionOverlay> with Tick
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Image.asset('assets/images/sas_mark.png', height: 88, fit: BoxFit.contain),
+                        Image.asset('assets/images/emblem.png', height: 88, fit: BoxFit.contain),
                         const SizedBox(height: 18),
                         AnimatedSwitcher(
                           duration: Duration(milliseconds: _still ? 0 : 240),

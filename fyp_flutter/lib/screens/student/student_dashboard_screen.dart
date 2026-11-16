@@ -64,7 +64,6 @@ class MainScreen extends StatefulWidget {
     String,
     String,
     String,
-    String,
     bool, {
     int? challengeMs,
     Map<String, dynamic>? extraDetails,
@@ -1183,7 +1182,7 @@ class _MainScreenState extends State<MainScreen> {
                 final classGroup = cls['classGroup'].toString();
                 final startTimeStr = cls['startTime'].toString();
                 final endTimeStr = cls['endTime'].toString();
-                final room = cls['room'].toString();
+                final room = cls['room']?.toString() ?? '';
 
                 final startDt = _parseTodayTime(startTimeStr);
                 final endDt = _parseTodayTime(endTimeStr);
@@ -1436,7 +1435,6 @@ class _MainScreenState extends State<MainScreen> {
                                                       }
                                                       widget.onCheckInComplete(
                                                         sessionId!,
-                                                        "Campus-Staff-WiFi",
                                                         courseCode,
                                                         courseName,
                                                         imageBase64,
@@ -1454,13 +1452,11 @@ class _MainScreenState extends State<MainScreen> {
                                                           'lecturerName':
                                                               activeSess['createdByName'] ??
                                                               activeSess['lecturerName'] ??
-                                                              cls['lecturerName'] ??
-                                                              'Dr. Low',
+                                                              cls['lecturerName'],
                                                           'lecturerRole':
                                                               activeSess['createdRole'] ??
                                                               activeSess['lecturerRole'] ??
-                                                              cls['lecturerRole'] ??
-                                                              'Lecturer',
+                                                              cls['lecturerRole'],
                                                         },
                                                       );
                                                     },
@@ -2223,13 +2219,19 @@ class _MainScreenState extends State<MainScreen> {
                                             activeSessions.first;
                                         widget.onCheckInComplete(
                                           session['sessionId'],
-                                          "Campus-Staff-WiFi",
                                           session['courseCode'],
                                           session['courseName'],
                                           imageBase64,
                                           livenessPassed,
                                           challengeMs: challengeMs,
-                                          extraDetails: {'challenge_token': challengeToken, 'retry': openScan},
+                                          extraDetails: {
+                                            'challenge_token': challengeToken,
+                                            'retry': openScan,
+                                            'room': session['room'],
+                                            'classGroup': session['classGroup'],
+                                            'lecturerName': session['createdByName'] ?? session['lecturerName'],
+                                            'lecturerRole': session['createdRole'] ?? session['lecturerRole'],
+                                          },
                                         );
                                       },
                                 ),

@@ -1126,7 +1126,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         'day': day,
         'startTime': start,
         'endTime': end,
-        'room': room ?? 'Main Hall A',
+        'room': room,
         'lecturerName': c['lecturer_name'] ?? 'TBA',
         'attendanceRate': courseRate(c),
       });
@@ -1466,7 +1466,6 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // credentials.
   Future<void> submitAttendance(
     dynamic sessionId,
-    String ssid,
     String courseCode,
     String courseName,
     String imageBase64,
@@ -1490,17 +1489,12 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       final netInfo = await NetworkInfoService.collect();
       final netPayload = netInfo.toPayload();
 
-      // Prefer the live SSID; fall back to the value passed in by the caller.
-      final effectiveSsid = (netPayload['wifi_ssid'] as String).isNotEmpty
-          ? netPayload['wifi_ssid'] as String
-          : ssid;
-
       // 2. Submit to the backend (authoritative path — no direct DB write).
       final apiUrl = server;
       final http.Response response;
       final deviceId = await LocalCacheService.getOrCreateDeviceId();
       Map<String, dynamic> checkInPayload = {
-        'wifi_ssid': effectiveSsid,
+        'wifi_ssid': netPayload['wifi_ssid'],
         'image_base64': imageBase64,
         'liveness_passed': livenessPassed,
         'bssid': netPayload['bssid'],
@@ -1599,10 +1593,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         throw Exception(error);
       }
 
-      Map<String, dynamic> resJson = {};
-      try {
-        resJson = jsonDecode(response.body) as Map<String, dynamic>;
-      } catch (_) {}
+      final verification = checkInVerification(
+        jsonDecode(response.body) as Map<String, dynamic>,
+      );
 
       for (final row in await LocalCacheService.pendingCheckIns(
         owner,
@@ -1626,24 +1619,18 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
       if (!current()) return;
 
-      final bool wifiVerified =
-          resJson['wifi_verified'] == true ||
-          (resJson['attendance_record']?['wifi_verified'] == true);
-      final bool liveVerified =
-          resJson['liveness_passed'] == true || livenessPassed;
-
       showCheckInSuccessDialog(
         context,
         courseCode: courseCode,
         courseName: courseName,
         timeSlot:
             extraDetails?['timeSlot']?.toString() ?? 'Active Class Session',
-        room: extraDetails?['room']?.toString() ?? 'Main Hall A',
-        classGroup: extraDetails?['classGroup']?.toString() ?? 'Tut Group G2',
-        lecturerName: extraDetails?['lecturerName']?.toString() ?? 'Dr. Low',
-        lecturerRole: extraDetails?['lecturerRole']?.toString() ?? 'Lecturer',
-        wifiVerified: wifiVerified,
-        livenessPassed: liveVerified,
+        room: extraDetails?['room']?.toString() ?? '',
+        classGroup: extraDetails?['classGroup']?.toString() ?? '',
+        lecturerName: extraDetails?['lecturerName']?.toString() ?? '',
+        lecturerRole: extraDetails?['lecturerRole']?.toString() ?? '',
+        wifiVerified: verification.wifiVerified,
+        livenessPassed: verification.livenessPassed,
       );
     } catch (e) {
       if (current()) {
@@ -2141,7 +2128,6 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       onCheckInComplete:
                           (
                             sessId,
-                            ssid,
                             courseCode,
                             courseName,
                             imageBase64,
@@ -2150,7 +2136,6 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                             Map<String, dynamic>? extraDetails,
                           }) => submitAttendance(
                             sessId,
-                            ssid,
                             courseCode,
                             courseName,
                             imageBase64,

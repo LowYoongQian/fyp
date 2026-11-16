@@ -6,7 +6,7 @@ import { swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
 import Swal from 'sweetalert2';
 import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
-import sasLogoLocal from '../../assets/saslogo.webp';
+import sasLogoLocal from '../../assets/emblem.webp';
 import { Aurora, BlackHole, ConstellationFigure, CrescentMoon, FullMoon, BirdFlock, PlanetBody, StarField, SunlitCloud, type PlacedConstellation } from './LoginSky';
 import { LoginLandscape } from './LoginLandscape';
 import { lookAt, sunColors, withAlpha } from './loginLighting';
@@ -1216,7 +1216,6 @@ export const Login: React.FC = () => {
             </button>
           </div>
 
-          <p role="status" aria-live="polite" className="sr-only">{submitting ? 'Signing in…' : ''}</p>
 
           {/* Student Portal Only: Custom High-Quality UI Remember Me Checkbox (left) & Forgot Password Link (far right) */}
           {portalMode === 'student' && (

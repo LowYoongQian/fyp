@@ -5,3 +5,30 @@
 .ps-stage { perspective: 1800px; perspective-origin: 50% 40%; }
 .ps-3d { transform-style: preserve-3d; }
 .ps-page { backface-visibility: hidden; }
+
+/* ---------- Intro ---------- */
+@keyframes ps-wheel { 0% { transform: translateY(0); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateY(11px); opacity: 0; } }
+.ps-wheel { animation: ps-wheel 1.7s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
+@media (prefers-reduced-motion: reduce) { .ps-wheel { animation: none; } }
+
+/* Flowing gradient text (after ReactBits Gradient Text): a gradient 3 times the text's width slides back and forth. Colours: VaporHeadline.tsx GRADIENT. */
+@keyframes ps-gradient { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+.ps-gradient-text { background-image: linear-gradient(to right, #60a5fa, #a5b4fc, #7dd3fc, #93c5fd, #60a5fa); background-size: 300% 100%; animation: ps-gradient 8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ps-gradient-text { animation: none; } }
+
+/* Star border (after React Bits Star Border): a comet of light, a bright head with a short fading tail, circles the button's border every 4 s.
+   The ring is the button's own border box with its inside cut away; a blurred copy behind it is the comet's glow. */
+@property --ps-star { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@keyframes ps-star { to { --ps-star: 360deg; } }
+.ps-star { position: relative; isolation: isolate; }
+.ps-star::before, .ps-star::after {
+  content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px; pointer-events: none;
+  background: conic-gradient(from var(--ps-star), transparent 0deg 270deg, rgba(186, 230, 253, 0.25) 315deg, #ffffff 356deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: ps-star 4s linear infinite;
+}
+.ps-star::after { inset: -3px; padding: 4px; filter: blur(5px); opacity: 0.8; z-index: -1; }
+@media (prefers-reduced-motion: reduce) { .ps-star::before, .ps-star::after { animation: none; opacity: 0.35; } }
+
+.ps-star + .ps-star::before, .ps-star + .ps-star::after { animation-delay: -2s; }   /* side-by-side buttons: the comets half a lap apart */

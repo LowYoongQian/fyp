@@ -163,7 +163,7 @@ class _BrandRefreshState extends State<BrandRefresh> with TickerProviderStateMix
   Widget _logo(double progress, bool dark) {
     const size = 62.0;   // the emblem has wide empty margins in its picture, so it is drawn larger than it looks
     Widget mark({Color? tint}) => Image.asset(
-          'assets/images/sas_mark.png',
+          'assets/images/emblem.png',
           width: size,
           height: size,
           fit: BoxFit.contain,

@@ -9,7 +9,10 @@
 
 # ...now drop the parts of fyp-backend that are local-only, huge, or secret.
 fyp-backend/.venv
+fyp-backend/venv
+fyp-backend/env
 fyp-backend/.env
+fyp-backend/*.env
 fyp-backend/.cache
 fyp-backend/.pytest_cache
 fyp-backend/**/__pycache__

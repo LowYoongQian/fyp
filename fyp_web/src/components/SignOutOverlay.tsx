@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle2, Clock } from 'lucide-react';
-import sasLogo from '../assets/saslogo.webp';
+import sasLogo from '../assets/emblem.webp';
 
 export type SignOutState = 'pending' | 'done' | 'local';
 

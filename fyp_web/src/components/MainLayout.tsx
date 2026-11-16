@@ -2,7 +2,7 @@ import { FloatingPanel } from './FloatingPanel';
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense } from 'react';
 import { animateUiEntrance } from '../utils/uiMotion';
 import { useAuth } from '../context/AuthContext';
-import sasLogo from '../assets/saslogo.webp';
+import sasLogo from '../assets/emblem.webp';
 import {
   LayoutDashboard,
   BarChart3,

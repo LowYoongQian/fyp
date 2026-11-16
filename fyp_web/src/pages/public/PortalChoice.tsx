@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, Briefcase, GraduationCap } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { goTo, openPortal } from '../../utils/publicRoute';
 import { PublicHeader } from './PublicHeader';
+import LetterGlitch from './reactbits/LetterGlitch';
 
 const CHOICES = [
   { portal: 'student' as const, title: 'Student Portal', text: 'Classes, attendance and notices.', icon: GraduationCap },
@@ -12,9 +13,14 @@ const CHOICES = [
 export function PortalChoice() {
   const { isAuthenticated, user, loading } = useAuth();
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 via-white to-blue-50/60">
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-slate-50 via-white to-blue-50/60">
+      {/* Letter Glitch: a field of 0s and 1s in the site's blues, faded out in the middle so the choices stay clear */}
+      <div aria-hidden="true" data-letter-glitch className="pointer-events-none absolute inset-0">
+        <LetterGlitch glitchColors={['#2563eb', '#60a5fa']} baseColor="#cbd5e1" glitchAmount={0.5} speed={1} flow={0.04} clickEffect="none" fontSize={13} spacing={0}
+          baseOpacity={0} centerFade={0.6} interactive={false} lightMode characters="01" />
+      </div>
       <PublicHeader action={false} />
-      <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-4 pb-12 pt-24 sm:px-6">
+      <main className="relative mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-4 pb-12 pt-24 sm:px-6">
         <h1 className="text-center font-display text-2xl font-extrabold text-slate-900 sm:text-3xl">Choose your portal</h1>
         <p className="mt-2 text-center text-sm text-slate-500">Sign in with your school account.</p>
         {!loading && isAuthenticated && user ? (

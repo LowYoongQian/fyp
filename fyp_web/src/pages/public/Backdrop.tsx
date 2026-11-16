@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { motion, useTransform, type MotionValue } from 'motion/react';
 import { BarChart3, Bell, BookOpen, CalendarDays, Clock, MapPin, Monitor, ScanFace, ShieldCheck, Smartphone, UserCheck, Wifi, type LucideIcon } from 'lucide-react';
 import { Slab } from './scenes';
@@ -34,10 +35,11 @@ function Tile({ spec, p, dim, kx, ky, ks }: { spec: TileSpec; p: MotionValue<num
   const rotateY = useTransform(p, value => -26 + Math.sin(value * 5 + spec.phase) * 26 + Math.sin(value * 2 + spec.phase * 2) * 18);
   const rotateX = useTransform(p, value => 12 + Math.cos(value * 6 + spec.phase) * 12);
   const opacity = useTransform(dim, value => (spec.fore ? value * 0.7 : value));
+  const visibility = useTransform(opacity, value => (value < 0.005 ? 'hidden' : 'visible'));   // a tile that is faded out costs nothing
   const radius = size * 0.24;
   const Icon = spec.icon;
   return (
-    <motion.div data-tile={spec.fore ? 'fore' : 'back'} data-blur={spec.blur ? spec.blur * ks : 0} className="ps-3d absolute left-1/2 top-1/2" style={{ x, y, z: spec.z, marginLeft: -size / 2, marginTop: -size / 2, opacity }}>
+    <motion.div data-tile={spec.fore ? 'fore' : 'back'} data-blur={spec.blur ? spec.blur * ks : 0} className="ps-3d absolute left-1/2 top-1/2" style={{ x, y, z: spec.z, marginLeft: -size / 2, marginTop: -size / 2, opacity, visibility }}>
       <div style={{ perspective: 700, filter: spec.blur ? `blur(${spec.blur * ks}px)` : undefined }}>
         <motion.div className="ps-3d" style={{ rotateX, rotateY }}>
           <Slab w={size} h={size} radius={radius} depth={size * 0.22} edge="#1e40af">
@@ -52,31 +54,88 @@ function Tile({ spec, p, dim, kx, ky, ks }: { spec: TileSpec; p: MotionValue<num
   );
 }
 
-/** Seeded points of light, in viewport units, so the sky is the same every time. */
-const STARS = (() => {
-  let seed = 7;
-  const next = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  return Array.from({ length: 46 }, () => `${(next() * 100).toFixed(1)}vw ${(next() * 100).toFixed(1)}vh 0 ${next() < 0.2 ? 1 : 0}px rgba(191,219,254,${(0.35 + next() * 0.5).toFixed(2)})`).join(',');
-})();
-
-/** The stage behind the story: sky, light cone, stars and the sliding grid floor. */
+/**
+ * The stage behind the story (after React Bits Grid Scan): a tunnel of grid lines receding to a point in the middle of the stage, its rings
+ * travelling toward the reader as the story is scrolled, and a glowing square frame that sweeps out of the depth every few seconds. One 2D
+ * canvas; it draws only while it is on screen and the tab is shown. With `reduce` it is drawn once, still, without the sweep.
+ */
 export function Backdrop({ p, reduce }: { p: MotionValue<number>; reduce?: boolean }) {
-  const gridY = useTransform(p, value => `${value * 2400}px`);
-  const cone = useTransform(p, value => 0.55 + 0.25 * Math.sin(value * 12));
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden" style={{ background: 'linear-gradient(180deg, #040a1c 0%, #08143a 55%, #0c2260 100%)' }}>
-      <div className="absolute left-0 top-0 h-px w-px" style={{ boxShadow: STARS }} />
-      <motion.div className="absolute -right-[12%] -top-[25%] h-[130%] w-[75%]" style={{ opacity: reduce ? 0.6 : cone, background: 'conic-gradient(from 196deg at 80% 0%, transparent 0deg, rgba(96,165,250,0.5) 20deg, rgba(37,99,235,0.18) 44deg, transparent 62deg)', filter: 'blur(22px)', mixBlendMode: 'screen' }} />
-      <div className="absolute inset-x-0 bottom-0 h-[58%]" style={{ perspective: 620, perspectiveOrigin: '50% 0%' }}>
-        <motion.div className="absolute top-0 h-[260%] w-[320%]" style={{
-          left: '-110%', transform: 'rotateX(74deg)', transformOrigin: '50% 0%', backgroundSize: '90px 90px', backgroundPositionY: reduce ? '0px' : gridY,
-          backgroundImage: 'linear-gradient(rgba(147,197,253,0.34) 1.5px, transparent 1.5px), linear-gradient(90deg, rgba(147,197,253,0.34) 1.5px, transparent 1.5px)',
-          maskImage: 'linear-gradient(to bottom, transparent 0%, #000 18%, #000 60%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, #000 18%, #000 60%, transparent 100%)',
-        }} />
-      </div>
-      <div className="absolute inset-x-0 bottom-0 h-1/3" style={{ background: 'linear-gradient(0deg, rgba(30,64,175,0.35), transparent)' }} />
-    </div>
-  );
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current, ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    let w = 0, h = 0, frame = 0, running = false, visible = true;
+    const start = performance.now();
+    const RINGS = 14, WALL_LINES = 9, DEPTH = 7, SWEEP = 3.6;   // rings in the tunnel, lines across each wall, far ring at 1/(1+DEPTH), seconds per sweep
+    const draw = (now: number) => {
+      const t = reduce ? 0 : (now - start) / 1000;
+      const cx = w / 2, cy = h * 0.47;
+      // A ring at depth z (0 near the reader, 1 far): its half width and half height on screen.
+      const ring = (z: number) => { const k = 1 / (1 + z * DEPTH); return [w * 0.62 * k, h * 0.62 * k] as const; };
+      ctx.clearRect(0, 0, w, h);
+      const sky = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(w, h) * 0.75);
+      sky.addColorStop(0, '#0a1a4a'); sky.addColorStop(0.55, '#06102e'); sky.addColorStop(1, '#030817');
+      ctx.fillStyle = sky; ctx.fillRect(0, 0, w, h);
+      ctx.lineWidth = 1;
+      // Lines along the four walls, from the near edge to the far ring.
+      const [fx, fy] = ring(1), [nx, ny] = ring(-0.12);
+      ctx.strokeStyle = 'rgba(147,197,253,0.16)';
+      ctx.beginPath();
+      for (let i = 0; i <= WALL_LINES; i += 1) {
+        const a = -1 + (2 * i) / WALL_LINES;
+        for (const [x0, y0, x1, y1] of [[a * nx, -ny, a * fx, -fy], [a * nx, ny, a * fx, fy], [-nx, a * ny, -fx, a * fy], [nx, a * ny, fx, a * fy]]) {
+          ctx.moveTo(cx + x0, cy + y0); ctx.lineTo(cx + x1, cy + y1);
+        }
+      }
+      ctx.stroke();
+      // Rings, drifting toward the reader with the scroll (and a little with time); nearer rings are brighter.
+      const drift = (p.get() * 22 + t * 0.06) % 1;
+      for (let i = 0; i < RINGS; i += 1) {
+        const z = 1 - (i + drift) / RINGS;
+        if (z <= -0.1) continue;
+        const [rx, ry] = ring(z);
+        ctx.strokeStyle = `rgba(147,197,253,${(0.05 + 0.2 * (1 - z)).toFixed(3)})`;
+        ctx.strokeRect(cx - rx, cy - ry, rx * 2, ry * 2);
+      }
+      // The sweep: a glowing frame flying out of the depth and fading as it passes the reader.
+      if (!reduce) {
+        const phase = (t % SWEEP) / SWEEP, z = 1 - phase * 1.15;
+        if (z > -0.12) {
+          const [rx, ry] = ring(z), fade = Math.min(1, phase * 5) * Math.min(1, (z + 0.12) * 4);
+          ctx.save();
+          ctx.shadowColor = 'rgba(96,165,250,0.95)'; ctx.shadowBlur = 18;
+          ctx.strokeStyle = `rgba(191,219,254,${(0.85 * fade).toFixed(3)})`; ctx.lineWidth = 2;
+          ctx.strokeRect(cx - rx, cy - ry, rx * 2, ry * 2);
+          ctx.restore();
+        }
+      }
+      // The reader's end of the tunnel fades into the stage, so the edges are soft.
+      const vignette = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.35, cx, cy, Math.max(w, h) * 0.78);
+      vignette.addColorStop(0, 'rgba(3,8,23,0)'); vignette.addColorStop(1, 'rgba(3,8,23,0.7)');
+      ctx.fillStyle = vignette; ctx.fillRect(0, 0, w, h);
+    };
+    const loop = (now: number) => { draw(now); frame = requestAnimationFrame(loop); };
+    const sync = () => {
+      const on = !reduce && visible && document.visibilityState === 'visible';
+      if (on === running) return;
+      running = on;
+      if (on) frame = requestAnimationFrame(loop); else cancelAnimationFrame(frame);
+    };
+    const layout = () => {
+      const box = canvas.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+      w = box.width; h = box.height;
+      if (w < 1 || h < 1) return;
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!running) draw(performance.now());
+    };
+    const resize = new ResizeObserver(layout); resize.observe(canvas);
+    const seen = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; sync(); }); seen.observe(canvas);
+    document.addEventListener('visibilitychange', sync);
+    layout(); sync();
+    return () => { running = false; cancelAnimationFrame(frame); resize.disconnect(); seen.disconnect(); document.removeEventListener('visibilitychange', sync); };
+  }, [p, reduce]);
+  return <canvas ref={canvasRef} aria-hidden="true" data-grid-scan className="pointer-events-none absolute inset-0 h-full w-full" style={{ background: '#040a1c' }} />;
 }
 
 /** The floating tiles. `dim` (0-1) fades them while a device is the star of the scene. */

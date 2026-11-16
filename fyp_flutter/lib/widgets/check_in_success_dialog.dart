@@ -120,13 +120,14 @@ void showCheckInSuccessDialog(
                         ),
                       ],
                       const SizedBox(height: 10),
-                      _buildDetailRow(isDark: isDark, icon: Icons.person_outline_rounded, iconColor: _green, title: 'Lecturer / Instructor', value: '$lecturerName (${tr(lecturerRole)})'),
+                      if (lecturerName.isNotEmpty)
+                        _buildDetailRow(isDark: isDark, icon: Icons.person_outline_rounded, iconColor: _green, title: 'Lecturer / Instructor', value: lecturerRole.isEmpty ? lecturerName : '$lecturerName (${tr(lecturerRole)})'),
                     ]),
                   ),
                   const SizedBox(height: 14),
                   // How it was verified
                   Row(children: [
-                    Expanded(child: _check(isDark, Icons.wifi_rounded, wifiVerified ? 'Wi-Fi verified' : 'Wi-Fi bypassed', wifiVerified)),
+                    Expanded(child: _check(isDark, Icons.wifi_rounded, wifiVerified ? 'Wi-Fi verified' : 'Wi-Fi not verified', wifiVerified)),
                     const SizedBox(width: 10),
                     Expanded(child: _check(isDark, Icons.face_retouching_natural_rounded, livenessPassed ? 'Liveness passed' : 'Liveness alert', livenessPassed)),
                   ]),

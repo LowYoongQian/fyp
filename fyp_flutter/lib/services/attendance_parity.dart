@@ -68,6 +68,25 @@ bool creditedStatus(Object? label) {
   return value == 'verified' || value == 'excused';
 }
 
+/// Verification badges are based on the recorded result, including when
+/// campus Wi-Fi verification was disabled by policy.
+({bool wifiVerified, bool livenessPassed}) checkInVerification(
+  Map<String, dynamic> response,
+) {
+  final nested = response['attendance_record'];
+  final record = nested is Map ? nested : response;
+  if (record['id'] == null) {
+    throw const FormatException(
+      'Could not confirm attendance. Refresh your attendance history.',
+    );
+  }
+  return (
+    wifiVerified: record['verify_detail'] != 'network check disabled' &&
+        (record['wifi_verified'] ?? record['network_verified']) == true,
+    livenessPassed: record['liveness_passed'] == true,
+  );
+}
+
 /// The rate to show for a course row from the server, or null for "no data yet".
 /// An older server sends no `completed_classes`; then its rate is used as it is.
 double? courseRate(Map<dynamic, dynamic> row, [Object? raw]) {

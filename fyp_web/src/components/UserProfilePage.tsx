@@ -79,11 +79,12 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
     formattedSize: string;
     extension: string;
   } | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [readingAvatar, setReadingAvatar] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const avatarFile = useRef<File | null>(null);
 
   const handleFileSelect = (file: File) => {
+    if (uploadingAvatar) return;
     setAvatarError(null);
     if (!file.type.startsWith('image/')) {
       setAvatarError('Please select a valid image file (PNG, JPG, WEBP, etc.)');
@@ -108,30 +109,38 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
       extension: ext,
     });
 
-    setUploadProgress(0);
-
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.floor(Math.random() * 20) + 15;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
-      }
-      setUploadProgress(progress);
-    }, 60);
-
+    setReadingAvatar(true);
+    setAvatarUrl('');
     avatarFile.current = file;
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const result = e.target?.result as string;
-      if (result) {
-        setAvatarUrl(result);
-      }
+    reader.onload = () => {
+      if (avatarFile.current !== file) return;
+      setAvatarUrl(String(reader.result));
+      setReadingAvatar(false);
     };
     reader.onerror = () => {
+      if (avatarFile.current !== file) return;
+      avatarFile.current = null;
+      setSelectedFile(null);
+      setReadingAvatar(false);
       setAvatarError('Failed to read image file');
     };
     reader.readAsDataURL(file);
+  };
+
+  const clearAvatarSelection = () => {
+    avatarFile.current = null;
+    setSelectedFile(null);
+    setReadingAvatar(false);
+    setAvatarUrl('');
+    setAvatarError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const closeAvatarPicker = () => {
+    if (uploadingAvatar) return;
+    clearAvatarSelection();
+    setIsEditingAvatar(false);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -267,8 +276,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
   // Avatar Upload with Feedback Spinner & Error handling
   const handleSaveAvatar = async () => {
     setAvatarError(null);
-    if (!avatarUrl.trim()) {
-      setAvatarError('Please enter a valid photo URL');
+    if (!avatarFile.current && !/^https?:\/\/\S+$/i.test(avatarUrl.trim())) {
+      setAvatarError('Please enter an HTTP or HTTPS photo URL');
       return;
     }
     setUploadingAvatar(true);
@@ -278,6 +287,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
       if (saved.startsWith('data:') && avatarFile.current) saved = (await apiService.uploadUserAvatar(avatarFile.current)).avatar_url;
       else await apiService.updateUserAvatar(saved);
       avatarFile.current = null;
+      setSelectedFile(null);
       setAvatarUrl(saved);
       setProfile((prev: any) => ({ ...prev, avatar_url: saved }));
       setIsEditingAvatar(false);
@@ -453,7 +463,10 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                   )}
                   <button
                     type="button"
-                    onClick={() => setIsEditingAvatar(true)}
+                    onClick={() => {
+                      setAvatarUrl(profile?.avatar_url || '');
+                      setIsEditingAvatar(true);
+                    }}
                     style={{
                       backgroundColor: THEME_TOKENS.accent,
                       color: '#ffffff',
@@ -915,7 +928,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setIsEditingAvatar(false)}
+                onClick={closeAvatarPicker}
+                disabled={uploadingAvatar}
                 style={{ color: THEME_TOKENS.textSecondary }}
                 className="p-1 rounded-lg hover:opacity-70 transition-opacity cursor-pointer"
                 aria-label="Close photo picker"
@@ -945,7 +959,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                 Live Photo Preview
               </span>
               <div className="relative group">
-                {avatarUrl ? (
+                {avatarUrl && (selectedFile || /^https?:\/\/\S+$/i.test(avatarUrl.trim())) ? (
                   <img
                     src={avatarUrl}
                     alt="Photo Preview"
@@ -968,10 +982,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                 {avatarUrl && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setAvatarUrl('');
-                      setAvatarError(null);
-                    }}
+                    onClick={clearAvatarSelection}
+                    disabled={uploadingAvatar}
                     className="absolute -top-1 -right-1 p-1.5 rounded-full bg-red-500 text-white shadow-md hover:bg-red-600 transition-colors cursor-pointer"
                     title="Remove selected image"
                   >
@@ -1024,7 +1036,21 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
               </div>
             </div>
 
-            {/* UNTITLED UI FILE UPLOAD PROGRESS BAR CARD */}
+            <label className="block space-y-1 text-xs font-semibold">
+              <span>Photo URL</span>
+              <input
+                type="url"
+                maxLength={2048}
+                className="uipro-input w-full"
+                value={selectedFile ? '' : avatarUrl}
+                disabled={uploadingAvatar}
+                onChange={event => {
+                  clearAvatarSelection();
+                  setAvatarUrl(event.target.value);
+                }}
+              />
+            </label>
+
             {selectedFile && (
               <div className="p-3.5 border border-slate-200 dark:border-[#333333] bg-white dark:bg-[#1c1c1c] rounded-2xl space-y-2.5 shadow-xs transition-all animate-in fade-in zoom-in-95">
                 <div className="flex items-start justify-between gap-3">
@@ -1037,26 +1063,15 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                       <div className="flex items-center gap-2 text-[11px] text-slate-400">
                         <span>{selectedFile.formattedSize}</span>
                         <span>•</span>
-                        {uploadProgress < 100 ? (
-                          <span className="flex items-center gap-1 text-[#7c3aed] font-medium">
-                            <UploadCloud className="h-3 w-3 animate-pulse" /> Uploading...
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                            <CheckCircle className="h-3 w-3" /> Complete
-                          </span>
-                        )}
+                        <span role="status">{readingAvatar ? 'Reading image…' : uploadingAvatar ? 'Uploading…' : 'Ready to save'}</span>
                       </div>
                     </div>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedFile(null);
-                      setAvatarUrl('');
-                      setUploadProgress(0);
-                    }}
+                    onClick={clearAvatarSelection}
+                    disabled={uploadingAvatar}
                     className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg hover:bg-slate-100 dark:hover:bg-[#282828] transition-colors cursor-pointer shrink-0"
                     title="Remove file"
                     aria-label="Remove file"
@@ -1065,18 +1080,6 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                   </button>
                 </div>
 
-                {/* Progress Bar Track */}
-                <div className="flex items-center gap-3 pt-0.5">
-                  <div className="flex-1 h-1.5 bg-slate-100 dark:bg-[#282828] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#7c3aed] transition-all duration-200 rounded-full"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
-                  <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 shrink-0">
-                    {uploadProgress}%
-                  </span>
-                </div>
               </div>
             )}
 
@@ -1084,7 +1087,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-[#333333]">
               <button
                 type="button"
-                onClick={() => setIsEditingAvatar(false)}
+                onClick={closeAvatarPicker}
+                disabled={uploadingAvatar}
                 style={{
                   backgroundColor: THEME_TOKENS.surfaceElevated,
                   color: THEME_TOKENS.textPrimary,
@@ -1096,7 +1100,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
               <button
                 type="button"
                 onClick={handleSaveAvatar}
-                disabled={uploadingAvatar}
+                disabled={readingAvatar || uploadingAvatar}
                 style={{
                   backgroundColor: THEME_TOKENS.accent,
                   color: '#ffffff',
