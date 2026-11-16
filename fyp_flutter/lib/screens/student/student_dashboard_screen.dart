@@ -21,6 +21,7 @@ import '../system/notifications_screen.dart';
 import '../../services/live_updates.dart';
 import '../../services/academic_calendar.dart';
 import '../../services/attendance_parity.dart';
+import '../../services/local_cache_service.dart';
 
 String? _toastSessionToken;
 final Set<String> _toastedNoticeIds = {};
@@ -193,25 +194,9 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   int getMarkedCountForDate(DateTime date) {
-    final isToday =
-        date.year == ApiConfig.now.year &&
-        date.month == ApiConfig.now.month &&
-        date.day == ApiConfig.now.day;
-
-    final matchLabel =
-        "${_monthAbbreviation(date.month)} ${date.day}, ${date.year}"
-            .toLowerCase();
-
     return widget.attendanceHistory.where((log) {
-      final logDate = log['date'].toString().toLowerCase();
       final isVerified = log['status'].toString().toLowerCase() == 'verified';
-      if (!isVerified) return false;
-
-      if (isToday) {
-        return logDate.contains('today');
-      } else {
-        return logDate.contains(matchLabel);
-      }
+      return isVerified && attendanceOnDate(log, date);
     }).length;
   }
 
@@ -235,16 +220,11 @@ class _MainScreenState extends State<MainScreen> {
 
   String getTodayCheckInTime() {
     final todayLog = widget.attendanceHistory.firstWhere((log) {
-      final logDate = log['date'].toString().toLowerCase();
       final isVerified = log['status'].toString().toLowerCase() == 'verified';
-      return logDate.contains('today') && isVerified;
+      return attendanceOnDate(log, ApiConfig.now) && isVerified;
     }, orElse: () => <String, dynamic>{});
     if (todayLog.isEmpty) return "-";
-    final dateStr = todayLog['date'].toString();
-    if (dateStr.contains(',')) {
-      return dateStr.split(',').last.trim();
-    }
-    return dateStr;
+    return attendanceTimeLabel(attendanceCampusTime(todayLog)!);
   }
 
   // Parse a "HH:mm" (24h) timetable string into a DateTime anchored to today.
@@ -255,7 +235,9 @@ class _MainScreenState extends State<MainScreen> {
     final m = int.tryParse(parts[1]);
     if (h == null || m == null) return null;
     final now = ApiConfig.now;
-    return DateTime(now.year, now.month, now.day, h, m);
+    // ApiConfig.now represents campus wall time with a UTC flag; keep the
+    // same representation instead of applying the phone timezone a second time.
+    return DateTime.utc(now.year, now.month, now.day, h, m);
   }
 
   // Format a "HH:mm" timetable string into a 12h display label e.g. "02:00 PM".
@@ -328,7 +310,16 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void didUpdateWidget(covariant MainScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.authToken != widget.authToken) _startLive();
+    if (oldWidget.authToken != widget.authToken || oldWidget.studentEmail != widget.studentEmail) {
+      activeSessions = [];
+      _notifications = [];
+      _hasLoadedSessions = false;
+      isLoadingSessions = false;
+      sessionsError = null;
+      _startLive();
+      unawaited(fetchActiveSessions(showInitialLoading: true));
+      unawaited(_fetchLiveNotifications());
+    }
   }
 
   Future<void> _refreshDashboardData({Set<String>? topics}) async {
@@ -357,18 +348,23 @@ class _MainScreenState extends State<MainScreen> {
   // Query active lectures matching this student's enrolments (backend API).
   Future<void> fetchActiveSessions({bool showInitialLoading = false}) async {
     if (isLoadingSessions) return;
+    final token = widget.authToken, server = ApiConfig.getEffectiveUrl();
+    final owner = widget.studentEmail.trim().toLowerCase();
+    final cacheKey = LocalCacheService.cacheKey('cached_active_sessions', owner, server);
+    bool current() => mounted && token == widget.authToken &&
+        owner == widget.studentEmail.trim().toLowerCase() && server == ApiConfig.getEffectiveUrl();
 
     // Read the cache once during initial entry, never during background polling.
     if (!_hasLoadedSessions) {
       try {
         final prefs = await SharedPreferences.getInstance();
-        final cachedSessionsStr = prefs.getString('cached_active_sessions');
+        final cachedSessionsStr = prefs.getString(cacheKey);
         if (cachedSessionsStr != null && cachedSessionsStr.isNotEmpty) {
           final List<dynamic> decoded = jsonDecode(cachedSessionsStr);
           final List<Map<String, dynamic>> mapped = decoded
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList();
-          if (mounted) {
+          if (current()) {
             setState(() {
               activeSessions = mapped;
               _hasLoadedSessions = true;
@@ -390,6 +386,7 @@ class _MainScreenState extends State<MainScreen> {
 
     try {
       final response = await _authedGet('/students/me/active-sessions');
+      if (!current()) return;
       if (response.statusCode != 200) {
         throw Exception('Could not load sessions (${response.statusCode}).');
       }
@@ -406,7 +403,7 @@ class _MainScreenState extends State<MainScreen> {
         });
       }
 
-      if (mounted) {
+      if (current()) {
         final hasChanged = jsonEncode(activeSessions) != jsonEncode(loadedList);
         if (hasChanged || !_hasLoadedSessions || sessionsError != null) {
           setState(() {
@@ -421,16 +418,17 @@ class _MainScreenState extends State<MainScreen> {
 
       // Save to cache
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_active_sessions', jsonEncode(loadedList));
+      if (!current()) return;
+      await prefs.setString(cacheKey, jsonEncode(loadedList));
     } catch (e) {
       debugPrint("Error loading active sessions: $e");
 
       // Only set error and show the Cloud Off block if we have absolutely no cached data
-      if (!_hasLoadedSessions && activeSessions.isEmpty && mounted) {
+      if (!_hasLoadedSessions && activeSessions.isEmpty && current()) {
         setState(() => sessionsError = _friendlyError(e));
       }
     } finally {
-      if (mounted && isLoadingSessions) {
+      if (current() && isLoadingSessions) {
         setState(() => isLoadingSessions = false);
       }
     }
@@ -1064,7 +1062,7 @@ class _MainScreenState extends State<MainScreen> {
                 final endTimeStr = cls['endTime'].toString();
                 final endDt = _parseTodayTime(endTimeStr);
                 if (endDt == null) return true;
-                return !now.isAfter(endDt);
+                return now.isBefore(endDt);
               }).toList();
 
               remainingClasses.sort(
@@ -1215,7 +1213,7 @@ class _MainScreenState extends State<MainScreen> {
                     widget.attendanceHistory.any(
                       (record) =>
                           record['courseCode'] == courseCode &&
-                          record['date'].toString().contains('Today') &&
+                          attendanceOnDate(record, now) &&
                           record['status'] == 'Verified',
                     );
 
@@ -1225,7 +1223,7 @@ class _MainScreenState extends State<MainScreen> {
 
                 if (startDt != null && endDt != null) {
                   classStarted = !now.isBefore(startDt);
-                  classEnded = now.isAfter(endDt);
+                  classEnded = !now.isBefore(endDt);
 
                   if (!classStarted) {
                     final diff = startDt.difference(now);
@@ -1570,9 +1568,10 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _fetchLiveNotifications({bool showToast = true}) async {
+    final token = widget.authToken, server = ApiConfig.getEffectiveUrl();
     try {
       final response = await _authedGet('/notifications');
-      if (!mounted || response.statusCode != 200) return;
+      if (!mounted || token != widget.authToken || server != ApiConfig.getEffectiveUrl() || response.statusCode != 200) return;
       final items = jsonDecode(response.body) as List<dynamic>;
       final notifications = items
           .map((item) => Map<String, dynamic>.from(item as Map))
@@ -2809,7 +2808,7 @@ class _LiveCountdownState extends State<_LiveCountdown> {
     final minute = int.tryParse(parts[1]);
     if (hour == null || minute == null) return null;
     final now = ApiConfig.now;
-    return DateTime(now.year, now.month, now.day, hour, minute);
+    return DateTime.utc(now.year, now.month, now.day, hour, minute);
   }
 
   String _duration(Duration value) {

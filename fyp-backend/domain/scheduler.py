@@ -300,11 +300,15 @@ def pick_slot_for_new(db: Session, course_id: str, lecturer_id, role: str) -> di
     already taken by existing class_meetings rows. Raises ValueError if full."""
     occupied_rooms, occupied_lecturers, occupied_courses = set(), set(), set()
     for r in db.query(ClassMeeting).all():
-        t = (r.start, r.end)
-        occupied_rooms.add((r.day, t, r.room))
-        if r.lecturer_id:
-            occupied_lecturers.add((r.day, t, r.lecturer_id))
-        occupied_courses.add((r.day, t, r.course_id))
+        # A manually edited lesson need not use a default grid interval.
+        # Reserve each candidate interval it overlaps; touching remains allowed.
+        for t in TIMES:
+            if _hhmm_to_min(r.start) >= _hhmm_to_min(t[1]) or _hhmm_to_min(t[0]) >= _hhmm_to_min(r.end):
+                continue
+            occupied_rooms.add((r.day, t, r.room))
+            if r.lecturer_id:
+                occupied_lecturers.add((r.day, t, r.lecturer_id))
+            occupied_courses.add((r.day, t, r.course_id))
     slots = _all_slots()
     random.Random(42).shuffle(slots)
     allocated = _greedy_allocate(

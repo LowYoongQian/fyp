@@ -1,0 +1,44 @@
+# Dedicated local synthetic project. Never link this directory to a cloud project.
+project_id = "fyp-qa-synthetic"
+
+[api]
+enabled = true
+port = 56421
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 56422
+shadow_port = 56420
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[db.seed]
+enabled = false
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = false
+
+[local_smtp]
+enabled = true
+port = 56424
+
+[storage]
+enabled = true
+file_size_limit = "10MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5200"
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false

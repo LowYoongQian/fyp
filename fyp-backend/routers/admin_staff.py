@@ -1,6 +1,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from db.database import get_db
@@ -101,9 +102,10 @@ def create_staff(
 ):
     # Enforce email domain
     require_email_domain(body.email, "@staff.school.edu", "Staff")
+    email = body.email.strip().lower()
 
     # Check if email exists
-    ensure_unique(db, User, User.email, body.email, detail="Email already registered")
+    ensure_unique(db, User, func.lower(User.email), email, detail="Email already registered")
     
     # Check if staff code exists
     ensure_unique(db, Lecturer, Lecturer.staff_id, body.staff_id, detail="Staff ID already exists")
@@ -111,7 +113,7 @@ def create_staff(
     # Create credentials
     hashed = hash_password(body.password)
     user_role = "admin" if body.role.lower() == "admin" else "lecturer"
-    user = User(email=body.email, password_hash=hashed, role=user_role)
+    user = User(email=email, password_hash=hashed, role=user_role)
     db.add(user)
     db.flush()
     
@@ -138,12 +140,13 @@ def update_staff(
         
     changed = []
 
-    if body.email is not None and body.email != user.email:
+    if body.email is not None and body.email.strip().lower() != user.email.lower():
         require_email_domain(body.email, "@staff.school.edu", "Staff")
         # Check uniqueness
-        ensure_unique(db, User, User.email, body.email, detail="Email already registered")
-        changed.append(f"email {user.email} -> {body.email}")
-        user.email = body.email
+        new_email = body.email.strip().lower()
+        ensure_unique(db, User, func.lower(User.email), new_email, exclude_id=user.id, detail="Email already registered")
+        changed.append(f"email {user.email} -> {new_email}")
+        user.email = new_email
 
     if body.password is not None and body.password.strip() != "":
         user.password_hash = hash_password(body.password)

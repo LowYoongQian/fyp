@@ -29,22 +29,35 @@ class LocalCacheService {
     final dbPath = p.join(await getDatabasesPath(), 'attendance_cache.db');
     _db = await openDatabase(
       dbPath,
-      version: 3,
+      version: 5,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) await _upgradeQueue(db);
         if (oldVersion < 3) await db.execute("ALTER TABLE pending_checkins ADD COLUMN class_label TEXT NOT NULL DEFAULT ''");
+        if (oldVersion < 4) {
+          await db.execute("ALTER TABLE attendance_cache ADD COLUMN owner TEXT NOT NULL DEFAULT ''");
+          await db.execute("ALTER TABLE attendance_cache ADD COLUMN server TEXT NOT NULL DEFAULT ''");
+          // Old cache rows have no trustworthy account; server history is unaffected.
+          await db.delete('attendance_cache');
+        }
+        if (oldVersion < 5) {
+          // Older caches cannot distinguish manual present from camera evidence.
+          await db.execute('ALTER TABLE attendance_cache ADD COLUMN face_verified INTEGER NOT NULL DEFAULT 0');
+        }
       },
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE attendance_cache (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner         TEXT NOT NULL,
+            server        TEXT NOT NULL,
             course_code   TEXT NOT NULL,
             course_name   TEXT NOT NULL,
             class_group   TEXT,
             status        TEXT NOT NULL,
             marked_at     TEXT NOT NULL,
             network_verified INTEGER,
-            liveness_passed  INTEGER
+            liveness_passed  INTEGER,
+            face_verified INTEGER NOT NULL DEFAULT 0
           )
         ''');
         await db.execute('''
@@ -64,12 +77,20 @@ class LocalCacheService {
 
   // ── Attendance history cache ──────────────────────────────────────────────
 
-  static Future<void> saveAttendanceCache(List<Map<String, dynamic>> records) async {
-    if (kIsWeb) return;
+  static String cacheKey(String name, String owner, String server) =>
+      '$name:${jsonEncode([server, owner])}';
+
+  static Future<void> saveAttendanceCache(List<Map<String, dynamic>> records, {
+    required String owner, required String server,
+  }) async {
+    if (kIsWeb || owner.isEmpty || server.isEmpty) return;
     final db = await _open();
-    await db.delete('attendance_cache');
+    await db.transaction((txn) async {
+    await txn.delete('attendance_cache', where: 'owner = ? AND server = ?', whereArgs: [owner, server]);
     for (final r in records) {
-      await db.insert('attendance_cache', {
+      await txn.insert('attendance_cache', {
+        'owner': owner,
+        'server': server,
         'course_code':      r['course_code'] ?? '',
         'course_name':      r['course_name'] ?? '',
         'class_group':      r['class_group'] ?? '',
@@ -77,14 +98,19 @@ class LocalCacheService {
         'marked_at':        r['marked_at'] ?? '',
         'network_verified': (r['network_verified'] == true) ? 1 : 0,
         'liveness_passed':  (r['liveness_passed'] == true) ? 1 : 0,
+        'face_verified': (r['face_verified'] == true) ? 1 : 0,
       });
     }
+    });
   }
 
-  static Future<List<Map<String, dynamic>>> loadAttendanceCache() async {
-    if (kIsWeb) return [];
+  static Future<List<Map<String, dynamic>>> loadAttendanceCache({
+    required String owner, required String server,
+  }) async {
+    if (kIsWeb || owner.isEmpty || server.isEmpty) return [];
     final db = await _open();
-    final rows = await db.query('attendance_cache', orderBy: 'marked_at DESC');
+    final rows = await db.query('attendance_cache', where: 'owner = ? AND server = ?',
+        whereArgs: [owner, server], orderBy: 'marked_at DESC');
     return rows.map((r) => {
       'course_code':      r['course_code'],
       'course_name':      r['course_name'],
@@ -93,6 +119,7 @@ class LocalCacheService {
       'marked_at':        r['marked_at'],
       'network_verified': r['network_verified'] == 1,
       'liveness_passed':  r['liveness_passed'] == 1,
+      'face_verified': r['face_verified'] == 1,
     }).toList();
   }
 

@@ -122,11 +122,11 @@ opencode.json
 /scripts
 /tests
 
-# Local backend tests and their fixtures, scripts, reports and screenshots.
+# Default-ignore local backend test content; exact formal sources are allowed below.
 /fyp-backend/tests/*
 /fyp-backend/pytest.ini
 
-# Local web and Flutter tests (kept on disk, not versioned).
+# Default-ignore local web/Flutter tests; see the exact formal allowlist below.
 /fyp_web/tests/
 /fyp_flutter/test/
 
@@ -155,3 +155,49 @@ test_*.py
 /fyp-backend/ml/training/
 /fyp-backend/scratch/
 /review-workflow/
+
+# Exact formal QA source/config allowlist; local evidence remains ignored.
+/qa/*
+!/qa/common.py
+!/qa/run.py
+!/qa/browser.cjs
+!/qa/account_fixture.py
+!/qa/session_api.py
+!/qa/seed_session.py
+!/qa/seed_login.py
+!/qa/toggle-guest-network.ps1
+!/qa/README.md
+!/qa/package.json
+!/qa/package-lock.json
+!/qa/supabase/
+/qa/supabase/*
+!/qa/supabase/config.toml
+!/fyp-backend/tests/conftest.py
+!/fyp-backend/tests/test_postgres_routes.py
+!/fyp-backend/tests/test_medical_leave_review.py
+!/fyp-backend/tests/test_offline_recovery.py
+!/fyp-backend/tests/test_auth_access_regression.py
+!/fyp-backend/tests/test_account_endpoints.py
+!/fyp-backend/tests/test_invalid_class_time.py
+!/fyp-backend/tests/test_dashboard_sessions.py
+!/fyp-backend/tests/test_alembic_isolated.py
+!/fyp-backend/tests/test_mc_acceptance_local.py
+!/fyp-backend/tests/test_feedback_local.py
+!/fyp-backend/tests/login_widget_test.dart
+!/fyp-backend/tests/offline_sync_test.dart
+!/fyp-backend/tests/portal_background_sync_test.dart
+!/fyp-backend/tests/dashboard_cache_isolation_test.dart
+!/fyp-backend/tests/attendance_localization_test.dart
+!/fyp-backend/tests/cache_regression.cjs
+!/fyp-backend/tests/mc_workflow.cjs
+!/fyp-backend/tests/feedback_workflow.cjs
+!/fyp-backend/tests/phase2_cross_platform.cjs
+!/fyp_flutter/integration_test/
+/fyp_flutter/integration_test/*
+!/fyp_flutter/integration_test/qa_login_test.dart
+!/fyp_flutter/integration_test/qa_account_isolation_test.dart
+!/fyp_flutter/integration_test/qa_cache_upgrade_test.dart
+!/fyp_flutter/integration_test/qa_cache_v4_upgrade_test.dart
+!/fyp_flutter/integration_test/qa_history_mapping_test.dart
+!/fyp_flutter/integration_test/qa_offline_account_test.dart
+!/fyp_flutter/integration_test/qa_attendance_test.dart

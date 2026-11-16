@@ -377,7 +377,9 @@ def get_analytics_overview(
             r.student_id for r in records_by_session.get(session.id, [])
             if r.student_id in eligible and r.status in ("present", "leave")
         }
-        return len(attended), len(eligible)
+        hours = session_hours(session.opened_at, session.closed_at,
+                              scheduled_start=session.scheduled_start, scheduled_end=session.scheduled_end)
+        return len(attended) * hours, len(eligible) * hours
 
     attended_total = eligible_total = 0
     weekly = defaultdict(lambda: [0, 0, 0, 0])
@@ -430,8 +432,10 @@ def get_analytics_overview(
         for session in group_sessions:
             attended, eligible = session_stats(session)
             if (session.class_group or "All") == "All":
-                present += len({r.student_id for r in records_by_session.get(session.id, []) if r.student_id in members and r.status in ("present", "leave")})
-                possible += len(members)
+                hours = session_hours(session.opened_at, session.closed_at,
+                                      scheduled_start=session.scheduled_start, scheduled_end=session.scheduled_end)
+                present += len({r.student_id for r in records_by_session.get(session.id, []) if r.student_id in members and r.status in ("present", "leave")}) * hours
+                possible += len(members) * hours
             else:
                 present += attended
                 possible += eligible

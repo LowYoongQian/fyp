@@ -297,6 +297,12 @@ def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depend
             "marked_at": iso_utc(ar.marked_at),
             "network_verified": ar.network_verified,
             "liveness_passed": ar.liveness_passed,
+            # A manual present/MC is attendance credit, not biometric evidence.
+            "face_verified": (
+                ar.status == "present" and ar.method == "face+wifi"
+                and ar.liveness_passed is True and ar.confidence_score is not None
+                and ar.liveness_challenge_ms is not None
+            ),
             "verify_detail": ar.verify_detail,
         }
         for ar, s, c in rows

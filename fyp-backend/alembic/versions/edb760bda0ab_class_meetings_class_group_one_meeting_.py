@@ -48,47 +48,49 @@ def upgrade() -> None:
 
 
 def _split_tutorial_rows_by_group() -> None:
-    """Done in Python, not SQL: the added rows need a clash-free slot, and choosing
-    one is application logic that already exists as pick_slot_for_new."""
-    from sqlalchemy.orm import Session
-
-    from db.models import ClassMeeting
-    from domain.scheduler import groups_for_course, meeting_key_for, pick_slot_for_new
-
+    """Use historical tables, never ORM fields or schedulers from later revisions."""
+    import random
+    from uuid import uuid4
     bind = op.get_bind()
-    session = Session(bind=bind)
-    try:
-        rows = session.query(ClassMeeting).filter(
-            ClassMeeting.role.in_(["Tutor", "Practical"])
-        ).order_by(ClassMeeting.id).all()
+    metadata = sa.MetaData()
+    meetings = sa.Table("class_meetings", metadata, autoload_with=bind)
+    enrolments = sa.Table("enrolments", metadata, autoload_with=bind)
+    occupied = list(bind.execute(sa.select(meetings)).mappings())
+    rows = sorted((row for row in occupied if row["role"] in ("Tutor", "Practical")), key=lambda row: str(row["id"]))
+    # Freeze the original deterministic allocator with this migration.
+    slots = [dict(day=day, start=f"{hour:02d}:00", end=f"{hour+2:02d}:00", room=room)
+             for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+             for hour in range(8, 22, 2)
+             for room in ("Theatre 1", "Theatre 2", "Lab 1", "Lab 2", "Lab 3", "Seminar Room 1", "Seminar Room 2")]
+    random.Random(42).shuffle(slots)
+    def minute(value):
+        hour, minutes = value.split(":")
+        return int(hour) * 60 + int(minutes)
 
-        for row in rows:
-            groups = groups_for_course(session, row.course_id)
-            if not groups:
-                # No enrolments means no group can be named, and the CHECK below would
-                # reject the row. Loud failure beats inventing a group.
-                raise RuntimeError(
-                    f"class_meetings row {row.id} ({row.role}) belongs to course "
-                    f"{row.course_id}, which has no enrolments — cannot assign a group."
-                )
-
-            first, rest = groups[0], groups[1:]
-            row.class_group = first
-            row.meeting_key = meeting_key_for(row.role, row.course_id, row.assignment_id, first)
-            session.flush()
-
-            for group in rest:
-                slot = pick_slot_for_new(session, row.course_id, row.lecturer_id, row.role)
-                session.add(ClassMeeting(
-                    meeting_key=meeting_key_for(row.role, row.course_id, row.assignment_id, group),
-                    course_id=row.course_id, assignment_id=row.assignment_id,
-                    role=row.role, lecturer_id=row.lecturer_id, class_group=group,
-                    day=slot["day"], start=slot["start"], end=slot["end"], room=slot["room"],
-                ))
-                session.flush()
-        session.commit()
-    finally:
-        session.close()
+    for row in rows:
+        groups = sorted({group for group in bind.scalars(sa.select(enrolments.c.class_group).where(
+            enrolments.c.course_id == row["course_id"])) if group})
+        if not groups:
+            raise RuntimeError(f"class_meetings row {row['id']} ({row['role']}) belongs to course "
+                               f"{row['course_id']}, which has no enrolments — cannot assign a group.")
+        def key(group):
+            return f"{row['role']}-{row['assignment_id']}-{group}"
+        bind.execute(meetings.update().where(meetings.c.id == row["id"]).values(
+            class_group=groups[0], meeting_key=key(groups[0])))
+        for group in groups[1:]:
+            slot = next((slot for slot in slots if not any(
+                other["day"] == slot["day"]
+                and minute(other["start"]) < minute(slot["end"])
+                and minute(slot["start"]) < minute(other["end"])
+                and (other["room"] == slot["room"] or other["course_id"] == row["course_id"]
+                     or (row["lecturer_id"] and other["lecturer_id"] == row["lecturer_id"]))
+                for other in occupied)), None)
+            if slot is None:
+                raise ValueError(f"No clash-free slot available for {row['role']} (course {row['course_id']}).")
+            new = dict(id=uuid4(), meeting_key=key(group), course_id=row["course_id"], assignment_id=row["assignment_id"],
+                       role=row["role"], lecturer_id=row["lecturer_id"], class_group=group, **slot)
+            bind.execute(meetings.insert().values(**new))
+            occupied.append(new)
 
 
 def downgrade() -> None:

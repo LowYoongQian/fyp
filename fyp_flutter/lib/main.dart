@@ -473,6 +473,7 @@ class AppRoot extends StatefulWidget {
 
 class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   String _studentUserId = "";
+  int _studentGeneration = 0;
   Timer? _offlineTimer;
   bool _checkingSessions = false;
   bool _offlineBusy = false;
@@ -482,6 +483,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   String studentAuthToken = "";
   String staffAuthToken = "";
   bool isSyncing = false;
+  bool _initializingApp = true;
   // The portal being signed in to ('student' / 'staff'), so its sign-in shows that portal's skeleton even when the
   // other portal is already signed in (the old check hid the skeleton as soon as either account was signed in).
   String? _signingInPortal;
@@ -500,7 +502,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   bool _portalBusy(String portal) =>
       _signingInPortal == portal ||
       (_signingInPortal == null &&
-          isSyncing &&
+          _initializingApp &&
           !isStudentLoggedIn &&
           !isStaffLoggedIn);
   bool isDatabaseOffline = false;
@@ -777,7 +779,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       await fetchPublicAnnouncements();
     } catch (_) {}
 
-    setState(() => isSyncing = false);
+    setState(() {
+      isSyncing = false;
+      _initializingApp = false;
+    });
   }
 
   Future<void> syncClock() async {
@@ -832,21 +837,24 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   final Map<String, Future<http.Response>> _pendingApiGets = {};
 
   Future<http.Response> _apiGet(String path, BuildContext context) {
-    final existing = _pendingApiGets[path];
-    if (existing != null) return existing;
     final apiUrl = ApiConfig.getEffectiveUrl();
+    final token = studentAuthToken;
+    final key = jsonEncode([_studentGeneration, apiUrl, token, path]);
+    final existing = _pendingApiGets[key];
+    if (existing != null) return existing;
     final request = http
         .get(
           Uri.parse('$apiUrl$path'),
           headers: {
             'Content-Type': 'application/json',
-            if (studentAuthToken.isNotEmpty)
-              'Authorization': 'Bearer $studentAuthToken',
+            if (token.isNotEmpty) 'Authorization': 'Bearer $token',
           },
         )
         .timeout(const Duration(seconds: 12))
-        .whenComplete(() => _pendingApiGets.remove(path));
-    _pendingApiGets[path] = request;
+        .whenComplete(() {
+          _pendingApiGets.remove(key);
+        });
+    _pendingApiGets[key] = request;
     return request;
   }
 
@@ -957,6 +965,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       // Save state
       setState(() {
         if (portalType == 'student') {
+          _studentGeneration++;
+          _pendingApiGets.clear();
+          attendanceHistory = [];
+          studentSchedule = [];
+          studentAnnouncements = [];
+          isCheckedInToday = false;
+          isDatabaseOffline = false;
           _studentUserId = authData['user_id']?.toString() ?? '';
           _offlineRows = [];
           studentAuthToken = token;
@@ -1000,6 +1015,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         if (authData['recovery_email_verified'] != true) {
           await _setupRecoveryEmail(context, token);
         }
+        if (!mounted || attempt != _loginAttempt || token != studentAuthToken) return;
         unawaited(syncData(context));
         unawaited(refreshStudentFaceStatus().catchError((Object _) {}));
       }
@@ -1135,11 +1151,17 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   Future<List<Map<String, dynamic>>> refreshStudentTimetable() async {
-    if (studentAuthToken.isEmpty) return studentSchedule;
+    final owner = _studentUserId, token = studentAuthToken,
+        server = ApiConfig.getEffectiveUrl();
+    final generation = _studentGeneration;
+    bool current() => mounted && isStudentLoggedIn &&
+        owner == _studentUserId && token == studentAuthToken &&
+        server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
+    if (token.isEmpty || owner.isEmpty || !current()) return studentSchedule;
     try {
       // A unique query and explicit no-cache headers prevent an old empty timetable
       // from being reused by the device, CDN, or reverse proxy after an admin edit.
-      final apiUrl = ApiConfig.getEffectiveUrl();
+      final apiUrl = server;
       final refreshKey = DateTime.now().millisecondsSinceEpoch;
       final response = await http
           .get(
@@ -1148,20 +1170,21 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               'Content-Type': 'application/json',
               'Cache-Control': 'no-cache, no-store',
               'Pragma': 'no-cache',
-              'Authorization': 'Bearer $studentAuthToken',
+              'Authorization': 'Bearer $token',
             },
           )
           .timeout(const Duration(seconds: 12));
-      if (response.statusCode != 200) return studentSchedule;
+      if (!current() || response.statusCode != 200) return studentSchedule;
 
       final courses = jsonDecode(response.body) as List<dynamic>;
       final schedule = _mapStudentSchedule(courses);
-      if (!mounted) return schedule;
+      if (!current()) return studentSchedule;
 
       setState(() => studentSchedule = schedule);
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_student_schedule', jsonEncode(schedule));
-      return schedule;
+      if (!current()) return studentSchedule;
+      await prefs.setString(LocalCacheService.cacheKey('cached_student_schedule', owner, server), jsonEncode(schedule));
+      return current() ? schedule : studentSchedule;
     } catch (e) {
       debugPrint('Timetable refresh failed: $e');
       return studentSchedule;
@@ -1170,74 +1193,42 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
   // Load attendance history + today's check-in status + course timetable from backend.
   Future<void> refreshStudentAttendance() async {
-    final token = studentAuthToken;
-    if (token.isEmpty) return;
+    final owner = _studentUserId, token = studentAuthToken,
+        server = ApiConfig.getEffectiveUrl();
+    final generation = _studentGeneration;
+    bool current() => mounted && isStudentLoggedIn &&
+        owner == _studentUserId && token == studentAuthToken &&
+        server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
+    if (token.isEmpty || owner.isEmpty || !current()) return;
     final response = await _apiGet('/students/me/attendance', context);
-    if (!mounted || studentAuthToken != token || response.statusCode != 200) {
+    if (!current() || response.statusCode != 200) {
       return;
     }
     final rows = jsonDecode(response.body) as List;
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    bool checkedIn = false;
-    final history = rows.map((r) {
-      final marked = DateTime.tryParse(r['marked_at'] ?? '')?.toLocal();
-      final status = r['status'] ?? 'present';
-      final detail = r['verify_detail'] as String?;
-      String label = 'Unknown';
-      if (status == 'absent' && detail != null && detail.isNotEmpty) {
-        label = detail;
-      } else if (marked != null) {
-        final today =
-            marked.year == ApiConfig.now.year &&
-            marked.month == ApiConfig.now.month &&
-            marked.day == ApiConfig.now.day;
-        final hour = marked.hour % 12 == 0 ? 12 : marked.hour % 12;
-        final time =
-            '$hour:${marked.minute.toString().padLeft(2, '0')} ${marked.hour >= 12 ? 'PM' : 'AM'}';
-        label = today
-            ? tr('Today, {time}', {'time': time})
-            : '${tr(months[marked.month - 1])} ${marked.day}, ${marked.year}, $time';
-        if (today) checkedIn = true;
-      }
-      return <String, dynamic>{
-        'courseCode': r['course_code'] ?? 'Unknown',
-        'courseName': r['course_name'] ?? 'Unknown',
-        'group': r['class_group'] ?? '-',
-        'date': label,
-        'status': historyStatus(status),
-        'wifiVerified': r['network_verified'] ?? false,
-        'faceVerified': r['liveness_passed'] == true,
-      };
-    }).toList();
+    final history = rows.map((r) => attendanceHistoryRow(r as Map, ApiConfig.now)).toList();
+    final checkedIn = history.any((r) => r['status'] == 'Verified' && attendanceOnDate(r, ApiConfig.now));
     setState(() {
       attendanceHistory = history;
       isCheckedInToday = checkedIn;
     });
-    if (studentAuthToken == token) {
+    if (current()) {
       await LocalCacheService.saveAttendanceCache(
         rows.map((row) => Map<String, dynamic>.from(row)).toList(),
+        owner: owner, server: server,
       );
     }
   }
 
   Future<void> refreshStudentAnnouncements() async {
-    final token = studentAuthToken;
-    if (token.isEmpty) return;
+    final owner = _studentUserId, token = studentAuthToken,
+        server = ApiConfig.getEffectiveUrl();
+    final generation = _studentGeneration;
+    bool current() => mounted && isStudentLoggedIn &&
+        owner == _studentUserId && token == studentAuthToken &&
+        server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
+    if (token.isEmpty || owner.isEmpty || !current()) return;
     final response = await _apiGet('/students/me/announcements', context);
-    if (!mounted || studentAuthToken != token || response.statusCode != 200) {
+    if (!current() || response.statusCode != 200) {
       return;
     }
     final notices = (jsonDecode(response.body) as List)
@@ -1245,78 +1236,42 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         .toList();
     setState(() => studentAnnouncements = notices);
     final prefs = await SharedPreferences.getInstance();
-    if (studentAuthToken == token) {
+    if (current()) {
       await prefs.setString(
-        'cached_student_announcements',
+        LocalCacheService.cacheKey('cached_student_announcements', owner, server),
         jsonEncode(notices),
       );
     }
   }
 
   Future<void> syncData(BuildContext context) async {
+    final owner = _studentUserId, token = studentAuthToken,
+        server = ApiConfig.getEffectiveUrl();
+    final generation = _studentGeneration;
+    bool current() => mounted && isStudentLoggedIn &&
+        owner == _studentUserId && token == studentAuthToken &&
+        server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
+    if (token.isEmpty || owner.isEmpty || !current()) return;
     await _syncOffline();
+    if (!current()) return;
     final prefs = await SharedPreferences.getInstance();
 
     // 1. Try loading cached data first for instant user rendering
-    final cachedHistory = await LocalCacheService.loadAttendanceCache();
-    final cachedScheduleStr = prefs.getString('cached_student_schedule');
+    final cachedHistory = await LocalCacheService.loadAttendanceCache(owner: owner, server: server);
+    final cachedScheduleStr = prefs.getString(LocalCacheService.cacheKey('cached_student_schedule', owner, server));
     final cachedAnnouncementsStr = prefs.getString(
-      'cached_student_announcements',
+      LocalCacheService.cacheKey('cached_student_announcements', owner, server),
     );
 
+    if (!current()) return;
     bool hasCachedData = false;
 
     if (cachedHistory.isNotEmpty ||
         cachedScheduleStr != null ||
         cachedAnnouncementsStr != null) {
       hasCachedData = true;
-      final months = const [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
-      ];
-
-      // Load cached history
-      final List<Map<String, dynamic>> mappedHistory = [];
-      bool checkedIn = false;
-      for (final r in cachedHistory) {
-        final markedRaw = r['marked_at'] as String?;
-        final markedAt = markedRaw != null
-            ? DateTime.tryParse(markedRaw)?.toLocal()
-            : null;
-        final status = (r['status'] ?? 'present') as String;
-        String dateLabel = 'Unknown';
-        if (markedAt != null) {
-          final isToday =
-              markedAt.year == ApiConfig.now.year &&
-              markedAt.month == ApiConfig.now.month &&
-              markedAt.day == ApiConfig.now.day;
-          final timeStr =
-              "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
-          dateLabel = isToday
-              ? tr('Today, {time}', {'time': timeStr})
-              : "${tr(months[markedAt.month - 1])} ${markedAt.day}, ${markedAt.year}, $timeStr";
-          if (isToday) checkedIn = true;
-        }
-        mappedHistory.add({
-          'courseCode': r['course_code'] ?? 'Unknown',
-          'courseName': r['course_name'] ?? 'Unknown',
-          'group': r['class_group'] ?? '-',
-          'date': dateLabel,
-          'status': historyStatus(status),
-          'wifiVerified': r['network_verified'] ?? false,
-          'faceVerified': true,
-        });
-      }
+      final mappedHistory = cachedHistory.map((r) => attendanceHistoryRow(r, ApiConfig.now)).toList();
+      final checkedIn = mappedHistory.any((r) => r['status'] == 'Verified' && attendanceOnDate(r, ApiConfig.now));
 
       // Load cached schedule/timetable
       List<Map<String, dynamic>> mappedSchedule = [];
@@ -1348,13 +1303,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       });
     }
 
-    if (studentAuthToken.isEmpty) {
-      debugPrint("Skipping syncData: User is not authenticated.");
-      if (mounted) {
-        setState(() => isSyncing = false);
-      }
-      return;
-    }
+    if (!current()) return;
 
     // Only show full screen overlay if there is absolutely no cached data
     if (!hasCachedData) {
@@ -1367,11 +1316,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         try {
           final serverTimeRes = await http
               .get(
-                Uri.parse('${ApiConfig.getEffectiveUrl()}/auth/server-time'),
+                Uri.parse('$server/auth/server-time'),
                 headers: {'Content-Type': 'application/json'},
               )
               .timeout(const Duration(seconds: 4));
-          if (serverTimeRes.statusCode == 200) {
+          if (current() && serverTimeRes.statusCode == 200) {
             final serverTimeStr = jsonDecode(serverTimeRes.body)['server_time'];
             final serverUtc = DateTime.parse(serverTimeStr).toUtc();
             final localUtc = DateTime.now().toUtc();
@@ -1392,6 +1341,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         _apiGet('/students/me/courses', context),
         _apiGet('/students/me/announcements', context),
       ]);
+      if (!current()) return;
       final attendanceRes = responses[0];
       final coursesRes = responses[1];
       final announcementsRes = responses[2];
@@ -1429,60 +1379,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
       final List<dynamic> rows =
           jsonDecode(attendanceRes.body) as List<dynamic>;
-      final List<Map<String, dynamic>> history = [];
-      bool checkedIn = false;
-      final months = const [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
-      ];
-
-      for (final r in rows) {
-        final markedRaw = r['marked_at'] as String?;
-        final markedAt = markedRaw != null
-            ? DateTime.tryParse(markedRaw)?.toLocal()
-            : null;
-        final status = (r['status'] ?? 'present') as String;
-        final verifyDetail = r['verify_detail'] as String?;
-
-        String dateLabel = 'Unknown';
-        if (status == 'absent' &&
-            verifyDetail != null &&
-            verifyDetail.isNotEmpty) {
-          dateLabel = verifyDetail;
-        } else if (markedAt != null) {
-          final isToday =
-              markedAt.year == ApiConfig.now.year &&
-              markedAt.month == ApiConfig.now.month &&
-              markedAt.day == ApiConfig.now.day;
-          final timeStr =
-              "${markedAt.hour}:${markedAt.minute.toString().padLeft(2, '0')} ${markedAt.hour >= 12 ? 'PM' : 'AM'}";
-          dateLabel = isToday
-              ? tr('Today, {time}', {'time': timeStr})
-              : "${tr(months[markedAt.month - 1])} ${markedAt.day}, ${markedAt.year}, $timeStr";
-          if (isToday) checkedIn = true;
-        }
-
-        final netVerified = (r['network_verified'] ?? false) as bool;
-        history.add({
-          'courseCode': r['course_code'] ?? 'Unknown',
-          'courseName': r['course_name'] ?? 'Unknown',
-          'group': r['class_group'] ?? '-',
-          'date': dateLabel,
-          'status': historyStatus(status),
-          'wifiVerified': netVerified,
-          'faceVerified': true,
-        });
-      }
+      final history = rows.map((r) => attendanceHistoryRow(r as Map, ApiConfig.now)).toList();
+      final checkedIn = history.any((r) => r['status'] == 'Verified' && attendanceOnDate(r, ApiConfig.now));
 
       final List<dynamic> rawCoursesList =
           jsonDecode(coursesRes.body) as List<dynamic>;
@@ -1524,16 +1422,18 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
       // Persist to local cache
       final rawRecords = rows.cast<Map<String, dynamic>>();
-      await LocalCacheService.saveAttendanceCache(rawRecords);
+      await LocalCacheService.saveAttendanceCache(rawRecords, owner: owner, server: server);
+      if (!current()) return;
       await prefs.setString(
-        'cached_student_schedule',
+        LocalCacheService.cacheKey('cached_student_schedule', owner, server),
         jsonEncode(loadedSchedule),
       );
       await prefs.setString(
-        'cached_student_announcements',
+        LocalCacheService.cacheKey('cached_student_announcements', owner, server),
         jsonEncode(loadedAnnouncements),
       );
     } catch (e) {
+      if (!current()) return;
       final msg = e.toString();
       debugPrint("Attendance sync failed: $e");
 
@@ -1553,7 +1453,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         }
       }
     } finally {
-      setState(() => isSyncing = false);
+      if (current()) setState(() => isSyncing = false);
     }
   }
 
@@ -1578,10 +1478,12 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final owner = _studentUserId,
         token = studentAuthToken,
         server = ApiConfig.getEffectiveUrl();
+    final generation = _studentGeneration;
     final requestId = newCheckInId();
     final capturedAt = DateTime.now().toUtc();
     bool current() =>
-        mounted && owner == _studentUserId && token == studentAuthToken;
+        mounted && isStudentLoggedIn && owner == _studentUserId && token == studentAuthToken &&
+        server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
     setState(() => isSyncing = true);
     try {
       // 1. Collect live network facts for location corroboration.
@@ -1685,7 +1587,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         if (response.statusCode == 400 &&
             error.toLowerCase().contains('already registered')) {
           await syncData(context);
-          if (!mounted) return;
+          if (!current()) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(tr('You\'re already checked in for this class.')),
@@ -1722,7 +1624,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       } catch (_) {}
       await syncData(context);
 
-      if (!mounted) return;
+      if (!current()) return;
 
       final bool wifiVerified =
           resJson['wifi_verified'] == true ||
@@ -1754,7 +1656,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         );
       }
     } finally {
-      if (mounted) setState(() => isSyncing = false);
+      if (current()) setState(() => isSyncing = false);
     }
   }
 
@@ -2026,7 +1928,17 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   }
 
   void _clearStudentSession() {
+    final owner = _studentUserId, server = ApiConfig.getEffectiveUrl();
     setState(() {
+      _studentGeneration++;
+      _pendingApiGets.clear();
+      studentId = 0;
+      studentName = "";
+      studentCode = "";
+      studentEmail = "";
+      studentSchedule = [];
+      isDatabaseOffline = false;
+      if (_signingInPortal == null) isSyncing = false;
       studentAuthToken = "";
       _studentUserId = "";
       _offlineRows = [];
@@ -2042,6 +1954,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     });
     SharedPreferences.getInstance()
         .then((prefs) {
+          prefs.remove(LocalCacheService.cacheKey('cached_student_schedule', owner, server));
+          prefs.remove(LocalCacheService.cacheKey('cached_student_announcements', owner, server));
           prefs.remove('cached_student_schedule');
           prefs.remove('cached_student_announcements');
           prefs.remove('cached_active_sessions');
@@ -2058,12 +1972,21 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
   void _clearStaffSession() {
     final previousStaffId = staffId;
+    final previousOwner = staffEmail.isNotEmpty ? staffEmail.trim().toLowerCase() : staffCode;
+    final server = ApiConfig.getEffectiveUrl();
     setState(() {
       staffAuthToken = "";
+      staffId = 0;
+      staffName = "";
+      staffCode = "";
+      staffEmail = "";
+      staffRole = "Staff";
       isStaffLoggedIn = false;
     });
     SharedPreferences.getInstance()
         .then((prefs) async {
+          await prefs.remove(LocalCacheService.cacheKey('cached_staff_timetable', previousOwner, server));
+          await prefs.remove(LocalCacheService.cacheKey('cached_staff_courses', previousOwner, server));
           await prefs.remove('cached_staff_${previousStaffId}_timetable');
           await prefs.remove('cached_staff_${previousStaffId}_courses');
         })
@@ -2197,6 +2120,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       },
                     )
                   : MainScreen(
+                      key: ValueKey(jsonEncode([ApiConfig.getEffectiveUrl(), _studentUserId, studentAuthToken])),
                       studentId: studentId,
                       studentName: studentName,
                       studentCode: studentCode,
@@ -2251,6 +2175,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       case 2: // Staff Portal
         bodyContent = isStaffLoggedIn
             ? StaffDashboard(
+                key: ValueKey(jsonEncode([ApiConfig.getEffectiveUrl(), staffEmail, staffAuthToken])),
                 staffId: staffId,
                 staffName: staffName,
                 staffCode: staffCode,
@@ -2291,6 +2216,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           const AuroraBackground(),
 
           AnimatedSwitcher(
+            key: ValueKey(jsonEncode([_studentGeneration, staffAuthToken])),
             duration: const Duration(milliseconds: 300),
             child: KeyedSubtree(
               key: ValueKey(
@@ -2303,7 +2229,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           // Loading Overlay (Shimmer Skeleton Screen)
           if (_authCover == null &&
               _signingInPortal == null &&
-              isSyncing &&
+              _initializingApp &&
               !isStudentLoggedIn &&
               !isStaffLoggedIn)
             Positioned.fill(

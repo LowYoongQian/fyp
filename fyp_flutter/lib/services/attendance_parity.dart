@@ -3,6 +3,57 @@
 library;
 
 import 'academic_calendar.dart';
+import '../i18n/tr.dart';
+
+/// Server timestamps are instants; school dates always use Malaysia UTC+8,
+/// independent of the phone timezone or the translated display label.
+DateTime? attendanceCampusTime(Map<dynamic, dynamic> row) {
+  final marked = DateTime.tryParse(row['marked_at']?.toString() ?? '');
+  if (marked == null) return null;
+  // Legacy server values without an offset were also stored as UTC.
+  final utc = marked.isUtc ? marked : DateTime.utc(marked.year, marked.month,
+      marked.day, marked.hour, marked.minute, marked.second, marked.millisecond, marked.microsecond);
+  return utc.add(const Duration(hours: 8));
+}
+
+bool attendanceOnDate(Map<dynamic, dynamic> row, DateTime campusDate) {
+  final marked = attendanceCampusTime(row);
+  return marked != null && marked.year == campusDate.year &&
+      marked.month == campusDate.month && marked.day == campusDate.day;
+}
+
+String attendanceTimeLabel(DateTime marked) {
+  final hour = marked.hour % 12 == 0 ? 12 : marked.hour % 12;
+  return '$hour:${marked.minute.toString().padLeft(2, '0')} ${marked.hour >= 12 ? 'PM' : 'AM'}';
+}
+
+/// Used by full sync, focused refresh and raw SQLite cache restoration.
+/// Only an explicit server biometric result can establish face verification.
+Map<String, dynamic> attendanceHistoryRow(Map<dynamic, dynamic> row, DateTime today) {
+  final marked = attendanceCampusTime(row);
+  final status = row['status'];
+  final detail = row['verify_detail']?.toString();
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var label = 'Unknown';
+  if (status == 'absent' && detail != null && detail.isNotEmpty) {
+    label = detail;
+  } else if (marked != null) {
+    final time = attendanceTimeLabel(marked);
+    label = attendanceOnDate(row, today)
+        ? tr('Today, {time}', {'time': time})
+        : '${tr(months[marked.month - 1])} ${marked.day}, ${marked.year}, $time';
+  }
+  return {
+    'courseCode': row['course_code'] ?? 'Unknown',
+    'courseName': row['course_name'] ?? 'Unknown',
+    'group': row['class_group'] ?? '-',
+    'marked_at': row['marked_at'],
+    'date': label,
+    'status': historyStatus(status),
+    'wifiVerified': row['network_verified'] == true,
+    'faceVerified': status == 'present' && row['face_verified'] == true,
+  };
+}
 
 /// The history label for a stored attendance status.
 String historyStatus(Object? status) => switch (status?.toString()) {

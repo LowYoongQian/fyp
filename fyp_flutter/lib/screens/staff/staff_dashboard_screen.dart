@@ -16,6 +16,7 @@ import '../../services/live_updates.dart';
 import '../../services/academic_calendar.dart';
 import '../../services/user_service.dart';
 import '../../widgets/avatar_image.dart';
+import '../../services/local_cache_service.dart';
 
 // -----------------------------------------------------------------
 // SCREEN 3: Lecturer/Staff Dashboard widget
@@ -86,8 +87,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
   String? _avatarUrl;
 
-  String get _timetableCacheKey => 'cached_staff_${widget.staffId}_timetable';
-  String get _coursesCacheKey => 'cached_staff_${widget.staffId}_courses';
+  String get _cacheOwner => widget.staffEmail.isNotEmpty
+      ? widget.staffEmail.trim().toLowerCase() : widget.staffCode;
+  String get _timetableCacheKey => LocalCacheService.cacheKey('cached_staff_timetable', _cacheOwner, widget.apiBaseUrl);
+  String get _coursesCacheKey => LocalCacheService.cacheKey('cached_staff_courses', _cacheOwner, widget.apiBaseUrl);
 
   @override
   void initState() {
@@ -150,10 +153,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
   }
 
   Future<bool> _loadCachedLecturerData() async {
+    final token = widget.authToken, timetableKey = _timetableCacheKey, coursesKey = _coursesCacheKey;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final timetableRaw = prefs.getString(_timetableCacheKey);
-      final coursesRaw = prefs.getString(_coursesCacheKey);
+      final timetableRaw = prefs.getString(timetableKey);
+      final coursesRaw = prefs.getString(coursesKey);
       if (timetableRaw == null && coursesRaw == null) return false;
 
       final cachedTimetable = timetableRaw == null
@@ -162,7 +166,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
       final cachedCourses = coursesRaw == null
           ? <dynamic>[]
           : jsonDecode(coursesRaw) as List<dynamic>;
-      if (!mounted) return false;
+      if (!mounted || token != widget.authToken) return false;
       setState(() {
         myTimetable = cachedTimetable;
         myCourses = cachedCourses;
@@ -181,6 +185,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
   }
 
   Future<void> fetchTimetable() async {
+    final token = widget.authToken, server = widget.apiBaseUrl, cacheKey = _timetableCacheKey;
+    bool current() => mounted && token == widget.authToken && server == widget.apiBaseUrl;
     final uri = Uri.parse("${widget.apiBaseUrl}/lecturers/me/timetable");
     final response = await http
         .get(
@@ -192,7 +198,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         )
         .timeout(const Duration(seconds: 8));
 
-    if (response.statusCode != 200) return;
+    if (!current() || response.statusCode != 200) return;
     final List<dynamic> data = jsonDecode(response.body);
     final timetable = data
         .map(
@@ -214,9 +220,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
           },
         )
         .toList();
-    if (mounted) setState(() => myTimetable = timetable);
+    if (current()) setState(() => myTimetable = timetable);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_timetableCacheKey, jsonEncode(timetable));
+    if (current()) await prefs.setString(cacheKey, jsonEncode(timetable));
   }
 
   Future<void> fetchTodayClasses() async {
@@ -1354,6 +1360,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
   }
 
   Future<void> fetchMyCourses() async {
+    final token = widget.authToken, server = widget.apiBaseUrl, cacheKey = _coursesCacheKey;
+    bool current() => mounted && token == widget.authToken && server == widget.apiBaseUrl;
     try {
       final uri = Uri.parse("${widget.apiBaseUrl}/lecturers/me/courses");
       final res = await http
@@ -1366,7 +1374,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
           )
           .timeout(const Duration(seconds: 5));
 
-      if (res.statusCode == 200) {
+      if (res.statusCode == 200 && current()) {
         final List<dynamic> data = jsonDecode(res.body);
         if (mounted) {
           setState(() {
@@ -1379,7 +1387,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
             }
           });
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(_coursesCacheKey, jsonEncode(data));
+          if (!current()) return;
+          await prefs.setString(cacheKey, jsonEncode(data));
           if (selectedCourseId != null && selectedCourseId!.isNotEmpty) {
             await fetchCourseSessions(selectedCourseId!);
           }

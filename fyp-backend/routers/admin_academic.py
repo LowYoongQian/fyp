@@ -413,7 +413,7 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
             raise HTTPException(status_code=400, detail=f"Invalid time '{hhmm}', expected HH:MM")
         if f"{int(h):02d}:{int(m):02d}" != hhmm:
             raise HTTPException(status_code=400, detail=f"Invalid time '{hhmm}', expected 24-hour HH:MM")
-        if not (0 <= v < 24 * 60):
+        if not (0 <= int(h) < 24 and 0 <= int(m) < 60):
             raise HTTPException(status_code=400, detail=f"Time '{hhmm}' out of range")
         return v
 
