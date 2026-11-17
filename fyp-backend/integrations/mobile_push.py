@@ -13,6 +13,7 @@ from sqlalchemy import and_, or_
 
 from db.database import SessionLocal
 from db.models import AuthSession, PushDelivery, PushDevice, User, UserNotification
+from domain.notification_inbox import recipient_notifications
 from utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -95,8 +96,13 @@ def deliver_one(session_factory=SessionLocal, sender=send_message):
             str(notice.user_id) == str(user.id) and str(session.user_id) == str(user.id) and
             (user.status or '').lower() == 'active' and user.notifications_enabled and user.push_notifications and
             not session.revoked_at and session.expires_at > now and session.auth_version == user.auth_version)
-        if not allowed or row.expires_at <= now or row.attempts >= 5:
+        if allowed:
+            allowed = recipient_notifications(db, user).filter(UserNotification.id == notice.id).first() is not None
+        if not allowed or row.expires_at <= now:
             row.status = 'cancelled'; db.commit(); return True
+        if row.attempts >= 5:
+            row.status, row.error_code = 'failed', 'attempt_limit'
+            db.commit(); return True
         resume = quiet_until(user, now)
         if resume:
             row.status, row.next_attempt_at = 'pending', resume

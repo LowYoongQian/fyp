@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from db.database import get_db
 from db.models import AttendanceRequest, Course, CourseStaffAssignment, Enrolment, Lecturer, Student, User
-from integrations.medical_leave import ALLOWED_TYPES, delete_private_document, download_private_document, has_valid_signature, upload_private_document, verify_medical_document
+from integrations.medical_leave import ALLOWED_TYPES, delete_private_document, download_private_document, has_valid_signature, screening_failure_reason, upload_private_document, verify_medical_document
 from domain.record_pages import RecordFilters, status_counts
 from domain.notification_inbox import notify_administrators
 from routers.attendance_features import add_notification
@@ -73,12 +73,12 @@ def submit_medical_leave(
     try:
         ai = verify_medical_document(data, mime_type)
     except Exception as exc:
-        logging.getLogger(__name__).warning("Medical screening unavailable: %s", type(exc).__name__)
+        failure_reason = screening_failure_reason(exc)
+        logging.getLogger(__name__).warning("Medical screening unavailable: reason=%s error_type=%s", failure_reason, type(exc).__name__)
         ai = {"verdict": "needs_review", "confidence": None,
               "summary": "Automatic screening was unavailable. An administrator must review your document.",
-              "signals": [], "missing": []}
-    if ai["verdict"] == "invalid":
-        raise HTTPException(422, ai["summary"] or "This does not look like a medical certificate")
+              "signals": [], "missing": [], "failure_reason": failure_reason}
+    # Screening is evidence for the reviewer; it never makes the leave decision.
     extension = {"application/pdf": ".pdf", "image/png": ".png", "image/jpeg": ".jpg"}[mime_type]
     path = f"{student.id}/{uuid.uuid4().hex}{extension}"
     try:

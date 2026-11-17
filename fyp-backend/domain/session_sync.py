@@ -3,6 +3,7 @@ import threading
 from datetime import datetime, timedelta, time
 
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy import or_
 from utils.timeutil import local_offset, utcnow
 from sqlalchemy.orm import Session
 from db.database import SessionLocal
@@ -359,12 +360,16 @@ def _send_timed_student_reminders(db, schedule_map, sessions_by_key, now, today,
 
 
 def _notify_needs_attention(db: Session, session: ClassSession, meeting_id) -> None:
+    if not session.scheduled_end:
+        return
     meeting_id = meeting_id or source_meeting_id(db, session)
     lecturer_user_id = _lecturer_user_id(db, meeting_id)
-    user_ids = {lecturer_user_id} if lecturer_user_id else {
-        user_id for (user_id,) in db.query(User.id).filter(User.role == "admin").all()
-    }
-    for user_id in user_ids:
+    recipients = db.query(User.id).filter(
+        User.status == "Active", User.role.in_(("admin", "lecturer")),
+        or_(User.created_at.is_(None), User.created_at <= session.scheduled_end),
+    )
+    recipients = recipients.filter(User.id == lecturer_user_id) if lecturer_user_id else recipients.filter(User.role == "admin")
+    for (user_id,) in recipients:
         _add_notification(
             db, user_id=user_id, kind="class_needs_attention",
             title="Class needs review",
@@ -375,7 +380,15 @@ def _notify_needs_attention(db: Session, session: ClassSession, meeting_id) -> N
 
 
 def _notify_admin_escalation(db: Session, session: ClassSession) -> None:
-    for (user_id,) in db.query(User.id).filter(User.role == "admin").all():
+    if not session.scheduled_end:
+        return
+    # A newly provisioned administrator may review historical classes, but must
+    # not receive their already-past escalation events as fresh alerts/pushes.
+    occurred_at = session.scheduled_end + timedelta(hours=24)
+    for (user_id,) in db.query(User.id).filter(
+        User.role == "admin", User.status == "Active",
+        or_(User.created_at.is_(None), User.created_at <= occurred_at),
+    ):
         _add_notification(
             db, user_id=user_id, kind="class_attention_escalated",
             title="Unresolved class review",

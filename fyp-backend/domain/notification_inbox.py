@@ -2,11 +2,12 @@
 import json
 from uuid import uuid4
 
-from sqlalchemy import String, and_, case, cast, exists, func, select
+from sqlalchemy import String, and_, case, cast, exists, false, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from db.models import AttendanceRequest, Student, User, UserNotification
+from db.models import AttendanceRequest, Lecturer, Student, User, UserNotification
+from utils.db_helpers import my_course_ids
 from utils.timeutil import iso_utc, utcnow
 
 TAB_KINDS = {
@@ -44,11 +45,31 @@ def tab_expression(role):
     return case(*rules, else_=DEFAULT_TABS[role])
 
 
+def recipient_notifications(db, user):
+    """An old delivery must not preserve a former role's sensitive preview."""
+    query = db.query(UserNotification).filter(UserNotification.user_id == user.id)
+    if user.role not in TAB_KINDS:
+        return query.filter(false())
+    if user.role != "admin":
+        query = query.filter(UserNotification.kind.notin_(("medical_submission", "feedback_submission", "class_attention_escalated")))
+    if user.role == "student":
+        query = query.filter(UserNotification.kind.notin_(("attendance_request", "class_needs_attention")))
+    elif user.role == "lecturer":
+        lecturer = db.query(Lecturer).filter(Lecturer.user_id == user.id).first()
+        courses = my_course_ids(db, lecturer.id) if lecturer else []
+        current_request = exists().where(and_(
+            AttendanceRequest.course_id.in_(courses),
+            func.replace(UserNotification.dedupe_key, "-", "").like(
+                "request:" + func.replace(cast(AttendanceRequest.id, String), "-", "") + ":%"),
+        )).correlate(UserNotification)
+        query = query.filter(or_(UserNotification.kind != "attendance_request", current_request))
+    return query
+
+
 def inbox_counts(db, user):
     target = tab_expression(user.role)
-    counts = dict(db.query(target, func.count(UserNotification.id)).filter(
-        UserNotification.user_id == user.id, UserNotification.read_at.is_(None)
-    ).group_by(target).all())
+    counts = dict(recipient_notifications(db, user).with_entities(target, func.count(UserNotification.id)).filter(
+        UserNotification.read_at.is_(None)).group_by(target).all())
     return {"unread_count": sum(counts.values()), "by_tab": counts}
 
 
