@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 class FaceRegistrationRequired extends StatelessWidget {
   final String studentName;
   final bool busy;
+  final bool pending;
   final VoidCallback onRegister;
   final VoidCallback onLogout;
   final Future<void> Function() onRefresh;
@@ -13,6 +14,7 @@ class FaceRegistrationRequired extends StatelessWidget {
     super.key,
     required this.studentName,
     required this.busy,
+    this.pending = false,
     required this.onRegister,
     required this.onLogout,
     required this.onRefresh,
@@ -68,11 +70,18 @@ class FaceRegistrationRequired extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 24),
+                    if (pending) ...[
+                      Text(
+                        tr('Registration Pending / Status Unknown. We are checking whether your registration was saved. Refresh the status later if needed; do not submit another selfie.'),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     FilledButton.icon(
-                      onPressed: busy ? null : onRegister,
+                      onPressed: busy || pending ? null : onRegister,
                       icon: const Icon(Icons.camera_alt_outlined),
                       label: Text(
-                        tr(busy
+                        tr(pending ? 'Registration Pending / Status Unknown' : busy
                             ? 'Preparing or verifying your scan…'
                             : 'Start live registration'),
                       ),

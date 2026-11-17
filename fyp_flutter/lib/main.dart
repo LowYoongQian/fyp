@@ -519,6 +519,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   int _faceStatusGeneration = 0;
   bool _registeringFace = false;
   bool _savingFace = false;
+  bool _faceRegistrationPending = false;
+  bool _confirmingFaceRegistration = false;
   final Set<String> _attendanceInFlight = {};
   final Set<String> _submittedAttendanceChallenges = {};
   bool isCheckedInToday = false;
@@ -611,7 +613,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         if (!mounted) continue;
         if (response.statusCode == 200 && token == studentAuthToken) {
           try {
-            await refreshStudentFaceStatus();
+            if (!_savingFace && !_confirmingFaceRegistration) {
+              await refreshStudentFaceStatus();
+            }
           } catch (_) {}
         }
         if (![401, 403].contains(response.statusCode)) continue;
@@ -638,6 +642,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
   void _selectPortal(int index) {
     setState(() => selectedTab = index);
+    if (index == 1 && _faceRegistrationPending && !_savingFace && !_confirmingFaceRegistration) {
+      unawaited(refreshStudentFaceStatus().catchError((Object _) {}));
+    }
     final token = index == 2 ? staffAuthToken : studentAuthToken;
     if (token.isNotEmpty) {
       unawaited(MobilePush.bind(token, ApiConfig.getEffectiveUrl()));
@@ -986,6 +993,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           isFaceRegistered = faceReg;
           _faceRegistrationVersion = null;
           _faceStatusGeneration++;
+          _faceRegistrationPending = false;
+          _registeringFace = false;
+          _savingFace = false;
+          _confirmingFaceRegistration = false;
           isStudentLoggedIn = true;
         } else {
           staffAuthToken = token;
@@ -1673,12 +1684,14 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // throw happens inside the catch block it surfaced nowhere. A backend 400 then
   // looked to the student like the scan simply did nothing.
   Future<void> registerFace(BuildContext _) async {
-    if (_registeringFace || _savingFace || isSyncing) return;
+    if (_registeringFace || _savingFace || isSyncing || _faceRegistrationPending) return;
     setState(() => _registeringFace = true);
     final ownerToken = studentAuthToken;
     final ownerServer = ApiConfig.getEffectiveUrl();
+    final ownerGeneration = _studentGeneration;
     bool current() =>
         mounted &&
+        _studentGeneration == ownerGeneration &&
         studentAuthToken == ownerToken &&
         isStudentLoggedIn &&
         ApiConfig.getEffectiveUrl() == ownerServer;
@@ -1746,6 +1759,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
                   setState(() {
                     _savingFace = true;
+                    _faceRegistrationPending = true;
                     isSyncing = true;
                   });
                   try {
@@ -1767,16 +1781,28 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                           )
                           .timeout(const Duration(seconds: 45));
                     } on TimeoutException {
-                      throw Exception(
-                        "The server took too long to respond. Please try again.",
-                      );
+                      await _confirmPendingFaceRegistration(current);
+                      return;
                     } catch (_) {
-                      throw Exception(
-                        "Cannot reach the server. Make sure the backend is running.",
-                      );
+                      await _confirmPendingFaceRegistration(current);
+                      return;
                     }
 
+                    if (!current()) return;
+                    if (isFaceRegistered && !_faceRegistrationPending) return;
                     if (response.statusCode != 200) {
+                      if (response.statusCode == 409) {
+                        // Already registered is success; a rejected stale revision is a failure.
+                        await refreshStudentFaceStatus();
+                        if (!current() || isFaceRegistered) return;
+                      }
+                      // A gateway/server error does not prove that the write failed.
+                      if (response.statusCode >= 500 ||
+                          response.statusCode == 408) {
+                        await _confirmPendingFaceRegistration(current);
+                        return;
+                      }
+                      setState(() => _faceRegistrationPending = false);
                       throw Exception(
                         _detailOf(
                           response,
@@ -1788,12 +1814,16 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                     }
 
                     if (!current()) return;
-                    final result =
-                        jsonDecode(response.body) as Map<String, dynamic>;
+                    Map<String, dynamic> result;
+                    try {
+                      result = jsonDecode(response.body) as Map<String, dynamic>;
+                    } catch (_) {
+                      await _confirmPendingFaceRegistration(current);
+                      return;
+                    }
                     if (result['is_face_registered'] != true) {
-                      throw StateError(
-                        'Registration was not confirmed. Refresh and try again.',
-                      );
+                      await _confirmPendingFaceRegistration(current);
+                      return;
                     }
                     setState(() {
                       _faceStatusGeneration++;
@@ -1801,29 +1831,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       _faceRegistrationVersion =
                           result['registration_version'] as String?;
                     });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          tr(
-                            'Face registered successfully. Only the administration office can reset it.',
-                          ),
-                        ),
-                        backgroundColor: Color(0xFF10B981),
-                      ),
-                    );
+                    _faceRegistrationSucceeded();
                   } catch (e) {
-                    // A timed-out POST may have committed; fetch truth before allowing retry.
                     if (current()) {
-                      try {
-                        await refreshStudentFaceStatus();
-                      } catch (_) {}
-                    }
-                    if (current()) {
-                      if (isFaceRegistered) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text(tr('Your face registration is confirmed. Only the administration office can reset it.')),
-                          backgroundColor: const Color(0xFF10B981),
-                        ));
+                      if (_faceRegistrationPending) {
+                        await _confirmPendingFaceRegistration(current);
                       } else {
                         showErrorDialog(_friendlyError(e), context);
                       }
@@ -1845,20 +1857,68 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> refreshStudentFaceStatus() async {
+  void _faceRegistrationSucceeded() {
+    if (!_faceRegistrationPending) return;
+    setState(() => _faceRegistrationPending = false);
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr('Registration Successful. Your face is registered.')),
+      backgroundColor: const Color(0xFF10B981),
+    ));
+  }
+
+  Future<void> _confirmPendingFaceRegistration(bool Function() current) async {
+    if (!current() || _confirmingFaceRegistration) return;
+    setState(() => _confirmingFaceRegistration = true);
+    try {
+      // Five GETs of at most 8 seconds plus four 5-second gaps: at most 60 seconds.
+      for (var attempt = 0; attempt < 5 && current() && _faceRegistrationPending; attempt++) {
+        try {
+          await refreshStudentFaceStatus(
+            timeout: const Duration(seconds: 8),
+          );
+        } catch (_) {
+          // A failed status GET cannot establish whether the POST committed.
+        }
+        if (!current() || !_faceRegistrationPending) return;
+        if (attempt < 4) await Future<void>.delayed(const Duration(seconds: 5));
+      }
+      if (current() && _faceRegistrationPending) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('Registration Pending / Status Unknown. Refresh registration status later; do not submit another selfie.')),
+        ));
+      }
+    } finally {
+      if (current()) setState(() => _confirmingFaceRegistration = false);
+    }
+  }
+
+  Future<void> refreshStudentFaceStatus({Duration timeout = const Duration(seconds: 12)}) async {
     final token = studentAuthToken;
     final server = ApiConfig.getEffectiveUrl();
+    final ownerGeneration = _studentGeneration;
     if (token.isEmpty) return;
     final generation = ++_faceStatusGeneration;
     // Do not reuse the path-only GET cache across account/server switches.
-    final response = await http
-        .get(
-          Uri.parse('$server/students/me/face/status'),
-          headers: {'Authorization': 'Bearer $token'},
-        )
-        .timeout(const Duration(seconds: 12));
+    final http.Response response;
+    try {
+      response = await http
+          .get(
+            Uri.parse('$server/students/me/face/status'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(timeout);
+    } catch (_) {
+      if (!mounted || generation != _faceStatusGeneration ||
+          ownerGeneration != _studentGeneration || token != studentAuthToken ||
+          server != ApiConfig.getEffectiveUrl()) {
+        return;
+      }
+      rethrow;
+    }
     if (!mounted ||
         generation != _faceStatusGeneration ||
+        ownerGeneration != _studentGeneration ||
         token != studentAuthToken ||
         server != ApiConfig.getEffectiveUrl()) {
       return;
@@ -1879,6 +1939,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       isFaceRegistered = result['is_face_registered'] == true;
       _faceRegistrationVersion = result['registration_version'] as String?;
     });
+    if (isFaceRegistered && _faceRegistrationPending) {
+      _faceRegistrationSucceeded();
+    }
   }
 
   /// True when the server confirmed the sign-out (or the session had already ended there).
@@ -1961,6 +2024,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       _faceStatusGeneration++;
       _registeringFace = false;
       _savingFace = false;
+      _faceRegistrationPending = false;
+      _confirmingFaceRegistration = false;
       _attendanceInFlight.clear();
       _submittedAttendanceChallenges.clear();
       isCheckedInToday = false;
@@ -2084,6 +2149,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   ? FaceRegistrationRequired(
                       studentName: studentName,
                       busy: _registeringFace || _savingFace || isSyncing,
+                      pending: _faceRegistrationPending,
                       onRegister: () => registerFace(context),
                       onLogout: () => _signOutWithCover(true),
                       onRefresh: () async {

@@ -205,3 +205,6 @@ test_*.py
 !/fyp_flutter/integration_test/qa_history_mapping_test.dart
 !/fyp_flutter/integration_test/qa_offline_account_test.dart
 !/fyp_flutter/integration_test/qa_attendance_test.dart
+!/fyp_flutter/test/
+/fyp_flutter/test/*
+!/fyp_flutter/test/face_flow_test.dart
