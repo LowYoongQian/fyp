@@ -189,6 +189,9 @@ test_*.py
 !/fyp-backend/tests/portal_background_sync_test.dart
 !/fyp-backend/tests/dashboard_cache_isolation_test.dart
 !/fyp-backend/tests/attendance_localization_test.dart
+!/fyp-backend/tests/test_face_self_test.py
+!/fyp-backend/tests/face_flow_test.dart
+!/fyp-backend/domain/face_self_test.py
 !/fyp-backend/tests/cache_regression.cjs
 !/fyp-backend/tests/mc_workflow.cjs
 !/fyp-backend/tests/feedback_workflow.cjs

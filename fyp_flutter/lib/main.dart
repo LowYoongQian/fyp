@@ -1,3 +1,4 @@
+import 'services/student_errors.dart';
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 import 'i18n/tr.dart';
 import 'dart:async';
@@ -518,6 +519,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   int _faceStatusGeneration = 0;
   bool _registeringFace = false;
   bool _savingFace = false;
+  final Set<String> _attendanceInFlight = {};
+  final Set<String> _submittedAttendanceChallenges = {};
   bool isCheckedInToday = false;
   List<Map<String, dynamic>> attendanceHistory = [];
   List<Map<String, dynamic>> studentSchedule = [];
@@ -649,6 +652,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       context,
       MaterialPageRoute(
         builder: (_) => SettingsScreen(
+          canSelfTest: !staff && isStudentLoggedIn && isFaceRegistered,
           authToken: staff ? staffAuthToken : studentAuthToken,
           apiBaseUrl: ApiConfig.getEffectiveUrl(),
         ),
@@ -1478,6 +1482,14 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         token = studentAuthToken,
         server = ApiConfig.getEffectiveUrl();
     final generation = _studentGeneration;
+    final attemptKey = '$server|$token|$sessionId';
+    final challenge = extraDetails?['challenge_token']?.toString();
+    if (_attendanceInFlight.contains(attemptKey) ||
+        (challenge != null && _submittedAttendanceChallenges.contains(challenge))) {
+      return;
+    }
+    _attendanceInFlight.add(attemptKey);
+    if (challenge != null) _submittedAttendanceChallenges.add(challenge);
     final requestId = newCheckInId();
     final capturedAt = DateTime.now().toUtc();
     bool current() =>
@@ -1578,16 +1590,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         } catch (_) {
           error = tr('Server error {code}.', {'code': response.statusCode});
         }
-        if (response.statusCode == 400 &&
-            error.toLowerCase().contains('already registered')) {
-          await syncData(context);
-          if (!current()) return;
+        if ((response.statusCode == 400 || response.statusCode == 409) &&
+            isAlreadyCheckedInError(error)) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(tr('You\'re already checked in for this class.')),
               backgroundColor: Color(0xFF3B82F6),
             ),
           );
+          try { await syncData(context); } catch (_) {}
           return;
         }
         throw Exception(error);
@@ -1646,6 +1657,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         );
       }
     } finally {
+      _attendanceInFlight.remove(attemptKey);
       if (current()) setState(() => isSyncing = false);
     }
   }
@@ -1688,6 +1700,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     }
     if (!current() || isFaceRegistered) return;
     final registrationVersion = _faceRegistrationVersion;
+    var scanSubmitted = false;
     setState(() => _registeringFace = true);
     try {
       await Navigator.push(
@@ -1702,7 +1715,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                   int? challengeMs,
                   String? challengeToken,
                 }) async {
-                  if (!current()) return;
+                  if (!current() || scanSubmitted) return;
+                  scanSubmitted = true;
                   if (imageBase64 == null || imageBase64.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -1804,7 +1818,16 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                         await refreshStudentFaceStatus();
                       } catch (_) {}
                     }
-                    if (current()) showErrorDialog(_friendlyError(e), context);
+                    if (current()) {
+                      if (isFaceRegistered) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(tr('Your face registration is confirmed. Only the administration office can reset it.')),
+                          backgroundColor: const Color(0xFF10B981),
+                        ));
+                      } else {
+                        showErrorDialog(_friendlyError(e), context);
+                      }
+                    }
                   } finally {
                     if (current()) {
                       setState(() {
@@ -1938,6 +1961,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       _faceStatusGeneration++;
       _registeringFace = false;
       _savingFace = false;
+      _attendanceInFlight.clear();
+      _submittedAttendanceChallenges.clear();
       isCheckedInToday = false;
       attendanceHistory = [];
       studentAnnouncements = [];
@@ -1985,45 +2010,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         });
   }
 
-  String _friendlyStudentError(String rawMsg) {
-    final lower = rawMsg.toLowerCase();
-
-    if (lower.contains('face') &&
-        (lower.contains('not match') ||
-            lower.contains('mismatch') ||
-            lower.contains('no match') ||
-            lower.contains('failed'))) {
-      return "Face Match Failed: Your face does not match your registered profile. Please make sure your face is clearly visible and try again.";
-    }
-    if (lower.contains('liveness') ||
-        lower.contains('blink') ||
-        lower.contains('nod') ||
-        lower.contains('suspicious')) {
-      return "Liveness Verification Failed: We couldn't detect your blink or head movement. Please look directly at the camera and perform the prompt.";
-    }
-    if (lower.contains('not registered') || lower.contains('register face')) {
-      return "Face Registration Required: Please complete your one-time selfie profile registration first.";
-    }
-    if (lower.contains('wifi') ||
-        lower.contains('network') ||
-        lower.contains('bssid') ||
-        lower.contains('subnet')) {
-      return "Off-Campus Network: You are not connected to the approved campus Wi-Fi network.";
-    }
-    if (lower.contains('already registered') ||
-        lower.contains('already checked in')) {
-      return "Already Checked In: Your attendance for this class session is already verified today.";
-    }
-    if (lower.contains('closed') || lower.contains('expired')) {
-      return "Session Closed: This attendance window has expired or has been closed by your lecturer.";
-    }
-    if (lower.contains('socketexception') ||
-        lower.contains('connection') ||
-        lower.contains('timeout')) {
-      return "Connection Error: Cannot reach the server. Please check your internet connection.";
-    }
-    return rawMsg.replaceAll("Exception: ", "").trim();
-  }
+  String _friendlyStudentError(String rawMsg) => friendlyStudentError(rawMsg);
 
   void showErrorDialog(String message, BuildContext context) {
     final friendlyMsg = _friendlyStudentError(message);
@@ -2045,7 +2032,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               ),
               SizedBox(width: 10),
               Text(
-                tr('Verification Failed'),
+                tr(friendlyMsg.startsWith('Face Already Registered:') ? 'Face Already Registered' : 'Verification Failed'),
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
               ),
             ],

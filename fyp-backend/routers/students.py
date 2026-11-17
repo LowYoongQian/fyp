@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 
 from db.database import get_db
 from utils.timeutil import iso_utc, utcnow
@@ -17,20 +17,26 @@ from utils.security import require_student
 from utils.db_helpers import require_own_profile
 from domain.attendance import session_hours, attendance_rate_percent, completed_class_count
 from integrations.face import (
-    _extract_face_embedding, _embedding_to_floats,
+    _embedding_to_floats,
     _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
 from domain import student_next_action, timetable_access
 from domain.scheduler import calculate_schedule, get_course_group_slots, meeting_key_for, session_end_utc
 from domain.session_sync import sync_class_sessions
 from routers.attendance_features import _next_meeting
-from routers.face_enrolment import FaceCaptureSubmit, submit_capture
+from routers.face_enrolment import FaceCaptureSubmit, submit_capture, face_version, lock_student
+from integrations.live_face import extract_live_embedding
+from domain.account_security import lock_user
+from domain.face_self_test import issue_self_test, consume_self_test
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
 
-class FaceRegisterSubmit(BaseModel):
-    image_base64: str
+class FaceSelfTestSubmit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image_base64: str = Field(min_length=1, max_length=8_000_000)
+    challenge_token: str = Field(min_length=40, max_length=100)
+    liveness_passed: bool
 
 
 @router.post("/me/face", status_code=200)
@@ -38,47 +44,53 @@ def register_face(body: FaceCaptureSubmit, db: Session = Depends(get_db), curren
     return submit_capture(body, db, current_user)
 
 
-@router.post("/me/face/verify", status_code=200)
-def verify_face_only(body: FaceRegisterSubmit, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
-    """Compare a fresh selfie against this student's stored embedding. Nothing else.
-
-    The ArcFace comparison is the same one check-in runs, isolated from everything
-    check-in also demands — an open session, the timetable window, the campus network,
-    liveness — so the recognition step can be exercised on its own (e.g. outside class
-    hours, where no session can legally be open).
-
-    Deliberately READ-ONLY: no AttendanceRecord, no session lookup, no db writes at
-    all. That is what keeps it from being a way to mark attendance while bypassing the
-    guards check-in enforces — it can only ever report a distance back to the caller.
-    """
-    student = require_own_profile(db, Student, current_user.id, "Student")
-
-    if not body.image_base64.strip():
-        raise HTTPException(status_code=400, detail="A captured face image is required.")
-
-    stored = db.query(FaceEmbedding).filter(
-        FaceEmbedding.student_id == student.id,
-        FaceEmbedding.is_active == True,  # noqa: E712
-    ).first()
+def self_test_profile(db, actor):
+    student = require_own_profile(db, Student, actor.id, "Student")
+    stored = db.query(FaceEmbedding).filter_by(student_id=student.id, is_active=True).populate_existing().first()
     if not stored:
-        raise HTTPException(
-            status_code=400,
-            detail="No registered face found. Register your face first."
-        )
+        raise HTTPException(400, "No registered face found. Register your face first.")
+    return student, stored
 
-    # enforce_detection=False mirrors check-in: a wrong or absent face is caught by
-    # the threshold below rather than by the detector, so this reports the same
-    # verdict check-in would reach on the same photo.
-    live_vec = _embedding_to_floats(_extract_face_embedding(body.image_base64, enforce_detection=False))
-    distance = _cosine_distance(live_vec, _embedding_to_floats(stored.embedding))
 
-    return {
-        "matched": distance <= _FACE_MATCH_THRESHOLD,
-        "distance": round(distance, 4),
-        "threshold": _FACE_MATCH_THRESHOLD,
-        "confidence": round(1.0 - distance, 4),
-        "student_name": student.name,
-    }
+@router.post("/me/face/self-test/challenge")
+def create_face_self_test_challenge(db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    actor = lock_user(db, current_user.id, require_session=True)
+    student = require_own_profile(db, Student, actor.id, "Student")
+    lock_student(db, student.id)
+    student, stored = self_test_profile(db, actor)
+    return issue_self_test(db, student.id, db.info["security_session_id"], face_version(stored))
+
+
+@router.post("/me/face/verify", include_in_schema=False)
+@router.post("/me/face/self-test")
+def verify_face_only(body: FaceSelfTestSubmit, db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+    # The old image-only verifier now has exactly the same security contract.
+    student, stored = self_test_profile(db, current_user)
+    student_id, actor_id = student.id, current_user.id
+    version, registered = face_version(stored), bytes(stored.embedding)
+    consume_self_test(db, body.challenge_token, student_id, db.info["security_session_id"], version)
+    if not body.liveness_passed:
+        return {"passed": False, "reason": "liveness_incomplete",
+                "message": "Complete both camera movements and try again."}
+    try:
+        live = extract_live_embedding(body.image_base64)
+    except HTTPException as exc:
+        if exc.status_code not in (403, 422):
+            raise
+        # Only fixed safe messages; never return biometric values or model errors.
+        return {"passed": False, "reason": "live_capture_failed",
+                "message": "A live face could not be verified. Use good lighting, keep only your face visible and scan again."}
+    distance = _cosine_distance(_embedding_to_floats(live), _embedding_to_floats(registered))
+    # Logout, reassignment or face reset during inference invalidates this result.
+    actor = lock_user(db, actor_id, require_session=True)
+    lock_student(db, student_id)
+    current_student, current_face = self_test_profile(db, actor)
+    if current_student.id != student_id or face_version(current_face) != version:
+        raise HTTPException(409, "Your registered face changed during this self-test. Start a new scan.")
+    passed = distance <= _FACE_MATCH_THRESHOLD
+    return {"passed": passed, "reason": "matched" if passed else "face_mismatch",
+            "message": "Live face matched your registered profile. No attendance was recorded." if passed else
+                       "Your face could not be matched to your registered profile. Look directly at the camera and try again."}
 
 
 @router.get("/me/courses")

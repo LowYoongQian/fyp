@@ -429,6 +429,19 @@ class FaceEmbedding(Base):
 
     student       = relationship("Student", back_populates="face_embedding")
 
+class FaceSelfTestChallenge(Base):
+    """Self-test security state only; never a classroom check-in challenge."""
+    __tablename__ = "face_self_test_challenges"
+    __table_args__ = (Index("ix_face_self_test_owner_issued", "student_id", "issued_at"),)
+    token_hash = Column(String(64), primary_key=True)
+    student_id = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    auth_session_id = Column(UUID(as_uuid=False), ForeignKey("auth_sessions.id", ondelete="CASCADE"), nullable=False)
+    registration_version = Column(String(100), nullable=False)
+    issued_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime, nullable=True)
+
+
 class FacePhotoCleanup(Base):
     """Stored photos whose object delete is still owed (reset, delete or failed registration)."""
     __tablename__ = "face_photo_cleanups"

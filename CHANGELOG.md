@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.1.11
+
+Release-mode, Debug-signed Android demo APK; Backend: https://api.smartsystem.live. Version 0.1.11+4. The separate manual iOS workflow produces an **unsigned IPA for user re-signing**, not an App Store/TestFlight release or directly installable signed app.
+
+### Fixed
+- Distinguish face already registered, class already checked in, liveness failure and face mismatch; already checked-in attendance receives an informational result.
+- Deliver each camera scan once, close the scanner before processing its callback, prevent timeout re-entry and duplicate face-registration submissions, and ignore late callbacks.
+- Registration does not automatically submit class attendance; no such call path was found or produced by the regression tests.
+
+### Added
+- Settings face-recognition self-test for registered students using camera gestures and the shared server liveness/ArcFace threshold; reports pass/fail without recording attendance or new biometric profiles.
+- Separate self-test challenges bound to student, login session and face-registration revision: 120-second expiry, atomic single use and five requests per student per ten minutes. Challenges write security state only, not attendance, photos or embeddings.
+- Additive Alembic migration a6c9e2f41083 creates face_self_test_challenges; no existing business data rewrite or schema-drift repair.
+- Reusable synthetic route tests support both SQLite and guarded, migrated PostgreSQL databases.
+
+### Validation and limitations
+- 32 route tests passed on migrated PostgreSQL; 8 simultaneous challenge requests yielded exactly 5 successes and 3 rate-limit responses. Migration upgrade/downgrade/re-upgrade passed in an isolated synthetic database.
+- 5 targeted Flutter flow tests and relevant Dart analysis passed. The original cause of the reported second callback cannot be proven without the original device logs.
+- Real Fasnet/ArcFace inference and physical camera/person/photo/screen-attack acceptance remain unverified in this release; inference/storage in automated route tests use explicit synthetic boundaries. Missing runtime returns 503 rather than bypassing verification.
+- Existing Debug-signed APKs can update only when their certificate matches; a different signer requires uninstalling the old app, removing local app data. Physical Android/iOS installation and Apple-signed distribution are not claimed verified.
+
+
 ## v0.1.10
 
 Release-mode Android APK, **Debug-signed for FYP demonstration and manual installation**, not production-signed or for Google Play. Backend: https://api.smartsystem.live.

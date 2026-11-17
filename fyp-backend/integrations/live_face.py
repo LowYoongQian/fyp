@@ -48,5 +48,5 @@ def extract_live_embedding(image_base64):
     except (ValueError, binascii.Error) as exc:
         raise HTTPException(422, "Face could not be verified. Use good lighting and scan again.") from exc
     except Exception as exc:
-        logging.getLogger(__name__).exception("Server face/liveness verification failed")
+        logging.getLogger(__name__).warning("Server face/liveness verification failed (%s)", type(exc).__name__)
         raise HTTPException(503, "Face verification is temporarily unavailable. Please try again later.") from exc

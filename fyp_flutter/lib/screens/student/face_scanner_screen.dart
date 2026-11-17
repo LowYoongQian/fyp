@@ -47,6 +47,7 @@ class FaceScannerScreen extends StatefulWidget {
   final String? sessionId;
   final String? authToken;
   final String? apiBaseUrl;
+  final bool selfTest;
 
   const FaceScannerScreen({
     super.key,
@@ -55,6 +56,7 @@ class FaceScannerScreen extends StatefulWidget {
     this.sessionId,
     this.authToken,
     this.apiBaseUrl,
+    this.selfTest = false,
   });
 
   @override
@@ -124,6 +126,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   DateTime? _scanStartedAt;
   String? _challengeToken;
   bool _preparingChallenge = false;
+  bool _finishing = false;
+  bool _delivered = false;
   // ML Kit stays below the camera preview rate so frames never queue. The native
   // preview remains fluid while detection updates the target roughly 12-15 times/s.
   static const Duration _detectionInterval = Duration(milliseconds: 70);
@@ -566,22 +570,25 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   }
 
   Future<void> startScanning() async {
-    if (_preparingChallenge || isScanning) return;
-    if (widget.sessionId != null) {
+    if (_preparingChallenge || isScanning || _finishing || _delivered) return;
+    if (widget.selfTest && (!_isCameraInitialized || !_captureReady)) return;
+    if (widget.sessionId != null || widget.selfTest) {
       setState(() { _preparingChallenge = true; scanningStatusText = 'Preparing secure scan...'; });
       try {
         final response = await http.post(
-          Uri.parse('${widget.apiBaseUrl}/sessions/${Uri.encodeComponent(widget.sessionId!)}/checkin-challenge'),
+          Uri.parse(widget.selfTest
+              ? '${widget.apiBaseUrl}/students/me/face/self-test/challenge'
+              : '${widget.apiBaseUrl}/sessions/${Uri.encodeComponent(widget.sessionId!)}/checkin-challenge'),
           headers: {'Authorization': 'Bearer ${widget.authToken}'},
         ).timeout(const Duration(seconds: 12));
         final body = jsonDecode(response.body) as Map<String, dynamic>;
         if (response.statusCode != 200 || body['challenge_token'] is! String) {
-          throw StateError(body['detail']?.toString() ?? 'Unable to prepare check-in. Please try again.');
+          throw StateError(body['detail']?.toString() ?? 'Unable to prepare secure scan. Please try again.');
         }
         _challengeToken = body['challenge_token'] as String;
       } catch (error) {
         if (!mounted) return;
-        setState(() => scanningStatusText = 'Secure check-in unavailable. Please try again.');
+        setState(() => scanningStatusText = 'Secure scan unavailable. Please try again.');
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(error is StateError ? error.message.toString() : 'Check your connection and try again.'))));
         return;
       } finally {
@@ -772,6 +779,8 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
   }
 
   void _handleLivenessTimeout() {
+    if (_finishing || _delivered) return;
+    _finishing = true;
     _progressTimer?.cancel();
     _countdownTimer?.cancel();
     try {
@@ -789,13 +798,15 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     });
     Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted) {
-        widget.onScanComplete(null, false);
-        Navigator.pop(context);
+        _deliverResult(null, false);
       }
     });
   }
 
   Future<void> _finalizeScan() async {
+    if (!mounted || _finishing || _delivered) return;
+    _finishing = true;
+    _countdownTimer?.cancel();
     if (_isCameraInitialized &&
         _cameraController != null &&
         _cameraController!.value.isStreamingImages &&
@@ -837,6 +848,7 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
         ? DateTime.now().difference(_scanStartedAt!).inMilliseconds
         : null;
 
+    if (!mounted) return;
     setState(() {
       scanningStatusText = passed
           ? "Liveness Verified Successfully!"
@@ -844,16 +856,17 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
     });
 
     Future.delayed(const Duration(milliseconds: 800), () {
-      widget.onScanComplete(
-        capturedImageBase64,
-        passed,
-        challengeMs: challengeMs,
-        challengeToken: _challengeToken,
-      );
-      if (mounted) {
-        Navigator.pop(context);
-      }
+      _deliverResult(capturedImageBase64, passed, challengeMs: challengeMs);
     });
+  }
+
+  void _deliverResult(String? image, bool passed, {int? challengeMs}) {
+    if (!mounted || _delivered || ModalRoute.of(context)?.isCurrent != true) return;
+    _delivered = true;
+    // Close this scanner before the callback can open a result dialog or route.
+    Navigator.pop(context);
+    widget.onScanComplete(image, passed,
+        challengeMs: challengeMs, challengeToken: _challengeToken);
   }
 
   // Blink and Nod cues hang under the status chip; the turn arrows stay beside the face.
@@ -1334,7 +1347,7 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                 : null,
                           ),
                           child: FilledButton.icon(
-                            onPressed: isScanning
+                            onPressed: isScanning || (widget.selfTest && !_isCameraInitialized)
                                 ? null
                                 : (_captureReady || _cameraError != null)
                                 ? startScanning
@@ -1503,13 +1516,13 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                         color: Colors.black.withValues(alpha: 0.95),
                         child: GestureDetector(
                           behavior: HitTestBehavior.opaque,
-                          onTap: () {
+                          onTap: widget.selfTest ? null : () {
                             if (_isWaitingForGesture &&
                                 _currentChallenge == "Blink") {
                               _triggerBlinkSuccess();
                             }
                           },
-                          onPanUpdate: _handlePanUpdate,
+                          onPanUpdate: widget.selfTest ? null : _handlePanUpdate,
                           child: Stack(
                             alignment: Alignment.center,
                             children: [
@@ -1760,7 +1773,7 @@ class _FaceScannerScreenState extends State<FaceScannerScreen>
                                 ),
 
                               // 5. Simulator HUD Helper Cue Pill overlay (only if scanning and waiting for challenge)
-                              if (isScanning && _isWaitingForGesture)
+                              if (!widget.selfTest && isScanning && _isWaitingForGesture)
                                 Positioned(
                                   bottom: 20,
                                   child: Container(

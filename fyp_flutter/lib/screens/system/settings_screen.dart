@@ -10,6 +10,9 @@ import '../../services/mobile_push.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../../i18n/app_localizations.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../student/face_scanner_screen.dart';
 
 // Inter/Space Grotesk carry no CJK, Tamil or Arabic glyphs, so the native
 // language names below render as tofu boxes without a fallback chain. These are
@@ -40,7 +43,8 @@ const List<Map<String, String>> kSupportedLanguages = [
 
 class SettingsScreen extends StatefulWidget {
   final String authToken, apiBaseUrl;
-  const SettingsScreen({super.key, this.authToken = '', this.apiBaseUrl = ''});
+  final bool canSelfTest;
+  const SettingsScreen({super.key, this.authToken = '', this.apiBaseUrl = '', this.canSelfTest = false});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -57,6 +61,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _inAppNotifications = true;
 
   bool _isLoading = true;
+  bool _selfTesting = false;
+
+  Future<void> _runFaceSelfTest() async {
+    if (_selfTesting || !widget.canSelfTest) return;
+    setState(() => _selfTesting = true);
+    var passed = false;
+    var message = 'Self-test could not be completed. Check your connection and start a new scan.';
+    try {
+      final headers = {'Authorization': 'Bearer ${widget.authToken}', 'Content-Type': 'application/json'};
+      final status = await http.get(Uri.parse('${widget.apiBaseUrl}/students/me/face/status'), headers: headers)
+          .timeout(const Duration(seconds: 12));
+      if (status.statusCode != 200 || jsonDecode(status.body)['is_face_registered'] != true) {
+        message = 'Self-test requires an active student account with a registered face.';
+      } else {
+        if (!mounted) return;
+        String? image, token;
+        bool? live;
+        await Navigator.push(context, MaterialPageRoute(builder: (_) => FaceScannerScreen(
+          title: tr('Face Recognition Self-Test'), selfTest: true,
+          authToken: widget.authToken, apiBaseUrl: widget.apiBaseUrl,
+          onScanComplete: (capture, liveness, {int? challengeMs, String? challengeToken}) {
+            if (live != null) return;
+            image = capture; live = liveness; token = challengeToken;
+          },
+        )));
+        if (!mounted || live == null) return;
+        if (live != true || image == null || image!.isEmpty || token == null) {
+          message = 'Live camera scan was not completed. Perform both prompted movements and try again.';
+        } else {
+          final response = await http.post(Uri.parse('${widget.apiBaseUrl}/students/me/face/self-test'),
+            headers: headers, body: jsonEncode({'image_base64': image, 'liveness_passed': live, 'challenge_token': token}))
+              .timeout(const Duration(seconds: 45));
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          if (response.statusCode == 200) {
+            passed = body['passed'] == true;
+            message = body['message']?.toString() ?? 'The server could not confirm the result. Start a new scan.';
+          } else if ([400, 401, 403, 409, 429].contains(response.statusCode)) {
+            message = body['detail']?.toString() ?? message;
+          } else {
+            message = 'Server face verification is unavailable. Please try again later.';
+          }
+        }
+      }
+    } catch (_) {
+      // A timeout is never a pass and never automatically replays the capture.
+    } finally {
+      if (mounted) setState(() => _selfTesting = false);
+    }
+    if (!mounted) return;
+    await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(tr(passed ? 'Self-Test Passed' : 'Self-Test Failed')),
+      content: Text('${tr(message)}\n\n${tr('This is a self-test only. No attendance was recorded.')}'),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Got It')))],
+    ));
+  }
 
   @override
   void initState() {
@@ -433,6 +492,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (widget.canSelfTest) ...[
+                    _buildSectionHeader(Icons.face_retouching_natural, tr('Face Recognition'),
+                      const Color(0xFF2563EB), isDarkMode ? const Color(0xFF1E3A8A) : const Color(0xFFEFF6FF)),
+                    GlassCard(child: ListTile(
+                      leading: const Icon(Icons.face_retouching_natural, color: Color(0xFF2563EB)),
+                      title: Text(tr('Face Recognition Self-Test')),
+                      subtitle: Text(tr('Check your live face match without recording attendance.')),
+                      trailing: _selfTesting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.chevron_right),
+                      onTap: _selfTesting ? null : _runFaceSelfTest,
+                    )),
+                    const SizedBox(height: 24),
+                  ],
                   // -------------------------------------------------------------
                   // 1. APPEARANCE SECTION
                   // -------------------------------------------------------------
