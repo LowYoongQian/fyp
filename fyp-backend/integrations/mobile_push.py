@@ -1,5 +1,6 @@
 """Durable, leased FCM HTTP v1 delivery; payloads contain no attendance/medical details."""
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -22,7 +23,34 @@ _credentials = None
 
 
 def configured():
-    return bool(os.getenv('FCM_PROJECT_ID') and os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
+    return bool(os.getenv('FCM_PROJECT_ID') and (
+        os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON') or os.getenv('GOOGLE_APPLICATION_CREDENTIALS')))
+
+
+def _load_credentials(project):
+    try:
+        raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        if raw is not None:
+            info = json.loads(raw)
+        else:
+            with open(os.environ['GOOGLE_APPLICATION_CREDENTIALS'], encoding='utf-8') as source:
+                info = json.load(source)
+        if not isinstance(info, dict) or info.get('type') != 'service_account':
+            raise ValueError('Invalid service account type')
+        if not project or info.get('project_id') != project:
+            raise ValueError('Firebase project mismatch')
+        scopes = ['https://www.googleapis.com/auth/firebase.messaging']
+        if raw is not None:
+            credentials = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        else:
+            credentials = service_account.Credentials.from_service_account_file(
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'], scopes=scopes)
+        if credentials.project_id != project:
+            raise ValueError('Firebase project mismatch')
+        return credentials
+    except Exception:
+        # Credential parsers can include sensitive input in their exceptions.
+        raise ValueError('Invalid Firebase service account configuration') from None
 
 
 def quiet_until(user, now):
@@ -45,12 +73,7 @@ def send_message(token, notification_id, expires_at):
     project = os.environ['FCM_PROJECT_ID']
     with _credential_lock:
         if _credentials is None:
-            _credentials = service_account.Credentials.from_service_account_file(
-                os.environ['GOOGLE_APPLICATION_CREDENTIALS'],
-                scopes=['https://www.googleapis.com/auth/firebase.messaging'])
-            if _credentials.project_id != project:
-                _credentials = None
-                raise ValueError('Firebase project mismatch')
+            _credentials = _load_credentials(project)
         if not _credentials.valid:
             class BoundedRequest(Request):
                 def __call__(self, *args, **kwargs):
