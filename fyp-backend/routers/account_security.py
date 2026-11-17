@@ -1,7 +1,6 @@
 """Owner-scoped security settings and device registration; no raw session credentials in lists."""
 import base64
 import io
-import os
 from datetime import timedelta
 from typing import Literal
 
@@ -19,6 +18,7 @@ from domain.account_security import (cipher, lock_user, factor_for, verify_facto
     check_factor_limit, generate_recovery, revoke_all, validate_session)
 from utils.security import get_current_user, verify_password, oauth2_scheme, decode_token
 from utils.timeutil import utcnow, iso_utc
+from integrations.mobile_push import configured as push_configured
 
 router = APIRouter(prefix='/auth', tags=['Account security'])
 
@@ -146,7 +146,7 @@ def register_device(body: DeviceRegistration, token: str = Depends(oauth2_scheme
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, 'Device registration changed; retry registration.')
-    return {'registered': True, 'delivery_configured': bool(os.getenv('FCM_PROJECT_ID') and os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))}
+    return {'registered': True, 'delivery_configured': push_configured()}
 
 
 @router.delete('/push/device')
