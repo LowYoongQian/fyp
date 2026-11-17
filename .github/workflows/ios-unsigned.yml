@@ -1,0 +1,67 @@
+name: Build Unsigned iOS IPA (Sideloadly)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-unsigned-build:
+    # Only allow manual runs from main; always build main's source.
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: fyp_flutter
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          # Codemagic's xcode: latest means the latest release, excluding betas.
+          xcode-version: latest-stable
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Match codemagic.yaml's floating stable channel, not Android's pin.
+          channel: stable
+
+      - name: Show build tool versions and source revision
+        run: |
+          git rev-parse HEAD
+          flutter --version
+          xcodebuild -version
+          pod --version
+
+      - name: Get Flutter packages
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        run: cd ios && pod install
+
+      - name: Build unsigned IPA
+        run: |
+          flutter build ios --release --no-codesign
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r Runner.ipa Payload
+          unzip -t Runner.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          path: fyp_flutter/build/ios/iphoneos/Runner.ipa
+          if-no-files-found: error
+          compression-level: 0
