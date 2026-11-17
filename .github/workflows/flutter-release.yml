@@ -12,14 +12,14 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      FYP_DEMO_KEYSTORE_PATH: ${{ runner.temp }}/fyp-demo-debug.keystore
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Initialize temporary demo keystore path
+        run: echo "FYP_DEMO_KEYSTORE_PATH=$RUNNER_TEMP/fyp-demo-debug.keystore" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: zulu
