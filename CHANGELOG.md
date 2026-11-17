@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.1.10
+
+Release-mode Android APK, **Debug-signed for FYP demonstration and manual installation**, not production-signed or for Google Play. Backend: https://api.smartsystem.live.
+
+### Fixed
+- Clear phone notifications on logout/account change and reject stale foreground displays from previous sessions; retain authorized notification navigation.
+- Keep the staff cached-view warning when required dashboard refreshes fail; clear it after successful refresh.
+- Explicitly select the CI Debug keystore and verify the APK certificate matches it before publication.
+
+### Included updates from b8cc00b
+- Course announcements submit correct multipart forms, including attachments.
+- Check-in confirms success immediately after the server records attendance; later refresh errors cannot turn that success into failure.
+- Android foreground phone notifications, high-importance channel/icon and private lock-screen presentation.
+- Redesigned attendance screen with semester-aware weeks and translated "Before this semester" grouping.
+- Web sign-in keeps the bundled emblem instead of fetching the old stock logo.
+
+### Installation and limitations
+- Version 0.1.10+3, package com.example.fyp_flutter.
+- Older APKs with a different Debug certificate require uninstalling first (removes local app data), including potentially v0.1.9 and local QA builds.
+- Keep the same ANDROID_DEBUG_KEYSTORE_BASE64 for future updates; CI fails if the built signer differs.
+- No new real FCM sends or production database/cloud configuration changes. Physical devices remain untested. The staff warning fix does not claim to fix administrator API latency.
+
+
 ## Sign-in emblem — 2026-11-18 01:16
 - The web sign-in page keeps the new emblem; it no longer switches to the old logo a moment after loading (often while hovering), and it no longer downloads a 3.2 MB logo on every visit. ChatGPT review pending.
 

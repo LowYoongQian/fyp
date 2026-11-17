@@ -76,6 +76,8 @@ class MobilePush {
     final generation = ++_generation;
     _token = token;
     _base = base;
+    await _nativeSession('activate', generation);
+    if (generation != _generation) return;
     await _refresh?.cancel();
     try {
       final profile = await AccountSecurity.request(
@@ -179,9 +181,12 @@ class MobilePush {
   static Future<void> unbind(String token) async {
     if (token != _token) return;
     final device = _device, base = _base;
+    final previousGeneration = _generation;
     ++_generation;
     _token = '';
     _device = '';
+    _pendingNotice = null;
+    await _nativeSession('deactivate', previousGeneration);
     await _refresh?.cancel();
     _refresh = null;
     status.value = 'Signed out; mobile alerts are disabled.';
@@ -207,11 +212,20 @@ class MobilePush {
 
   /// Shows an update as a normal phone notification (it pops up like other apps' do) while this app is open;
   /// while the app is closed the server's push shows it instead. Nothing appears without notification permission.
-  static Future<void> showOnPhone(String id, String title, String body) async {
-    // shortcut: Android only, the only platform this project builds; add iOS here when an iOS build ships.
+  static Future<void> _nativeSession(String method, int generation) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     try {
-      await _alerts.invokeMethod('show', {'id': id, 'title': title, 'body': body});
+      await _alerts.invokeMethod(method, {'owner': '$generation'});
+    } catch (_) { /* Native bridge is absent in non-Android tests. */ }
+  }
+
+  static Future<void> showOnPhone(String id, String title, String body, {required String authToken}) async {
+    // shortcut: Android only, the only platform this project builds; add iOS here when an iOS build ships.
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    if (authToken.isEmpty || authToken != _token) return;
+    final generation = _generation;
+    try {
+      await _alerts.invokeMethod('show', {'id': id, 'title': title, 'body': body, 'owner': '$generation'});
     } catch (_) {
       /* No native side (tests, other platforms): nothing to show. */
     }

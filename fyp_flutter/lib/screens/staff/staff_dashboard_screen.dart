@@ -124,11 +124,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
     try {
       await Future.wait([
-        fetchTimetable(),
-        fetchMyCourses(),
-        fetchActiveSessions(),
-        fetchTodayClasses(),
-        fetchClassesNeedingAttention(),
+        fetchTimetable(requireSuccess: true),
+        fetchMyCourses(requireSuccess: true),
+        fetchActiveSessions(requireSuccess: true),
+        fetchTodayClasses(requireSuccess: true),
+        fetchClassesNeedingAttention(requireSuccess: true),
       ]);
     } catch (e) {
       debugPrint("Error loading lecturer data: $e");
@@ -184,7 +184,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
-  Future<void> fetchTimetable() async {
+  Future<void> fetchTimetable({bool requireSuccess = false}) async {
     final token = widget.authToken, server = widget.apiBaseUrl, cacheKey = _timetableCacheKey;
     bool current() => mounted && token == widget.authToken && server == widget.apiBaseUrl;
     final uri = Uri.parse("${widget.apiBaseUrl}/lecturers/me/timetable");
@@ -198,6 +198,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         )
         .timeout(const Duration(seconds: 8));
 
+    if (requireSuccess && response.statusCode != 200) throw StateError('Timetable refresh rejected');
     if (!current() || response.statusCode != 200) return;
     final List<dynamic> data = jsonDecode(response.body);
     final timetable = data
@@ -225,7 +226,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
     if (current()) await prefs.setString(cacheKey, jsonEncode(timetable));
   }
 
-  Future<void> fetchTodayClasses() async {
+  Future<void> fetchTodayClasses({bool requireSuccess = false}) async {
     final response = await http
         .get(
           Uri.parse("${widget.apiBaseUrl}/sessions/today"),
@@ -235,12 +236,13 @@ class _StaffDashboardState extends State<StaffDashboard> {
           },
         )
         .timeout(const Duration(seconds: 8));
+    if (requireSuccess && response.statusCode != 200) throw StateError('Dashboard refresh rejected');
     if (response.statusCode == 200 && mounted) {
       setState(() => todayClasses = jsonDecode(response.body) as List<dynamic>);
     }
   }
 
-  Future<void> fetchClassesNeedingAttention() async {
+  Future<void> fetchClassesNeedingAttention({bool requireSuccess = false}) async {
     final response = await http
         .get(
           Uri.parse("${widget.apiBaseUrl}/sessions/needs-attention"),
@@ -250,6 +252,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
           },
         )
         .timeout(const Duration(seconds: 8));
+    if (requireSuccess && response.statusCode != 200) throw StateError('Dashboard refresh rejected');
     if (response.statusCode == 200 && mounted) {
       setState(
         () => classesNeedingAttention =
@@ -1324,30 +1327,32 @@ class _StaffDashboardState extends State<StaffDashboard> {
         _pendingTopics.clear();
         if (changed.containsAll({'timetable', 'sessions', 'attendance'})) _lastRefresh = DateTime.now();
         await Future.wait([
-          if (changed.contains('timetable')) fetchTimetable(),
-          if (changed.contains('timetable')) fetchMyCourses(),
+          if (changed.contains('timetable')) fetchTimetable(requireSuccess: true),
+          if (changed.contains('timetable')) fetchMyCourses(requireSuccess: true),
           if (changed.contains('sessions') || changed.contains('attendance')) ...[
-            fetchActiveSessions(), fetchTodayClasses(), fetchClassesNeedingAttention(),
+            fetchActiveSessions(requireSuccess: true), fetchTodayClasses(requireSuccess: true), fetchClassesNeedingAttention(requireSuccess: true),
           ],
-          if (changed.contains('attendance') && selectedCourseId != null) fetchCourseSessions(selectedCourseId!, silent: true),
+          if (changed.contains('attendance') && selectedCourseId != null) fetchCourseSessions(selectedCourseId!, silent: true, requireSuccess: true),
         ]);
         // A full refresh just loaded everything, so the start-up "Showing cached view" banner is no longer true.
         if (mounted && loadError != null && changed.containsAll({'timetable', 'sessions', 'attendance'})) setState(() => loadError = null);
       }
     } catch (e) {
+      if (mounted) setState(() => loadError = 'Network error loading data. Showing cached view.');
       debugPrint('Background refresh failed: $e');   // keep showing what is on screen; the next refresh retries
     } finally {
       _pollInProgress = false;
     }
   }
 
-  Future<void> fetchActiveSessions() async {
+  Future<void> fetchActiveSessions({bool requireSuccess = false}) async {
     try {
       final uri = Uri.parse("${widget.apiBaseUrl}/sessions/active");
       final res = await http
           .get(uri, headers: {"Authorization": "Bearer ${widget.authToken}"})
           .timeout(const Duration(seconds: 5));
 
+      if (requireSuccess && res.statusCode != 200) throw StateError('Dashboard refresh rejected');
       if (res.statusCode == 200) {
         // /sessions/active already filters by lecturer server-side
         // (owned-or-assigned), so no client-side filter is needed.
@@ -1359,11 +1364,12 @@ class _StaffDashboardState extends State<StaffDashboard> {
         }
       }
     } catch (e) {
+      if (requireSuccess) rethrow;
       debugPrint("Error fetching active sessions: $e");
     }
   }
 
-  Future<void> fetchMyCourses() async {
+  Future<void> fetchMyCourses({bool requireSuccess = false}) async {
     final token = widget.authToken, server = widget.apiBaseUrl, cacheKey = _coursesCacheKey;
     bool current() => mounted && token == widget.authToken && server == widget.apiBaseUrl;
     try {
@@ -1378,6 +1384,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
           )
           .timeout(const Duration(seconds: 5));
 
+      if (requireSuccess && res.statusCode != 200) throw StateError('Dashboard refresh rejected');
       if (res.statusCode == 200 && current()) {
         final List<dynamic> data = jsonDecode(res.body);
         if (mounted) {
@@ -1394,16 +1401,17 @@ class _StaffDashboardState extends State<StaffDashboard> {
           if (!current()) return;
           await prefs.setString(cacheKey, jsonEncode(data));
           if (selectedCourseId != null && selectedCourseId!.isNotEmpty) {
-            await fetchCourseSessions(selectedCourseId!);
+            await fetchCourseSessions(selectedCourseId!, requireSuccess: requireSuccess);
           }
         }
       }
     } catch (e) {
+      if (requireSuccess) rethrow;
       debugPrint("Error fetching lecturer courses: $e");
     }
   }
 
-  Future<void> fetchCourseSessions(String courseId, {bool silent = false}) async {
+  Future<void> fetchCourseSessions(String courseId, {bool silent = false, bool requireSuccess = false}) async {
     if (!mounted) return;
     if (!silent) setState(() { isFetchingHistory = true; });
 
@@ -1421,6 +1429,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
           )
           .timeout(const Duration(seconds: 6));
 
+      if (requireSuccess && res.statusCode != 200) throw StateError('Dashboard refresh rejected');
       if (res.statusCode == 200) {
         final List<dynamic> data = jsonDecode(res.body);
         if (mounted) {
@@ -1431,6 +1440,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
         }
       }
     } catch (e) {
+      if (requireSuccess) rethrow;
       debugPrint("Error fetching course sessions history: $e");
     } finally {
       if (mounted) {

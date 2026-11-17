@@ -12,6 +12,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      FYP_DEMO_KEYSTORE_PATH: ${{ runner.temp }}/fyp-demo-debug.keystore
     permissions:
       contents: write
     steps:
@@ -37,7 +39,7 @@ jobs:
           set -euo pipefail
           umask 077
           python3 - <<'PY'
-          import base64,json,os,re,subprocess
+          import base64,hashlib,json,os,re,subprocess
           from pathlib import Path
           m=re.search(r'^version:\s*(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\+([1-9]\d*)\s*$',Path('pubspec.yaml').read_text(),re.M)
           assert m, 'Expected MAJOR.MINOR.PATCH+positiveVersionCode'
@@ -58,15 +60,17 @@ jobs:
               Path('android/app/google-services.json').write_text(json.dumps(config))
               encoded=os.environ.get('ANDROID_DEBUG_KEYSTORE_BASE64','')
               if encoded:
-                  key=Path.home()/'.android/debug.keystore';key.parent.mkdir(parents=True,exist_ok=True)
+                  key=Path(os.environ['FYP_DEMO_KEYSTORE_PATH']);key.parent.mkdir(parents=True,exist_ok=True)
                   key.write_bytes(base64.b64decode(encoded,validate=True));key.chmod(0o600)
                   checked=subprocess.run(['keytool','-list','-keystore',str(key),'-alias','androiddebugkey','-storepass','android'],capture_output=True)
                   assert checked.returncode==0
+                  certificate=subprocess.check_output(['keytool','-exportcert','-keystore',str(key),'-alias','androiddebugkey','-storepass','android'],stderr=subprocess.DEVNULL)
+                  fingerprint=hashlib.sha256(certificate).hexdigest()
               else:
-                  print('::warning::No fixed Debug keystore: signer may change between runs; uninstall may be required.')
+                  raise ValueError('Fixed demo keystore required')
           except Exception:
               raise SystemExit('Missing/invalid Firebase Android client JSON or Debug keystore; details withheld.') from None
-          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write(f'version={version}\ncode={code}\n')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write(f'version={version}\ncode={code}\ncertificate={fingerprint}\n')
           PY
       - name: Refuse existing Release changes
         if: github.ref_type == 'tag'
@@ -95,6 +99,7 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.prepare.outputs.version }}
           EXPECTED_CODE: ${{ steps.prepare.outputs.code }}
+          EXPECTED_CERT_SHA256: ${{ steps.prepare.outputs.certificate }}
         run: |
           python3 - <<'PY'
           import base64,hashlib,json,os,re,subprocess
@@ -114,6 +119,8 @@ jobs:
           assert f"versionCode='{os.environ['EXPECTED_CODE']}'" in badging
           assert 'application-debuggable' not in badging and 'android.permission.POST_NOTIFICATIONS' in badging
           assert 'CN=Android Debug' in cert, 'Expected Debug certificate'
+          actual=re.search(r'certificate SHA-256 digest: ([0-9a-f]+)',cert).group(1)
+          assert actual==os.environ['EXPECTED_CERT_SHA256'], 'APK signer does not match configured demo keystore'
           assert 'fyp-tar' in resources and '1:461473496985:android:ab53d01f9df4f739225d08' in resources
           api=False
           with ZipFile(apk) as z:
@@ -146,11 +153,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          text=Path('CHANGELOG.md').read_text()
+          marker='## '+os.environ['GITHUB_REF_NAME']+'\n'
+          assert marker in text, 'Missing versioned release notes'
+          section=text.split(marker,1)[1].split('\n## ',1)[0]
+          Path(os.environ['RUNNER_TEMP']+'/apk-release-notes.md').write_text(section)
+          PY
           gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
             --title "Smart Attendance $GITHUB_REF_NAME — Debug-signed FYP demo" \
-            --notes 'Release-mode APK with Android Debug signature for FYP demonstration and manual installation. Not production-signed, not for Google Play. Backend: https://api.smartsystem.live. A changed certificate requires uninstalling the old APK, removing local app data.'
+            --notes-file "$RUNNER_TEMP/apk-release-notes.md"
           gh release upload "$GITHUB_REF_NAME" fyp_flutter/build/app/outputs/flutter-apk/*-debug-signed.apk fyp_flutter/build/app/outputs/flutter-apk/*-debug-signed.apk.sha256
           gh release edit "$GITHUB_REF_NAME" --draft=false
       - name: Clean temporary client and signing files
         if: always()
-        run: rm -f -- fyp_flutter/android/app/google-services.json "$HOME/.android/debug.keystore"
+        run: rm -f -- fyp_flutter/android/app/google-services.json "$FYP_DEMO_KEYSTORE_PATH"

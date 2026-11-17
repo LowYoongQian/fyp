@@ -15,6 +15,7 @@ import io.flutter.plugin.common.MethodChannel
 /** Shows updates that arrive while the app is open as normal phone notifications (they pop up like other apps' do). */
 class MainActivity : FlutterActivity() {
     private var alerts: MethodChannel? = null
+    private var activeOwner: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -26,7 +27,19 @@ class MainActivity : FlutterActivity() {
         alerts = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "smart_attendance/alerts").also {
             it.setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "show" -> result.success(show(call.argument<String>("id").orEmpty(),
+                    "activate" -> {
+                        getSystemService(NotificationManager::class.java).cancelAll()
+                        activeOwner = call.argument<String>("owner")
+                        result.success(null)
+                    }
+                    "deactivate" -> {
+                        if (activeOwner == call.argument<String>("owner")) {
+                            activeOwner = null
+                            getSystemService(NotificationManager::class.java).cancelAll()
+                        }
+                        result.success(null)
+                    }
+                    "show" -> result.success(activeOwner != null && activeOwner == call.argument<String>("owner") && show(call.argument<String>("id").orEmpty(),
                         call.argument<String>("title").orEmpty(), call.argument<String>("body").orEmpty()))
                     // A tap that started the app: hand the notice to Flutter once.
                     "launch" -> result.success(intent?.getStringExtra(EXTRA_ID).also { intent?.removeExtra(EXTRA_ID) })

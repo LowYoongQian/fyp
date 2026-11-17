@@ -1591,13 +1591,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       // A new notice pops up as a normal phone notification, only while the app is open and the General Settings switches
       // allow it. Every notice is remembered once, even with the switches off, so turning them on later shows no backlog.
       final prefs = await SharedPreferences.getInstance();
-      if (!mounted) return;
+      if (!mounted || token != widget.authToken || server != ApiConfig.getEffectiveUrl()) return;
       final allowed = !_alertBaseline && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
           prefs.getBool('notifications_enabled') != false && prefs.getBool('in_app_notifications') != false;
       _alertBaseline = false;
       for (final item in notifications) {
         if (_shownNotificationIds.add('${item['id']}') && allowed && item['is_read'] != true) {
-          unawaited(MobilePush.showOnPhone('${item['id']}', tr(item['title'] ?? 'Attendance update'), tr(item['body'] ?? '')));
+          unawaited(MobilePush.showOnPhone('${item['id']}', tr(item['title'] ?? 'Attendance update'), tr(item['body'] ?? ''), authToken: token));
         }
       }
     } catch (_) {

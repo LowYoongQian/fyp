@@ -88,6 +88,10 @@ android {
     }
 
     signingConfigs {
+        System.getenv("FYP_DEMO_KEYSTORE_PATH")?.let { path ->
+            check(file(path).isFile) { "Configured demo Debug keystore is missing." }
+            getByName("debug").storeFile = file(path)
+        }
         if (hasReleaseSigning) {
             create("release") {
                 storeFile = file(releaseStore!!)
