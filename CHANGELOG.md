@@ -13,6 +13,7 @@ Release-mode, Debug-signed Android demo APK; Backend: https://api.smartsystem.li
 - Settings face-recognition self-test for registered students using camera gestures and the shared server liveness/ArcFace threshold; reports pass/fail without recording attendance or new biometric profiles.
 - Separate self-test challenges bound to student, login session and face-registration revision: 120-second expiry, atomic single use and five requests per student per ten minutes. Challenges write security state only, not attendance, photos or embeddings.
 - Additive Alembic migration a6c9e2f41083 creates face_self_test_challenges; no existing business data rewrite or schema-drift repair.
+- Protect the new security table with RLS and revoke direct PUBLIC/anon/authenticated access, matching existing auth tables; existing business-table policies are unchanged.
 - Reusable synthetic route tests support both SQLite and guarded, migrated PostgreSQL databases.
 
 ### Validation and limitations

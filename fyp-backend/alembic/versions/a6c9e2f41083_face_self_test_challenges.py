@@ -18,6 +18,10 @@ def upgrade():
         sa.Column('expires_at', sa.DateTime(), nullable=False),
         sa.Column('consumed_at', sa.DateTime(), nullable=True))
     op.create_index('ix_face_self_test_owner_issued', 'face_self_test_challenges', ['student_id', 'issued_at'])
+    # Match the existing auth-session security tables: only the trusted backend
+    # may read/consume challenges; Supabase client roles must not bypass its quota.
+    op.execute('ALTER TABLE public.face_self_test_challenges ENABLE ROW LEVEL SECURITY')
+    op.execute('REVOKE ALL ON public.face_self_test_challenges FROM PUBLIC, anon, authenticated')
 
 
 def downgrade():

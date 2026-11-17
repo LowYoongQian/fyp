@@ -321,4 +321,6 @@ def test_additive_migration_builds_only_self_test_security_schema():
     sql = output.getvalue()
     assert 'CREATE TABLE face_self_test_challenges' in sql
     assert 'FOREIGN KEY(auth_session_id) REFERENCES auth_sessions (id) ON DELETE CASCADE' in sql
+    assert 'ALTER TABLE public.face_self_test_challenges ENABLE ROW LEVEL SECURITY' in sql
+    assert 'REVOKE ALL ON public.face_self_test_challenges FROM PUBLIC, anon, authenticated' in sql
     assert 'attendance_records' not in sql and 'checkin_challenges' not in sql
