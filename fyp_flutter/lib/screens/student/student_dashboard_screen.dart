@@ -22,6 +22,7 @@ import '../../services/live_updates.dart';
 import '../../services/academic_calendar.dart';
 import '../../services/attendance_parity.dart';
 import '../../services/local_cache_service.dart';
+import '../../services/mobile_push.dart';
 
 String? _toastSessionToken;
 final Set<String> _toastedNoticeIds = {};
@@ -100,7 +101,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _activeTabIndex = 0; // 0 for Check-In, 1 for Schedule, 2 for History
   late PageController _pageController;
 
@@ -120,10 +121,19 @@ class _MainScreenState extends State<MainScreen> {
   final Set<String> _pendingTopics = {};
   Set<String> get _shownNotificationIds => toastedNoticesFor(widget.authToken);
   List<Map<String, dynamic>> _notifications = [];
+  // The first list after opening or returning to the app is only remembered: the push already showed what came while
+  // the app was closed, and older unread notices stay in the bell list. Notices that arrive after that pop up.
+  bool _alertBaseline = true;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _alertBaseline = true;
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pageController = PageController(initialPage: _activeTabIndex);
     fetchActiveSessions(showInitialLoading: true);
     unawaited(_fetchLiveNotifications());
@@ -137,6 +147,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     _live?.dispose();
     _pageController.dispose();
@@ -315,6 +326,7 @@ class _MainScreenState extends State<MainScreen> {
       _hasLoadedSessions = false;
       isLoadingSessions = false;
       sessionsError = null;
+      _alertBaseline = true;   // another account: its existing notices are remembered, not popped up
       _startLive();
       unawaited(fetchActiveSessions(showInitialLoading: true));
       unawaited(_fetchLiveNotifications());
@@ -1576,46 +1588,18 @@ class _MainScreenState extends State<MainScreen> {
         setState(() => _notifications = notifications);
       }
       if (!showToast) return;
-      final unread = notifications.where(
-        (item) =>
-            item['is_read'] != true &&
-            !_shownNotificationIds.contains('${item['id']}'),
-      );
-      if (unread.isEmpty) return;
-      final item = unread.first;
-      _shownNotificationIds.add('${item['id']}');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 5),
-          content: Row(
-            children: [
-              const Icon(
-                Icons.notifications_active_rounded,
-                color: Colors.white,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      tr(item['title'] ?? 'Attendance update'),
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      tr(item['body'] ?? ''),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+      // A new notice pops up as a normal phone notification, only while the app is open and the General Settings switches
+      // allow it. Every notice is remembered once, even with the switches off, so turning them on later shows no backlog.
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      final allowed = !_alertBaseline && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+          prefs.getBool('notifications_enabled') != false && prefs.getBool('in_app_notifications') != false;
+      _alertBaseline = false;
+      for (final item in notifications) {
+        if (_shownNotificationIds.add('${item['id']}') && allowed && item['is_read'] != true) {
+          unawaited(MobilePush.showOnPhone('${item['id']}', tr(item['title'] ?? 'Attendance update'), tr(item['body'] ?? '')));
+        }
+      }
     } catch (_) {
       // Live alerts are additive; a failed poll must not disturb the dashboard.
     }

@@ -79,6 +79,7 @@ const Map<String, String> msPhrases = {
   'Available Session Windows': 'Tetingkap Sesi Tersedia',
   'Back': 'Kembali',
   'Back to sign in': 'Kembali ke log masuk',
+  'Before this semester': 'Sebelum semester ini',
   'Blink': 'Kelip mata',
   'Bright, clean screens all day': 'Skrin cerah dan kemas sepanjang hari',
   'By': 'Oleh',

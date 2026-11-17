@@ -1,5 +1,23 @@
 # Changelog
 
+## Sign-in emblem — 2026-11-18 01:16
+- The web sign-in page keeps the new emblem; it no longer switches to the old logo a moment after loading (often while hovering), and it no longer downloads a 3.2 MB logo on every visit. ChatGPT review pending.
+
+
+## Course attendance screen and sign-in logo — 2026-11-18 01:09
+- The mobile course attendance screen has a new design, and classes held before the current semester are grouped as "Before this semester" instead of showing negative week numbers.
+- The web sign-in page now shows the new emblem instead of the old logo. ChatGPT review pending.
+
+
+## Phone notifications in the student app — 2026-11-18 00:41
+- New notices now pop up as normal phone notifications (like other apps) instead of the in-app card, only once each, and the General Settings notification switches turn them off. ChatGPT review pending.
+
+
+## Course notices and mobile check-in fixes — 2026-11-18 00:19
+- Fixed course notices failing with 422 on the web: create and edit now send a proper form (with or without an attachment).
+- The mobile check-in success dialog now appears as soon as the server records the attendance, and the staff "Network error… Showing cached view" banner clears once the data reloads. ChatGPT review pending.
+
+
 ## Edge regression recheck — 2026-11-17 03:45
 - Rechecked the Edge sign-in and admin menu fixes: no new change needed; sign-in tests 37/37 and admin menu tests 17/17 in Edge. ChatGPT review pending.
 

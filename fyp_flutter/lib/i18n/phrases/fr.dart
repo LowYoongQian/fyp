@@ -79,6 +79,7 @@ const Map<String, String> frPhrases = {
   'Available Session Windows': 'Créneaux disponibles',
   'Back': 'Retour',
   'Back to sign in': 'Retour à la connexion',
+  'Before this semester': 'Avant ce semestre',
   'Blink': 'Clignez des yeux',
   'Bright, clean screens all day': 'Des écrans clairs et nets toute la journée',
   'By': 'Par',

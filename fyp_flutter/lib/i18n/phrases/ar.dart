@@ -79,6 +79,7 @@ const Map<String, String> arPhrases = {
   'Available Session Windows': 'فترات الحضور المتاحة',
   'Back': 'رجوع',
   'Back to sign in': 'العودة إلى تسجيل الدخول',
+  'Before this semester': 'قبل هذا الفصل الدراسي',
   'Blink': 'رمش',
   'Bright, clean screens all day': 'شاشات فاتحة ونظيفة طوال اليوم',
   'By': 'بواسطة',

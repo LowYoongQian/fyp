@@ -79,6 +79,7 @@ const Map<String, String> zhPhrases = {
   'Available Session Windows': '可签到的时段',
   'Back': '返回',
   'Back to sign in': '返回登录',
+  'Before this semester': '本学期之前',
   'Blink': '眨眼',
   'Bright, clean screens all day': '全天明亮清爽的界面',
   'By': '发布者',

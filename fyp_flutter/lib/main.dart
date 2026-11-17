@@ -1597,28 +1597,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         jsonDecode(response.body) as Map<String, dynamic>,
       );
 
-      for (final row in await LocalCacheService.pendingCheckIns(
-        owner,
-        server,
-      )) {
-        if (row['owner'] == owner &&
-            row['session_id'].toString() == sessionId.toString()) {
-          await LocalCacheService.updateCheckIn(
-            row['id'] as int,
-            owner,
-            'synced',
-            'Attendance recorded.',
-          );
-        }
-      }
-      if (!current()) return;
-      try {
-        await refreshStudentFaceStatus();
-      } catch (_) {}
-      await syncData(context);
-
-      if (!current()) return;
-
+      // The server has recorded it: confirm now. The refreshes below can take 25 s or more on a busy server,
+      // and a failure in them must not turn a recorded check-in into a "check-in failed" dialog.
       showCheckInSuccessDialog(
         context,
         courseCode: courseCode,
@@ -1632,6 +1612,29 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         wifiVerified: verification.wifiVerified,
         livenessPassed: verification.livenessPassed,
       );
+      try {
+        for (final row in await LocalCacheService.pendingCheckIns(
+          owner,
+          server,
+        )) {
+          if (row['owner'] == owner &&
+              row['session_id'].toString() == sessionId.toString()) {
+            await LocalCacheService.updateCheckIn(
+              row['id'] as int,
+              owner,
+              'synced',
+              'Attendance recorded.',
+            );
+          }
+        }
+        if (!current()) return;
+        try {
+          await refreshStudentFaceStatus();
+        } catch (_) {}
+        await syncData(context);
+      } catch (e) {
+        debugPrint('Refresh after check-in failed: ${e.runtimeType}');
+      }
     } catch (e) {
       if (current()) {
         // Red result with the reason; Try again reopens the scan when the dashboard passed a way to do so.

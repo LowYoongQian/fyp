@@ -79,6 +79,7 @@ const Map<String, String> jaPhrases = {
   'Available Session Windows': '受付可能な時間帯',
   'Back': '戻る',
   'Back to sign in': 'サインインに戻る',
+  'Before this semester': '今学期より前',
   'Blink': 'まばたき',
   'Bright, clean screens all day': '一日中明るくすっきりした画面',
   'By': '投稿者',

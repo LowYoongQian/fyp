@@ -1080,6 +1080,7 @@ export const apiService = {
   },
   lecturerCreateCourseAnnouncement: async (data: FormData, onProgress?: (percent: number) => void): Promise<Announcement> => {
     const response = await api.post('/lecturers/me/course-announcements', data, {
+      headers: { 'Content-Type': undefined },   // let the browser send multipart/form-data with its boundary (the instance default is JSON)
       onUploadProgress: event => {
         if (event.total) onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
       },
@@ -1089,6 +1090,7 @@ export const apiService = {
   },
   lecturerUpdateCourseAnnouncement: async (id: string | number, data: FormData, onProgress?: (percent: number) => void): Promise<Announcement> => {
     const response = await api.put(`/lecturers/me/course-announcements/${id}`, data, {
+      headers: { 'Content-Type': undefined },   // let the browser send multipart/form-data with its boundary (the instance default is JSON)
       onUploadProgress: event => {
         if (event.total) onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
       },
@@ -1107,10 +1109,6 @@ export const apiService = {
     return cachedGet('/auth/me');
   },
   // Public and sent without the session token, to the same server the rest of the app uses. A non-2xx answer rejects, so callers keep the bundled logo.
-  getPublicLogo: async (signal?: AbortSignal): Promise<string | null> => {
-    const { data } = await axios.get(`${API_BASE_URL}/public/logo`, { signal, timeout: 8000 });
-    return typeof data?.logo_url === 'string' ? data.logo_url : null;
-  },
   changePassword: async (data: { current_password: string; new_password: string }) => {
     const response = await api.put('/auth/me/change-password', data);
     return response.data;

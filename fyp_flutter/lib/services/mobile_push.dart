@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'account_security.dart';
 
 class MobilePush {
@@ -12,12 +13,22 @@ class MobilePush {
   static StreamSubscription<String>? _refresh;
   static void Function(List<Map<String, dynamic>>, String)? onOpen;
   static String? _pendingNotice;
+  static const _alerts = MethodChannel('smart_attendance/alerts');   // MainActivity.kt
 
   static Future<void> initialize() async {
     if (kIsWeb ||
         (defaultTargetPlatform != TargetPlatform.android &&
             defaultTargetPlatform != TargetPlatform.iOS)) {
       return;
+    }
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      // Taps on alerts shown while the app was open (showOnPhone) open the notice, like taps on pushes.
+      _alerts.setMethodCallHandler((call) async {
+        if (call.method == 'opened') _openNotice('${call.arguments}');
+      });
+      try {
+        _pendingNotice = await _alerts.invokeMethod<String>('launch') ?? _pendingNotice;
+      } catch (_) {}
     }
     try {
       // Use native Firebase config, or public app options supplied at build time.
@@ -194,9 +205,24 @@ class MobilePush {
     }
   }
 
+  /// Shows an update as a normal phone notification (it pops up like other apps' do) while this app is open;
+  /// while the app is closed the server's push shows it instead. Nothing appears without notification permission.
+  static Future<void> showOnPhone(String id, String title, String body) async {
+    // shortcut: Android only, the only platform this project builds; add iOS here when an iOS build ships.
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _alerts.invokeMethod('show', {'id': id, 'title': title, 'body': body});
+    } catch (_) {
+      /* No native side (tests, other platforms): nothing to show. */
+    }
+  }
+
   static void _open(RemoteMessage message) {
     final id = message.data['notification_id']?.toString();
-    if (id == null) return;
+    if (id != null) _openNotice(id);
+  }
+
+  static void _openNotice(String id) {
     if (_token.isEmpty) {
       _pendingNotice = id;
     } else {

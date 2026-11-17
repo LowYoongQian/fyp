@@ -79,6 +79,7 @@ const Map<String, String> taPhrases = {
   'Available Session Windows': 'கிடைக்கும் அமர்வு நேரங்கள்',
   'Back': 'பின்செல்',
   'Back to sign in': 'உள்நுழைவுக்குத் திரும்பு',
+  'Before this semester': 'இந்தப் பருவத்திற்கு முன்',
   'Blink': 'கண் சிமிட்டு',
   'Bright, clean screens all day': 'நாள் முழுவதும் பிரகாசமான, தெளிவான திரைகள்',
   'By': 'வெளியிட்டவர்',

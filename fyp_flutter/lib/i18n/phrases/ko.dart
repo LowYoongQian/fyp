@@ -79,6 +79,7 @@ const Map<String, String> koPhrases = {
   'Available Session Windows': '출석 가능한 시간대',
   'Back': '뒤로',
   'Back to sign in': '로그인으로 돌아가기',
+  'Before this semester': '이번 학기 이전',
   'Blink': '눈 깜박이기',
   'Bright, clean screens all day': '하루 종일 밝고 깔끔한 화면',
   'By': '작성자',

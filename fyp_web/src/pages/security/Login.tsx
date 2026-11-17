@@ -365,25 +365,8 @@ export const Login: React.FC = () => {
   // Real-Time Malaysia (UTC+8) Time State
   const [timeState, setTimeState] = useState(() => getMalaysiaTimeDetails());
   
-  // Keep the optimized local logo for the normal/default case. A custom logo
-  // configured by an administrator can still replace it through the API.
-  const DEFAULT_REMOTE_LOGO_URL = 'https://iekqyzdevnzeohmiddjc.supabase.co/storage/v1/object/public/images/Logo/saslogo.png';
-  const [logoSrc, setLogoSrc] = useState<string>(sasLogoLocal);
-
-  useEffect(() => {
-    // One optional lookup per visit, to the API origin the app is configured for. Any failure keeps the bundled logo and never blocks sign-in.
-    const controller = new AbortController();
-    apiService.getPublicLogo(controller.signal).then(url => {
-      if (url && url !== DEFAULT_REMOTE_LOGO_URL) setLogoSrc(url);
-    }).catch(() => { /* The bundled logo is already showing. */ });
-    return () => controller.abort();
-  }, []);
-
-  const handleLogoError = () => {
-    if (logoSrc !== sasLogoLocal) {
-      setLogoSrc(sasLogoLocal);
-    }
-  };
+  // The sign-in page always shows the bundled emblem. It no longer downloads a server logo: production still stores the previous
+  // logo (a 3.2 MB image), which replaced the new emblem a moment after loading.
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1066,10 +1049,9 @@ export const Login: React.FC = () => {
         {/* Header */}
         <div className="text-center space-y-3">
           {/* On hover a light streak sweeps across the badge, cut to the logo's own shape (the logo image is the mask). */}
-          <span className="login-logo-shine mx-auto inline-block transition-transform duration-300 hover:scale-105" style={{ ['--logo-mask' as string]: `url("${logoSrc}")` }}>
+          <span className="login-logo-shine mx-auto inline-block transition-transform duration-300 hover:scale-105" style={{ ['--logo-mask' as string]: `url("${sasLogoLocal}")` }}>
             <img
-              src={logoSrc}
-              onError={handleLogoError}
+              src={sasLogoLocal}
               alt="Smart Attendance Logo"
               className="block h-36 w-36 sm:h-44 sm:w-44 md:h-48 md:w-48 object-contain drop-shadow-lg"
             />

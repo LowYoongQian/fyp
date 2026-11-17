@@ -450,11 +450,8 @@ def get_public_logo():
         url_row = db.execute(text("SELECT value FROM security_settings WHERE key = 'system_logo_url'")).first()
         if url_row and url_row[0] and "/storage/v1/object/public/assets/" not in url_row[0]:
             return {"logo_url": url_row[0]}
-        supabase_url = os.getenv("SUPABASE_URL", "https://iekqyzdevnzeohmiddjc.supabase.co").rstrip("/")
-        bucket = os.getenv("SUPABASE_IMAGE_BUCKET", "images").strip() or "images"
-        logo_folder = os.getenv("SUPABASE_LOGO_FOLDER", "Logo").strip().strip("/") or "Logo"
-        logo_file = os.getenv("SUPABASE_LOGO_FILENAME", "saslogo.png").strip() or "saslogo.png"
-        return {"logo_url": f"{supabase_url}/storage/v1/object/public/{bucket}/{logo_folder}/{logo_file}"}
+        # Nothing configured: the apps show their bundled emblem. The stock storage file (saslogo.png) is the previous logo.
+        return {"logo_url": None}
     finally:
         db.close()
 

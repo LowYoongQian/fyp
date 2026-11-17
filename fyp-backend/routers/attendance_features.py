@@ -20,7 +20,7 @@ from db.models import (
 )
 from domain.attendance import session_hours, require_session_enrolment
 from domain.scheduler import get_course_group_slots, session_checkin_state
-from domain import timetable_access
+from domain import semesters, timetable_access
 from domain.announcements import visible_announcements
 from domain.timetable_access import NOT_CURRENT, teaching_course_ids
 from utils.db_helpers import my_course_ids, require_own_profile
@@ -285,10 +285,22 @@ def student_attendance_sessions(scope: Literal["all", "current"] = Query("all"),
         if session.class_group in ("All", groups[session.course_id])
         and (scope != "current" or timetable_access.held_in_semester(semester_of[session.course_id], session.scheduled_start or session.opened_at))
     ]
-    semester_start = None
-    if assigned_sessions:
-        first_opened = assigned_sessions[0][0].scheduled_start or assigned_sessions[0][0].opened_at
-        semester_start = first_opened.date() - timedelta(days=first_opened.weekday())
+    # Oldest first by each class's own time: older rows have no scheduled_start, and SQL's "nulls last" put them after newer classes.
+    assigned_sessions.sort(key=lambda pair: pair[0].scheduled_start or pair[0].opened_at or datetime.min)
+    first_day = {}
+    for session, course in assigned_sessions:
+        when = session.scheduled_start or session.opened_at
+        if when is not None:
+            first_day.setdefault(course.id, semesters.campus_date(when))
+
+    def week_number(session: ClassSession, course: Course) -> int | None:
+        """Teaching week in the course's own semester (week 1 is the week its start date falls in; a course without a semester counts
+        from its first class). A class held before the semester began has no week in it: None, never a negative week."""
+        when = session.scheduled_start or session.opened_at
+        start = course.semester.start_date if course.semester is not None else first_day.get(course.id)
+        if when is None or start is None or semesters.campus_date(when) < start:
+            return None
+        return (semesters.campus_date(when) - (start - timedelta(days=start.weekday()))).days // 7 + 1
     session_ids = [session.id for session, _ in assigned_sessions]
     records = {
         row.session_id: row for row in db.query(AttendanceRecord).filter(
@@ -386,7 +398,7 @@ def student_attendance_sessions(scope: Literal["all", "current"] = Query("all"),
                 session.opened_at, session.closed_at,
                 scheduled_start=session.scheduled_start, scheduled_end=session.scheduled_end,
             ),
-            "week_number": ((session.opened_at.date() - semester_start).days // 7) + 1 if semester_start else 1,
+            "week_number": week_number(session, course),
         }
 
     return [session_dict(session, course) for session, course in reversed(assigned_sessions)]

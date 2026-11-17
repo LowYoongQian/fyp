@@ -1331,7 +1331,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
           ],
           if (changed.contains('attendance') && selectedCourseId != null) fetchCourseSessions(selectedCourseId!, silent: true),
         ]);
+        // A full refresh just loaded everything, so the start-up "Showing cached view" banner is no longer true.
+        if (mounted && loadError != null && changed.containsAll({'timetable', 'sessions', 'attendance'})) setState(() => loadError = null);
       }
+    } catch (e) {
+      debugPrint('Background refresh failed: $e');   // keep showing what is on screen; the next refresh retries
     } finally {
       _pollInProgress = false;
     }

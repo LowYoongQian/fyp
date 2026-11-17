@@ -79,6 +79,7 @@ const Map<String, String> esPhrases = {
   'Available Session Windows': 'Franjas de sesión disponibles',
   'Back': 'Atrás',
   'Back to sign in': 'Volver al inicio de sesión',
+  'Before this semester': 'Antes de este semestre',
   'Blink': 'Parpadear',
   'Bright, clean screens all day': 'Pantallas claras y limpias todo el día',
   'By': 'Por',

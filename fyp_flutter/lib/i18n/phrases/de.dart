@@ -79,6 +79,7 @@ const Map<String, String> dePhrases = {
   'Available Session Windows': 'Verfügbare Zeitfenster',
   'Back': 'Zurück',
   'Back to sign in': 'Zurück zur Anmeldung',
+  'Before this semester': 'Vor diesem Semester',
   'Blink': 'Blinzeln',
   'Bright, clean screens all day': 'Den ganzen Tag helle, klare Bildschirme',
   'By': 'Von',
