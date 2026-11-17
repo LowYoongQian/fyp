@@ -945,8 +945,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       if (portalType == 'student' && role != 'student') {
         throw Exception("This account is not a student account.");
       }
-      if (portalType == 'staff' && role != 'lecturer') {
-        throw Exception("This account is not a lecturer/staff account.");
+      if (portalType == 'staff' && role != 'lecturer' && role != 'admin') {
+        throw Exception("This account is not a staff/admin account.");
       }
 
       final token = authData['access_token'] as String;

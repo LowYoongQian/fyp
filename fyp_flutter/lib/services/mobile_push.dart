@@ -44,7 +44,11 @@ class MobilePush {
           );
       FirebaseMessaging.onMessageOpenedApp.listen(_open);
       FirebaseMessaging.onMessage.listen((message) {
-        if (_token.isNotEmpty) status.value = 'Mobile push connected.';
+        if (_token.isNotEmpty) {
+          status.value = 'Mobile push connected.';
+          // Fixed diagnostic only: never log payloads, account IDs, or device tokens.
+          debugPrint('Mobile push foreground update received.');
+        }
       });
       final initial = await FirebaseMessaging.instance.getInitialMessage();
       if (initial != null) {
