@@ -6,7 +6,7 @@ Production route functions and JWT guards run without role overrides.
 Each test rolls back its outer transaction, including endpoint commits.
 """
 import os
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from uuid import uuid4
 
 import pytest
@@ -63,9 +63,9 @@ def pg(qa_engine):
     with engine.connect() as conn:
         outer = conn.begin()
         with Session(conn, join_transaction_mode='create_savepoint') as db:
-            from routers import admin_students, admin_staff, admin_academic, academic_calendar, auth, account_security, sessions, attendance_features, analytics, llm, student_self, students, admin_attendance, face_enrolment
+            from routers import admin_students, admin_staff, admin_academic, academic_calendar, auth, account_security, sessions, attendance_features, analytics, llm, student_self, students, admin_attendance, face_enrolment, admin_config, medical_leave, admin_reports
             app = FastAPI()
-            for module in (admin_students, admin_staff, admin_academic, academic_calendar, auth, account_security, sessions, attendance_features, analytics, llm, student_self, students, admin_attendance, face_enrolment):
+            for module in (admin_students, admin_staff, admin_academic, academic_calendar, auth, account_security, sessions, attendance_features, analytics, llm, student_self, students, admin_attendance, face_enrolment, admin_config, medical_leave, admin_reports):
                 app.include_router(module.router)
             app.dependency_overrides[get_db] = lambda: db
             users = {}
@@ -198,11 +198,14 @@ def test_real_login_identity_portal_and_logout(pg, kind):
     assert result['role'] == ('student' if kind == 'students' else 'lecturer')
     auth = {'Authorization':'Bearer '+result['access_token']}
     assert pg[1].get('/auth/me',headers=auth).status_code == 200
-    call(pg, 'POST', '/auth/login', {**login,'portal':'staff' if kind == 'students' else 'student'}, role='anonymous', expected=403)
-    if kind == 'staff':
-        call(pg, 'POST', '/auth/login', {**login,'identifier':body['staff_id']}, role='anonymous')
-    else:
-        call(pg, 'POST', '/auth/login', {**login,'identifier':body['student_code'].lower()}, role='anonymous')   # student ID sign-in, any letter case
+    portal = 'student' if kind == 'students' else 'staff'
+    other_portal = 'staff' if kind == 'students' else 'student'
+    call(pg, 'POST', '/auth/login', {**login, 'portal': other_portal}, role='anonymous', expected=403)
+    identity_key = 'student_code' if kind == 'students' else 'staff_id'
+    id_login = {**login, 'identifier': body[identity_key].lower(), 'portal': portal}
+    call(pg, 'POST', '/auth/login', id_login, role='anonymous')
+    call(pg, 'POST', '/auth/login', {**id_login, 'portal': other_portal}, role='anonymous', expected=403)
+    call(pg, 'POST', '/auth/login', {**id_login, 'password': 'IncorrectSyntheticPassword'}, role='anonymous', expected=401)
     assert pg[1].post('/auth/logout',headers=auth).status_code == 200
     assert pg[1].get('/auth/me',headers=auth).status_code == 401
 
@@ -599,7 +602,6 @@ def test_flow_b_staff_opens_student_checks_in_auto_closes_at_5pm_three_roles_agr
     from routers import sessions,students,student_self
     from domain import session_sync
     from db.models import FaceEmbedding,ClassSession,AttendanceRecord
-    from utils.timeutil import utcnow
     student_body,student=provision(pg)
     teacher_body,teacher=provision(pg,'staff')
     programme,course,body=academic(pg)
@@ -614,7 +616,7 @@ def test_flow_b_staff_opens_student_checks_in_auto_closes_at_5pm_three_roles_agr
         result=call(pg,'POST','/auth/login',dict(identifier=identity['email'],password=identity['password']),role='anonymous')
         pg[2][role]={'Authorization':'Bearer '+result['access_token']}
     # Malaysia 3:30pm = UTC 07:30. Authentication keeps its real clock.
-    now=utcnow().replace(hour=7,minute=30,second=0,microsecond=0)
+    now=datetime.combine(today, time(7, 30))
     monkeypatch.setattr(sessions,'utcnow',lambda:now)
     monkeypatch.setattr(sessions,'campus_now',lambda:now+timedelta(hours=8))
     monkeypatch.setattr(session_sync,'utcnow',lambda:now)
@@ -644,6 +646,148 @@ def test_flow_b_staff_opens_student_checks_in_auto_closes_at_5pm_three_roles_agr
     assert call(pg,'GET','/students/me/enrolments',role='flow_student')[0]['attendance_rate']==100
     assert call(pg,'GET','/analytics/overview?course_id='+course['id'],role='flow_staff')['summary']['average_attendance']==100
     assert pg[0].query(AttendanceRecord).count()==1
+
+
+def test_campus_detection_only_suggests_a_private_range_when_running_locally(pg, monkeypatch):
+    from fastapi import HTTPException, Request
+    from routers import admin_config
+
+    request = Request({'type': 'http', 'headers': [], 'client': ('10.42.7.14', 49152)})
+    monkeypatch.delenv('TRUSTED_PROXY_CIDRS', raising=False)
+    monkeypatch.setenv('APP_ENV', 'production')
+    with pytest.raises(HTTPException) as error:
+        admin_config.detect_connection(request, db=pg[0])
+    assert error.value.status_code == 503
+
+    monkeypatch.setenv('APP_ENV', 'development')
+    monkeypatch.setenv('WEBSITE_SITE_NAME', 'synthetic-app-service')
+    with pytest.raises(HTTPException) as error:
+        admin_config.detect_connection(request, db=pg[0])
+    assert error.value.status_code == 503
+
+    with monkeypatch.context() as proxy:
+        proxy.setenv('TRUSTED_PROXY_CIDRS', '10.42.7.14/32')
+        proxy.setenv('TRUST_PROXY_HEADERS', 'true')
+        forwarded_request = Request({
+            'type': 'http', 'headers': [(b'x-forwarded-for', b'8.8.4.4')], 'client': ('10.42.7.14', 49152),
+        })
+        detected = admin_config.detect_connection(forwarded_request, db=pg[0])
+        assert detected['public_cidr'] == '8.8.4.4/32'
+        assert detected['local_cidr'] is None
+
+    monkeypatch.delenv('WEBSITE_SITE_NAME')
+    monkeypatch.setattr(admin_config, 'lookup_public_ip', lambda: '8.8.4.4')
+    monkeypatch.setattr(admin_config, 'get_server_wifi_details', lambda: ('QA Wi-Fi', None))
+    detected = admin_config.detect_connection(request, db=pg[0])
+    assert detected['public_cidr'] == '8.8.4.4/32'
+    assert detected['local_cidr'] == '10.42.7.0/24'
+
+
+def test_campus_rule_persists_both_ranges_and_checks_only_source(pg):
+    from db.models import CampusNetwork
+    from integrations.network_verify import verify_network
+
+    path = '/admin/campus-networks'
+    labels = {'label': 'QA Campus', 'ssid': 'QA Wi-Fi'}
+    call(pg, 'POST', path, labels, expected=400)
+    call(pg, 'POST', path, {**labels, 'subnet_range': '0.0.0.0/0'}, expected=400)
+    rule = call(pg, 'POST', path, {**labels, 'subnet_range': '10.42.7.0/24'}, expected=201)
+    assert rule['cidr'] is None and rule['subnet_range'] == '10.42.7.0/24'
+    rule = call(pg, 'PUT', f"{path}/{rule['id']}", {'cidr': '192.0.2.40/32'})
+    assert rule['cidr'] == '192.0.2.40/32' and rule['subnet_range'] == '10.42.7.0/24'
+    rules = pg[0].query(CampusNetwork).all()
+    metadata = dict(reported_gateway_ip='10.42.7.1', reported_local_ip='10.42.7.5',
+                    reported_ssid='QA Wi-Fi', reported_bssid=None)
+    for source, expected in (('192.0.2.40', True), ('10.42.7.8', True), ('203.0.113.8', False)):
+        assert verify_network(source_ip=source, networks=rules, **metadata)[0] is expected
+
+
+def test_campus_proxy_policy_requires_a_configured_peer(monkeypatch):
+    from fastapi import Request
+    from integrations.network_verify import get_client_ip
+
+    monkeypatch.setenv('TRUSTED_PROXY_CIDRS', '192.0.2.10/32')
+    forwarded = [(b'x-forwarded-for', b'203.0.113.20'), (b'forwarded', b'for=203.0.113.21')]
+    direct = Request({'type': 'http', 'client': ('198.51.100.12', 50001), 'headers': forwarded})
+    trusted = Request({'type': 'http', 'client': ('192.0.2.10', 50001), 'headers': forwarded})
+    assert get_client_ip(direct, trust_proxy_header=True) == '198.51.100.12'
+    assert get_client_ip(trusted, trust_proxy_header=False) == ''
+    assert get_client_ip(trusted, trust_proxy_header=True) == '203.0.113.20'
+
+
+def test_medical_leave_http_keeps_document_and_review_private(pg, monkeypatch):
+    from db.models import Enrolment
+    from routers import admin_reports, medical_leave
+
+    identity, owner = provision(pg)
+    _, course, _ = academic(pg)
+    other = pg[0].query(User).filter(User.role == 'student', User.id != owner.user_id).one()
+    pg[0].add_all([Student(user_id=other.id, name='Other QA Student', student_code='ST0000099'),
+                   Enrolment(student_id=owner.id, course_id=course['id'], class_group='G1')])
+    pg[0].commit()
+    login = call(pg, 'POST', '/auth/login', {'identifier': identity['email'], 'password': identity['password']}, role='anonymous')
+    pg[2]['owner'] = {'Authorization': 'Bearer ' + login['access_token']}
+    contents = {}
+    monkeypatch.setattr(medical_leave, 'upload_private_document', lambda path, data, _mime: contents.update({path: data}))
+    monkeypatch.setattr(admin_reports, 'download_private_document', contents.__getitem__)
+    today = str(campus_now().date())
+    path = '/students/me/medical-leave'
+    data = {'course_id': course['id'], 'start_date': today, 'end_date': today, 'reason': 'Synthetic medical leave'}
+    doc = b'%PDF-synthetic-proof'
+    response = pg[1].post(path, headers=pg[2]['owner'], data=data, files={'proof': ('qa.pdf', doc, 'application/pdf')})
+    assert response.status_code == 201
+    row = response.json()
+    assert row['status'] == 'pending' and len(contents) == 1
+    assert call(pg, 'GET', path, role='student') == []
+    review = f"/admin/reports/mc/{row['id']}"
+    call(pg, 'GET', review + '/proof', role='student', expected=403)
+    call(pg, 'PUT', review, {'status': 'Approved', 'source': 'request'}, role='lecturer', expected=403)
+    assert pg[1].get(review + '/proof', headers=pg[2]['admin']).content == doc
+    call(pg, 'PUT', review, {'status': 'Approved', 'source': 'request'})
+    assert call(pg, 'GET', path, role='owner')[0]['status'] == 'approved'
+
+
+def test_class_today_reuses_regular_row_and_includes_staff_replacement(pg, monkeypatch):
+    from db.models import ClassSession
+    from routers import sessions
+
+    staff_body, staff = provision(pg, 'staff')
+    programme, course, course_body = academic(pg)
+    call(pg, 'PUT', '/admin/courses/' + course['id'], {**course_body, 'lecturer_id': str(staff.id)})
+    signed_in = call(pg, 'POST', '/auth/login', {'identifier': staff_body['staff_id'], 'password': staff_body['password']}, role='anonymous')
+    pg[2]['teacher'] = {'Authorization': 'Bearer ' + signed_in['access_token']}
+    today = campus_now().date()
+    call(pg, 'POST', '/admin/semesters', {
+        'programme_id': programme['id'], 'name': 'Synthetic Today Term',
+        'start_date': str(today), 'end_date': str(today + timedelta(days=30)),
+        'max_student_credits': 18, 'course_ids': [course['id']],
+    }, expected=201)
+    now = datetime.combine(today, time(7, 30))
+    monkeypatch.setattr(sessions, 'utcnow', lambda: now)
+    monkeypatch.setattr(sessions, 'campus_now', lambda: now + timedelta(hours=8))
+    meeting = pg[0].query(ClassMeeting).one()
+    call(pg, 'PUT', f'/admin/timetable/{meeting.id}', {'day': today.strftime('%A'), 'start': '15:00', 'end': '17:00', 'room': 'Room A'})
+    original, = call(pg, 'GET', '/sessions/today', role='teacher')
+    assert original['status'] == 'scheduled' and original['course_code'] == course['course_code']
+    assert call(pg, 'GET', '/sessions/today', role='teacher') == [original]
+    path = f"/sessions/{original['id']}"
+    call(pg, 'POST', path + '/cancel', {'reason': 'Synthetic timetable change'}, role='teacher')
+    replacement = call(pg, 'POST', path + '/replacement', {
+        'scheduled_start': now.isoformat(), 'scheduled_end': (now + timedelta(hours=1)).isoformat(), 'room': 'Room B',
+    }, role='teacher', expected=201)
+    original_after, replacement_today = call(pg, 'GET', '/sessions/today', role='teacher')
+    assert original_after['id'] == original['id'] and original_after['status'] == 'cancelled'
+    assert replacement_today['id'] == replacement['id'] and replacement_today['role'] == 'Replacement'
+    assert replacement_today['replacement_for_session_id'] == original['id']
+    lesson = pg[0].get(ClassSession, replacement['id'])
+    lesson.status = 'needs_attention'
+    pg[0].commit()
+    attention, = call(pg, 'GET', '/sessions/needs-attention', role='teacher')
+    assert attention['id'] == replacement['id'] and attention['course_code'] == course['course_code']
+    now += timedelta(hours=2)
+    held = call(pg, 'POST', f"/sessions/{replacement['id']}/held", role='teacher')
+    assert held['status'] == 'completed' and held['is_open'] is False
+    assert pg[0].query(ClassSession).count() == 2
 
 
 def test_face_reset_requires_admin_password_current_revision_and_preserves_attendance(pg):

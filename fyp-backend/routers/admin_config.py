@@ -122,18 +122,19 @@ def detect_connection(request: Request, db: Session = Depends(get_db), current_u
     if observed.is_global:
         public_ip = client_ip
     else:
+        # A hosted app can see a proxy's private peer address. Do not offer its
+        # range for whitelisting as if it were the administrator's router.
+        if os.getenv("WEBSITE_SITE_NAME") or os.getenv("APP_ENV", "production").strip().lower() != "development":
+            raise HTTPException(503, "Unable to detect a public router address. Check trusted proxy configuration or enter the campus IP range manually.")
         local_ip = get_server_local_ip() if observed.is_loopback else client_ip
-        # A local run shares the admin's router, so its own internet address is the router's. A hosted server that sees a
-        # private address is behind an untrusted proxy instead; asking would return the host's address, so it does not.
-        if os.getenv("APP_ENV", "production").strip().lower() == "development":
-            public_ip = lookup_public_ip()
-            ssid, bssid = get_server_wifi_details()
-            try:
-                with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s6:
-                    s6.connect(('2001:4860:4860::8888', 80))
-                    ipv6_address = s6.getsockname()[0]
-            except OSError:
-                pass
+        public_ip = lookup_public_ip()
+        ssid, bssid = get_server_wifi_details()
+        try:
+            with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s6:
+                s6.connect(('2001:4860:4860::8888', 80))
+                ipv6_address = s6.getsockname()[0]
+        except OSError:
+            pass
 
     def network_of(address, v4_prefix):
         parsed = ipaddress.ip_address(address)

@@ -18,7 +18,7 @@ Widget student(String owner)=>MaterialApp(home:Scaffold(body:MainScreen(
   isCheckedInToday:false,attendanceHistory:const [],studentSchedule:const [],announcements:const [],
   isDatabaseOffline:false,isSyncing:false,onLogout:(){},onSyncRequested:() async {},
   onTimetableRefresh:() async=>[],onRegisterFace:(){},
-  onCheckInComplete:(a,b,c,d,e,f,{int? challengeMs,Map<String,dynamic>? extraDetails}){},
+  onCheckInComplete:(a,b,c,d,e,{int? challengeMs,Map<String,dynamic>? extraDetails}){},
 )));
 Widget staff(String owner)=>MaterialApp(home:Scaffold(body:StaffDashboard(
   key:ValueKey(owner),staffId:0,staffName:'Synthetic $owner',staffCode:'T-$owner',
@@ -34,6 +34,33 @@ void cleanup(WidgetTester tester) {
 }
 void main() {
   setUp(() {GoogleFonts.config.allowRuntimeFetching=false;ApiConfig.customUrl='http://127.0.0.1:1';SharedPreferences.setMockInitialValues({});});
+  testWidgets('student cached sessions show a network banner until retry succeeds', (tester) async {
+    cleanup(tester);
+    var offline = false;
+    await http.runWithClient(() async {
+      await tester.pumpWidget(student('A'));
+      await frames(tester);
+      final dynamic state = tester.state(find.byType(MainScreen));
+      expect(state.activeSessions.toString(), contains(secretA));
+      offline = true;
+      await state.fetchActiveSessions();
+      await frames(tester);
+      expect(find.text('Network error loading data. Showing cached view.'), findsOneWidget);
+      expect(state.activeSessions.toString(), contains(secretA));
+      offline = false;
+      await tester.tap(find.text('Retry'));
+      await frames(tester);
+      expect(find.text('Network error loading data. Showing cached view.'), findsNothing);
+      expect(state.activeSessions.toString(), contains('UPDATED-COURSE'));
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 11));
+    }, () => MockClient((request) async {
+      if (request.url.path != '/students/me/active-sessions') return http.Response('[]', 200);
+      if (offline) return http.Response('{}', 503);
+      final code = (await SharedPreferences.getInstance()).getKeys().isEmpty ? secretA : 'UPDATED-COURSE';
+      return http.Response(jsonEncode([{'id': 'qa-session', 'course_code': code}]), 200);
+    }));
+  });
   testWidgets('student B cannot read A active sessions persisted by the actual dashboard',(tester) async {
     cleanup(tester);
     await http.runWithClient(() async {

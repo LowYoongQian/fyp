@@ -341,6 +341,7 @@ class CheckInProgress {
   final _stage = ValueNotifier<WidgetBuilder?>(null); // null while waiting for the server
   BuildContext? _dialog;
   bool _open = true;
+  bool _dismissWhenBuilt = false;
 
   void _show(WidgetBuilder result) {
     if (_open) {
@@ -377,8 +378,13 @@ class CheckInProgress {
 
   /// Closes it if it is still waiting (the student signed out or switched account before the answer).
   void dismissIfWaiting() {
+    if (!_open || _stage.value != null) return;
     final dialog = _dialog;
-    if (!_open || _stage.value != null || dialog == null || !dialog.mounted) return;
+    if (dialog == null) {
+      _dismissWhenBuilt = true;
+      return;
+    }
+    if (!dialog.mounted) return;
     final route = ModalRoute.of(dialog);
     if (route == null) return;
     route.isCurrent ? Navigator.of(dialog).pop() : Navigator.of(dialog).removeRoute(route);
@@ -392,6 +398,10 @@ CheckInProgress showCheckInProgressDialog(BuildContext context, {required String
     barrierDismissible: false,
     builder: (ctx) {
       progress._dialog = ctx;
+      if (progress._dismissWhenBuilt) {
+        progress._dismissWhenBuilt = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) => progress.dismissIfWaiting());
+      }
       return ValueListenableBuilder<WidgetBuilder?>(
         valueListenable: progress._stage,
         builder: (ctx, result, _) => PopScope(

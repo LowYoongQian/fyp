@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
@@ -30,10 +32,16 @@ class SaveTrackingClient extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (!counts(request)) return _inner.send(request);
     savesInFlight.value++;
+    // A caller's timeout does not cancel the underlying send. Keep the global
+    // indicator bounded even when the transport never returns response headers.
+    final indicatorDeadline = Timer(const Duration(seconds: 45), () => savesInFlight.value--);
     try {
       return await _inner.send(request);
     } finally {
-      savesInFlight.value--;
+      if (indicatorDeadline.isActive) {
+        indicatorDeadline.cancel();
+        savesInFlight.value--;
+      }
     }
   }
 

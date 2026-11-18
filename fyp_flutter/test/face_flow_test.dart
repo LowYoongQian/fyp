@@ -8,13 +8,44 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../lib/main.dart';
 import '../lib/screens/student/face_scanner_screen.dart';
+import '../lib/services/save_activity.dart';
 import '../lib/services/student_errors.dart';
 import '../lib/screens/system/settings_screen.dart';
 import '../lib/screens/student/face_registration_required.dart';
 import '../lib/screens/student/student_dashboard_screen.dart';
+import '../lib/widgets/check_in_success_dialog.dart';
 
 void main() {
   setUpAll(() => GoogleFonts.config.allowRuntimeFetching = false);
+
+  testWidgets('a stalled save stops showing progress even before transport settles', (tester) async {
+    final response = Completer<http.Response>();
+    final client = SaveTrackingClient(MockClient((_) => response.future));
+    final save = client.post(Uri.parse('http://127.0.0.1/qa/save'));
+    await tester.pump(const Duration(seconds: 44));
+    expect(savesInFlight.value, 1);
+    await tester.pump(const Duration(seconds: 1));
+    final countAtDeadline = savesInFlight.value;
+    response.complete(http.Response('{}', 200));
+    expect((await save).statusCode, 200);
+    expect(countAtDeadline, 0);
+    expect(savesInFlight.value, 0);
+    client.close();
+  });
+
+  testWidgets('an abandoned check-in can dismiss its dialog before the first frame', (tester) async {
+    late BuildContext host;
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) {
+      host = context;
+      return const Scaffold();
+    })));
+    final dialog = showCheckInProgressDialog(host, courseCode: 'QA', courseName: 'Synthetic');
+    dialog.dismissIfWaiting();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Recording your attendance…'), findsNothing);
+  });
+
   test('registration, attendance and liveness remain distinct outcomes', () {
     expect(friendlyStudentError('Your face is already registered.'), startsWith('Face Already Registered:'));
     expect(friendlyStudentError('You have already registered attendance for this session'), startsWith('Already Checked In:'));

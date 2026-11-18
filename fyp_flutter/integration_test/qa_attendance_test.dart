@@ -46,6 +46,9 @@ void main() {
     Future<void> submit()=>root.submitAttendance(lesson,course,'Phase2 Synthetic Attendance',
         'synthetic-no-camera',true,root.context,extraDetails:{'challenge_token':challengeToken});
     await work(tester,submit());
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Saved on this phone'), findsOneWidget);
+    expect(find.text('Attendance recorded'), findsNothing);
     var queued=await LocalCacheService.pendingCheckIns(owner,server);
     final pending=queued.where((r)=>r['session_id']==lesson).single;
     expect(pending['status'],'pending',reason:'A lost response is uncertain until server reconciliation');
