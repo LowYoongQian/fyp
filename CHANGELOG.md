@@ -1,5 +1,14 @@
 # Changelog
 
+## Client handoff — 2026-11-18
+
+- Version remains 0.1.11+4; Android is a Debug-signed demo APK and iOS is an unsigned IPA requiring re-signing. Manual builds only; no new Release or Backend deployment.
+- Face registration now reconciles client timeouts with bounded status queries, confirms delayed success, and keeps unresolved submissions pending without automatically uploading another selfie; account/session and duplicate-callback guards remain active.
+- User-reported iPhone acceptance: Settings Face Recognition Self-Test passed; initial registration eventually saved after a client timeout. The corrected build still needs a new physical iPhone registration acceptance run.
+- Three-role acceptance passed with real Web UI, native Android Flutter UI, FastAPI, isolated migrated PostgreSQL/private Storage, real network checks and real-time class closure. Only camera/biometric output was substituted for check-in. MC rejection/approval, duplicate rejection, refresh and authorization checks passed; student rates 100%/100%/0% match scoped Staff/Admin data and 66.7% weighted attendance.
+- Preserve the distinction between derived absence and Admin UNRECORDED audit events. Flutter has no MC submission screen: actual Student Web submission and native attendance outcomes were tested. Real biometric/spoof and campus field acceptance remain separate.
+- Fix the obsolete positional argument in the existing native attendance QA test. Backend performance instrumentation and local acceptance drivers/evidence are excluded from this handoff.
+
 ## v0.1.11
 
 Release-mode, Debug-signed Android demo APK; Backend: https://api.smartsystem.live. Version 0.1.11+4. The separate manual iOS workflow produces an **unsigned IPA for user re-signing**, not an App Store/TestFlight release or directly installable signed app.

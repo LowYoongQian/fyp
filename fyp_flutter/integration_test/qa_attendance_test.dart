@@ -43,7 +43,7 @@ void main() {
     expect(challenge.statusCode,200);
     final challengeToken=jsonDecode(challenge.body)['challenge_token'];
     expect((await http.post(Uri.parse('$server/qa/response-loss'))).statusCode,200);
-    Future<void> submit()=>root.submitAttendance(lesson,'QA synthetic network',course,'Phase2 Synthetic Attendance',
+    Future<void> submit()=>root.submitAttendance(lesson,course,'Phase2 Synthetic Attendance',
         'synthetic-no-camera',true,root.context,extraDetails:{'challenge_token':challengeToken});
     await work(tester,submit());
     var queued=await LocalCacheService.pendingCheckIns(owner,server);
