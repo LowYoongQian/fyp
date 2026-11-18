@@ -184,7 +184,8 @@ def test_atomic_claim_survives_concurrent_replay_from_separate_connections(env):
         assert sorted(pool.map(claim, range(2))) == [200, 409]
 
 
-def test_first_registration_and_duplicate_never_create_attendance(env):
+def test_first_registration_and_duplicate_never_create_attendance(env, caplog):
+    caplog.set_level('INFO', logger='uvicorn.error')
     with Session(env[0]) as db:
         db.query(FaceEmbedding).filter_by(student_id=env[2]['owner'][2]).delete()
         db.query(Student).filter_by(id=env[2]['owner'][2]).update({'is_face_registered': False})
@@ -192,6 +193,10 @@ def test_first_registration_and_duplicate_never_create_attendance(env):
     body = {'image_base64': 'synthetic-image', 'registration_version': None}
     first = env[1].post('/students/me/face', headers=env[3](), json=body)
     assert first.status_code == 200 and first.json()['is_face_registered'] is True, first.text
+    timing_messages = [r.getMessage() for r in caplog.records if r.getMessage().startswith('face_stage ')]
+    for stage in ['registration_verification', 'registration_photo_storage',
+                  'registration_user_lock', 'registration_student_lock', 'registration_final_commit']:
+        assert any(f'stage={stage} ' in message and 'error=none' in message for message in timing_messages)
     second = env[1].post('/students/me/face', headers=env[3](), json=body)
     assert second.status_code == 409 and 'already registered' in second.json()['detail']
     assert 'attendance' not in second.text.lower()
@@ -258,7 +263,7 @@ def test_shared_extractor_demands_server_anti_spoof_and_arcface(monkeypatch, is_
     class Detector:
         @staticmethod
         def build_model(name, **kwargs):
-            assert name == 'Fasnet' and kwargs['task'] == 'spoofing'
+            assert (name == 'Fasnet' and kwargs.get('task') == 'spoofing') or name == 'ArcFace'
         @staticmethod
         def extract_faces(**kwargs):
             calls.append('liveness')
@@ -292,6 +297,22 @@ def test_missing_server_liveness_runtime_fails_closed(monkeypatch):
     with pytest.raises(HTTPException) as error:
         live_face.extract_live_embedding('synthetic')
     assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_face_timing_records_duration_and_error_class_without_capture_data(monkeypatch, caplog, fails):
+    from integrations import live_face
+    ticks = iter([10.0, 10.25])
+    monkeypatch.setattr(live_face, 'perf_counter', lambda: next(ticks))
+    caplog.set_level('INFO', logger='uvicorn.error')
+    try:
+        with live_face._timed_face_stage('registration_final_commit'):
+            if fails:
+                raise ValueError('synthetic private capture or identity must never be logged')
+    except ValueError:
+        pass
+    records = [r.getMessage() for r in caplog.records if 'face_stage' in r.getMessage()]
+    assert records == ['face_stage stage=registration_final_commit duration_ms=250.0 error=' + ('ValueError' if fails else 'none')]
 
 
 def test_logout_during_inference_invalidates_self_test(env, monkeypatch):

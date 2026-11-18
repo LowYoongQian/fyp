@@ -14,7 +14,7 @@ from db.models import FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, Stu
 from domain.account_security import active, lock_user
 from domain.audit import log_audit_event
 from integrations import face_photos
-from integrations.live_face import extract_live_embedding
+from integrations.live_face import extract_live_embedding, _timed_face_stage
 from utils.security import require_admin, require_student, verify_password
 from utils.timeutil import iso_utc, utcnow
 from utils.db_helpers import require_own_profile
@@ -150,20 +150,23 @@ def stage_photo(db, student_id, image_base64):
     periodic bucket reconciliation, which is not implemented.
     """
     try:
-        photo = face_photos.make_photo(image_base64)
+        with _timed_face_stage("registration_photo_prepare"):
+            photo = face_photos.make_photo(image_base64)
         key = face_photos.new_key(student_id)
     except Exception as exc:
         logging.getLogger(__name__).warning("Registration photo not saved (%s)", type(exc).__name__)
         return None
     try:
         owe_photo(db, key)
-        db.commit()
+        with _timed_face_stage("registration_photo_intent_commit"):
+            db.commit()
     except Exception as exc:
         db.rollback()
         logging.getLogger(__name__).warning("Registration photo not saved (%s)", type(exc).__name__)
         return None
     try:
-        face_photos.upload(key, photo)
+        with _timed_face_stage("registration_photo_upload"):
+            face_photos.upload(key, photo)
     except Exception as exc:
         logging.getLogger(__name__).warning("Registration photo not saved (%s)", type(exc).__name__)
         tombstone_photo(db, key)  # the object may exist despite the error, even if cleanup already forgot the intent
@@ -254,14 +257,19 @@ def submit_capture(body, db, actor):
         raise HTTPException(409, "Your face registration status changed. Refresh and start a new scan.")
     # Release the read transaction before expensive inference, then revalidate
     # identity/session and revision under the same student lock used by check-in.
-    db.commit()
-    embedding = extract_live_embedding(body.image_base64)
-    photo_key = stage_photo(db, student_id, body.image_base64)
+    with _timed_face_stage("registration_read_commit"):
+        db.commit()
+    with _timed_face_stage("registration_verification"):
+        embedding = extract_live_embedding(body.image_base64)
+    with _timed_face_stage("registration_photo_storage"):
+        photo_key = stage_photo(db, student_id, body.image_base64)
     try:
-        actor = lock_user(db, actor_id, require_session=bool(db.info.get("security_session_id")))
+        with _timed_face_stage("registration_user_lock"):
+            actor = lock_user(db, actor_id, require_session=bool(db.info.get("security_session_id")))
         if actor.role != "student":
             raise HTTPException(403, "Student permission required.")
-        student = lock_student(db, student_id)
+        with _timed_face_stage("registration_student_lock"):
+            student = lock_student(db, student_id)
         if str(student.user_id) != str(actor.id):
             raise HTTPException(403, "This student profile is no longer linked to your account.")
         face = db.query(FaceEmbedding).filter_by(student_id=student_id).populate_existing().first()
@@ -284,7 +292,8 @@ def submit_capture(body, db, actor):
         student.is_face_registered = True
         retire_requests(db, student_id)
         audit(db, actor, "FACE_REGISTERED", student)
-        db.commit()
+        with _timed_face_stage("registration_final_commit"):
+            db.commit()
     except Exception:
         # Stale revision, lost lock or failed commit: the intent is already durable, so only try to delete now.
         try:
