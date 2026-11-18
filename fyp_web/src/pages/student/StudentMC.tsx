@@ -47,7 +47,6 @@ interface MCRecord {
   status: 'Pending' | 'Approved' | 'Rejected';
   submittedAt: string;
   remarks?: string;
-  aiSummary?: string;
 }
 
 const toMCRecord = (row: MedicalLeaveRecord): MCRecord => ({
@@ -57,7 +56,6 @@ const toMCRecord = (row: MedicalLeaveRecord): MCRecord => ({
   fileSize: `${(row.file_size / 1024 / 1024).toFixed(2)} MB`,
   status: `${row.status.charAt(0).toUpperCase()}${row.status.slice(1)}` as MCRecord['status'],
   submittedAt: row.submitted_at, remarks: row.remarks || undefined,
-  aiSummary: row.ai_summary,
 });
 
 export const StudentMC: React.FC = () => {
@@ -78,7 +76,7 @@ export const StudentMC: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [dragActive, setDragActive] = useState<boolean>(false);
-  const [aiResult, setAiResult] = useState<{ verdict: string; confidence: number | null; summary: string } | null>(null);
+  const [submitted, setSubmitted] = useState(false);
 
   // Selected MC preview modal
   const [previewMC, setPreviewMC] = useState<MCRecord | null>(null);
@@ -196,7 +194,7 @@ export const StudentMC: React.FC = () => {
   };
 
   const handleFileSelected = (selectedFile: File) => {
-    if (isUploading || aiResult) return;
+    if (isUploading || submitted) return;
     const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
     if (!validTypes.includes(selectedFile.type)) {
       swalError('Invalid File Format', 'Please upload a PDF document or PNG/JPG image file.');
@@ -210,7 +208,7 @@ export const StudentMC: React.FC = () => {
 
     setFile(selectedFile);
     setUploadProgress(0);
-    setAiResult(null);
+    setSubmitted(false);
   };
 
   const removeFile = () => {
@@ -218,13 +216,13 @@ export const StudentMC: React.FC = () => {
     setFile(null);
     setUploadProgress(0);
     setIsUploading(false);
-    setAiResult(null);
+    setSubmitted(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSubmitMC = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isUploading || aiResult) return;
+    if (isUploading || submitted) return;
 
     if (!file) {
       swalError('Document Missing', 'Please upload your medical document.');
@@ -255,7 +253,7 @@ export const StudentMC: React.FC = () => {
     const data = new FormData();
     data.append('course_id', selectedCourse); data.append('start_date', startDate);
     data.append('end_date', endDate); data.append('reason', reason.trim()); data.append('proof', file);
-    setIsUploading(true); setUploadProgress(0); setAiResult(null);
+    setIsUploading(true); setUploadProgress(0); setSubmitted(false);
     try {
       const saved = await apiService.studentSubmitMedicalLeave(data, setUploadProgress);
       setUploadProgress(100);
@@ -270,7 +268,7 @@ export const StudentMC: React.FC = () => {
       });
       setCurrentPage(1);
       void refresh();
-      setAiResult({ verdict: saved.ai_verdict || 'needs_review', confidence: saved.ai_confidence ?? null, summary: saved.ai_summary || 'Document needs staff review.' });
+      setSubmitted(true);
       swalSuccess('Leave Submitted', 'Your medical leave was sent for staff review.');
     } catch (error) {
       setUploadProgress(0);
@@ -307,7 +305,7 @@ export const StudentMC: React.FC = () => {
 
         <button
           disabled={loading || enrolledCourses.length === 0}
-          onClick={() => { setAiResult(null); setUploadProgress(0); setIsModalOpen(true); }}
+          onClick={() => { setSubmitted(false); setUploadProgress(0); setIsModalOpen(true); }}
           className="relative z-10 inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-brand-blue text-white hover:bg-blue-700 font-semibold text-sm transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
         >
           <Plus className="w-4 h-4" />
@@ -528,7 +526,7 @@ export const StudentMC: React.FC = () => {
 
             {/* Modal Body */}
             <form onSubmit={handleSubmitMC} className="p-6 space-y-5 overflow-y-auto">
-              <fieldset disabled={isUploading || !!aiResult} className="space-y-5">
+              <fieldset disabled={isUploading || submitted} className="space-y-5">
               {/* Select Course */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Course</label>
@@ -668,18 +666,12 @@ export const StudentMC: React.FC = () => {
                       </button>
                     </div>
 
-                    {aiResult ? (
-                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/25 dark:bg-emerald-500/10 animate-in fade-in slide-in-from-bottom-1 duration-300">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle2 className="h-4 w-4" /> Submitted for review
-                          </span>
-                          <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300" aria-live="polite">
-                            {aiResult.confidence === null ? 'Manual review' : `${Math.round(aiResult.confidence * 100)}% format match`}
-                          </span>
-                        </div>
-                        <p className="mt-2 text-[10px] leading-4 text-emerald-800 dark:text-emerald-200">{aiResult.summary}</p>
-                        <p className="mt-1 text-[9px] text-slate-500 dark:text-slate-400">Format check only. Staff will confirm the document.</p>
+                    {submitted ? (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/25 dark:bg-emerald-500/10 animate-in fade-in slide-in-from-bottom-1 duration-300" aria-live="polite">
+                        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle2 className="h-4 w-4" /> Submitted for review
+                        </span>
+                        <p className="mt-2 text-[10px] leading-4 text-emerald-800 dark:text-emerald-200">An administrator will review your document.</p>
                       </div>
                     ) : isUploading ? (
                       <div className="space-y-1.5" aria-live="polite">
@@ -693,7 +685,7 @@ export const StudentMC: React.FC = () => {
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" /> Ready for AI format check
+                        <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" /> Ready to submit
                       </div>
                     )}
                   </div>
@@ -712,12 +704,12 @@ export const StudentMC: React.FC = () => {
                   Cancel
                 </button>
                 <button
-                  type={aiResult ? 'button' : 'submit'}
-                  onClick={aiResult ? () => { setIsModalOpen(false); setReason(''); setStartDate(''); setEndDate(''); removeFile(); } : undefined}
+                  type={submitted ? 'button' : 'submit'}
+                  onClick={submitted ? () => { setIsModalOpen(false); setReason(''); setStartDate(''); setEndDate(''); removeFile(); } : undefined}
                   disabled={isUploading}
                   className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all shadow-md cursor-pointer disabled:opacity-50"
                 >
-                  {isUploading ? (uploadProgress >= 100 ? 'Saving…' : 'Uploading…') : aiResult ? 'Done' : 'Submit Leave'}
+                  {isUploading ? (uploadProgress >= 100 ? 'Saving…' : 'Uploading…') : submitted ? 'Done' : 'Submit Leave'}
                 </button>
               </div>
             </form>

@@ -31,9 +31,9 @@ const toastBase = Swal.mixin({
 });
 
 type ToastKind = 'success' | 'warning' | 'error' | 'info';
-type Pending = { kind: ToastKind; key: string; run: () => Promise<unknown>; done: Promise<unknown>; resolve: (value: unknown) => void };
+type Pending = { kind: ToastKind; key: string; run: () => Promise<unknown> };
 const MAX_WAITING = 3;
-let showing: { key: string; done: Promise<unknown> } | null = null;
+let showing: string | null = null;   // the key of the toast on screen
 const waiting: Pending[] = [];
 
 /** A toast waits while a modal dialog is open (it must not replace it), or while the notification panel leaves no room beneath it
@@ -59,30 +59,27 @@ if (typeof window !== 'undefined' && typeof MutationObserver !== 'undefined') {
 /**
  * One toast at a time, in order (NOTIFICATION-UI-11). The same message already showing or waiting is not repeated; at most three wait,
  * and when that is full the oldest that is not a failure gives way, so a failure is never lost behind later news.
+ * It resolves at once: a toast reports what already happened, so no busy button or open form waits the 4 s it stays on screen.
  */
-function enqueue(kind: ToastKind, title: string, text: string | undefined, run: () => Promise<unknown>): Promise<unknown> {
+function enqueue(kind: ToastKind, title: string, text: string | undefined, run: () => Promise<unknown>): Promise<void> {
   const key = `${kind}|${title}|${text ?? ''}`;
-  if (showing?.key === key) return showing.done;
-  const twin = waiting.find(item => item.key === key);
-  if (twin) return twin.done;
-  let resolve!: (value: unknown) => void;
-  const done = new Promise(r => { resolve = r; });
-  waiting.push({ kind, key, run, done, resolve });
-  if (waiting.length > MAX_WAITING) {
-    const drop = waiting.findIndex(item => item.kind !== 'error');
-    const [dropped] = waiting.splice(drop === -1 ? 0 : drop, 1);
-    dropped.resolve(undefined);
+  if (showing !== key && !waiting.some(item => item.key === key)) {
+    waiting.push({ kind, key, run });
+    if (waiting.length > MAX_WAITING) {
+      const drop = waiting.findIndex(item => item.kind !== 'error');
+      waiting.splice(drop === -1 ? 0 : drop, 1);
+    }
+    if (!showing) void next();
   }
-  if (!showing) void next();
-  return done;
+  return Promise.resolve();
 }
 
 async function next(): Promise<void> {
   const item = waiting.shift();
   if (!item) { showing = null; return; }
   while (blocked()) await new Promise(r => setTimeout(r, 300));
-  showing = { key: item.key, done: item.done };
-  try { item.resolve(await item.run()); } catch { item.resolve(undefined); }
+  showing = item.key;
+  try { await item.run(); } catch { /* a toast that could not show is skipped */ }
   void next();
 }
 

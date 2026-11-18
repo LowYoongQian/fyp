@@ -58,10 +58,16 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         # Only the account's own sign-in email (the school address). recovery_email is never looked at here.
         user = db.query(User).filter(func.lower(User.email) == raw.lower()).first()
     else:
-        # A student has no ID sign-in: only staff sign in with their staff ID.
-        lecturer = db.query(Lecturer).filter(Lecturer.staff_id == raw).first()
-        if lecturer:
-            user = db.query(User).filter(User.id == str(lecturer.user_id)).first()
+        # Staff sign in with their staff ID (T0000001), students with their student ID (ST0000010); letter case does not matter.
+        # The portal's own kind is looked up first, so an ID shared by a staff and a student record resolves to the portal used.
+        finders = [(Lecturer, Lecturer.staff_id), (Student, Student.student_code)]
+        if body.portal == "student":
+            finders.reverse()
+        for model, column in finders:
+            profile = db.query(model).filter(func.upper(column) == raw.upper()).first()
+            if profile:
+                user = db.query(User).filter(User.id == str(profile.user_id)).first()
+                break
 
     # A student account counts only with its approved school address and its Student record; otherwise it fails like a wrong password.
     if user and user.role == "student" and not _approved_student(db, user):

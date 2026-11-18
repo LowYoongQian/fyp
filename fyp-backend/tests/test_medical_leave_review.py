@@ -222,9 +222,6 @@ def test_submitted_mc_is_reviewable_and_student_sees_approval_and_credited_rate(
     db.flush()
     db.add(AttendanceRecord(student_id=student.id, session_id=lesson.id, status="absent"))
     db.commit()
-    monkeypatch.setattr(medical_leave, "verify_medical_document", lambda *_: {
-        "verdict": "valid", "summary": "Valid", "confidence": 0.99,
-    })
     uploaded = {}
     monkeypatch.setattr(medical_leave, "upload_private_document", lambda path, data, mime: uploaded.update({path: data}))
     proof = UploadFile(BytesIO(b"%PDF-test"), filename="proof.pdf", headers=Headers({"content-type": "application/pdf"}))

@@ -4,7 +4,6 @@ sqlalchemy==2.0.30
 # Schema changes go through Alembic only - never hand-written ALTER TABLE at startup.
 alembic==1.13.2
 psycopg[binary]
-google-generativeai==0.7.2
 python-dotenv==1.0.1
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0

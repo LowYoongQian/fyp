@@ -13,6 +13,7 @@ import ipaddress
 import os
 import socket
 import subprocess
+import urllib.request
 from typing import List, Optional, Tuple
 
 
@@ -122,6 +123,7 @@ def get_server_wifi_details() -> Tuple[Optional[str], Optional[str]]:
         result = subprocess.run(
             ["netsh", "wlan", "show", "interfaces"],
             capture_output=True,
+            timeout=4,
             text=True,
             encoding="utf-8",
             errors="ignore"
@@ -146,6 +148,17 @@ def get_server_wifi_details() -> Tuple[Optional[str], Optional[str]]:
         return ssid, bssid
     except Exception:
         return None, None
+
+
+def lookup_public_ip() -> Optional[str]:
+    """This machine's internet address as the world sees it: the public IP its router got from the ISP.
+    Only meaningful on a server that shares the admin's router (a local run); a hosted server would get its own."""
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=4) as answer:
+            address = ipaddress.ip_address(answer.read(64).decode().strip())
+        return str(address) if address.is_global else None
+    except Exception:
+        return None
 
 
 def get_server_local_ip() -> str:
@@ -183,14 +196,17 @@ def verify_network(
         return False, "Localhost is not campus network evidence. Connect through the campus network."
     cidrs = []
     for rule in networks:
-        if not getattr(rule, "is_active", True) or not rule.cidr:
+        if not getattr(rule, "is_active", True):
             continue
-        try:
-            network = ipaddress.ip_network(rule.cidr, strict=False)
-            if network.prefixlen > 0 and not network.network_address.is_loopback:
+        # One rule is one router: its ISP public address (what a deployed server sees) and its local Wi-Fi range
+        # (what a server on that same Wi-Fi sees).
+        for value in (rule.cidr, getattr(rule, "subnet_range", None)):
+            try:
+                network = ipaddress.ip_network(value, strict=False) if value else None
+            except ValueError:
+                continue
+            if network and network.prefixlen > 0 and not network.network_address.is_loopback:
                 cidrs.append(network)
-        except ValueError:
-            continue
     if not cidrs:
         return False, "Campus network is not configured. Ask an administrator to add an active campus IP range."
     if any(address in network for network in cidrs):

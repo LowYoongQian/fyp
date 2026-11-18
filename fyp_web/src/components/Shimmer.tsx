@@ -835,15 +835,21 @@ export const ShimmerNetworkMode: React.FC = () => (
 
 /** The detected-connection card: status row, Wi-Fi tile, address lines and the whitelist button. */
 export const ShimmerNetworkDetection: React.FC = () => (
-  <div className="space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/90 p-4">
-    <div className="flex items-center justify-between"><ShimmerText width="w-32" height="h-3" /><ShimmerText width="w-16" height="h-5" className="rounded" /></div>
-    <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-      <div className="flex items-center gap-3">
-        <ShimmerText width="w-12" height="h-12" className="shrink-0 rounded-xl" />
-        <div className="space-y-2"><ShimmerText width="w-56 max-w-full" height="h-4" /><ShimmerText width="w-72 max-w-full" height="h-3" /><ShimmerText width="w-48 max-w-full" height="h-2.5" /></div>
-      </div>
-      <ShimmerText width="w-40" height="h-9" className="shrink-0 rounded-xl" />
+  <div className="space-y-4 rounded-xl border border-slate-200/80 bg-slate-50/90 p-4">
+    <div className="flex items-center justify-between"><ShimmerText width="w-32" height="h-3" /><ShimmerText width="w-28" height="h-5" className="rounded" /></div>
+    <div className="flex items-center gap-3">
+      <ShimmerText width="w-12" height="h-12" className="shrink-0 rounded-xl" />
+      <div className="min-w-0 flex-1 space-y-2"><ShimmerText width="w-40 max-w-full" height="h-4" /><ShimmerText width="w-96 max-w-full" height="h-3" /></div>
     </div>
+    <div className="grid gap-3 md:grid-cols-2">
+      {[0, 1].map(index => (
+        <div key={index} className="space-y-2 rounded-xl border border-slate-200 bg-white p-3.5">
+          <div className="flex items-center justify-between"><ShimmerText width="w-28" height="h-3" /><ShimmerText width="w-16" height="h-4" className="rounded-full" /></div>
+          <ShimmerText width="w-40 max-w-full" height="h-5" /><ShimmerText width="w-48 max-w-full" height="h-3" />
+        </div>
+      ))}
+    </div>
+    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><ShimmerText width="w-56 max-w-full" height="h-2.5" /><ShimmerText width="w-40" height="h-9" className="shrink-0 rounded-xl" /></div>
   </div>
 );
 
@@ -874,7 +880,7 @@ export const ShimmerCampusNetwork: React.FC = () => (
     </div>
     <div className="uipro-card space-y-4">
       <div className="flex items-center justify-between border-b border-slate-100 pb-2"><div className="space-y-2"><ShimmerText width="w-40" height="h-4" /><ShimmerText width="w-52" height="h-2.5" /></div><ShimmerText width="w-64 max-w-full" height="h-9" className="rounded-xl" /></div>
-      <ShimmerTableSkeleton headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Protocol / Subnet', 'Location', 'Actions']} rows={5} showPagination={false} />
+      <ShimmerTableSkeleton headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Public IP (ISP)', 'Local Wi-Fi', 'Location', 'Actions']} rows={5} showPagination={false} />
     </div>
   </LoadingRegion>
 );

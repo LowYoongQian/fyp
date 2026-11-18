@@ -26,15 +26,17 @@ String friendlyStudentError(String rawMsg) {
       lower.contains('identity could not be verified') || lower.contains('failed'))) {
     return 'Face Match Failed: Your face could not be matched to your registered profile. Use good lighting and look directly at the camera.';
   }
+  // A lost connection first: its text often says "network" ("Network is unreachable"), which is not the campus check.
+  if (lower.contains('socketexception') || lower.contains('clientexception') || lower.contains('connection') ||
+      lower.contains('timeout')) {
+    return 'Connection Error: Cannot reach the server. Please check your internet connection.';
+  }
   if (lower.contains('wifi') || lower.contains('network') ||
       lower.contains('bssid') || lower.contains('subnet')) {
     return 'Off-Campus Network: You are not connected to the approved campus Wi-Fi network.';
   }
   if (lower.contains('closed') || lower.contains('expired')) {
     return 'Session Closed: This attendance window has expired or has been closed by your lecturer.';
-  }
-  if (lower.contains('socketexception') || lower.contains('connection') || lower.contains('timeout')) {
-    return 'Connection Error: Cannot reach the server. Please check your internet connection.';
   }
   return rawMsg.replaceAll('Exception: ', '').trim();
 }

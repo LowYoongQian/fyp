@@ -27,7 +27,24 @@ void showCheckInSuccessDialog(
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (ctx) {
+    builder: (ctx) => _successDialog(ctx, courseCode: courseCode, courseName: courseName, timeSlot: timeSlot, room: room,
+        classGroup: classGroup, lecturerName: lecturerName, lecturerRole: lecturerRole, wifiVerified: wifiVerified,
+        livenessPassed: livenessPassed),
+  );
+}
+
+Widget _successDialog(
+  BuildContext ctx, {
+  required String courseCode,
+  required String courseName,
+  required String timeSlot,
+  required String room,
+  required String classGroup,
+  required String lecturerName,
+  required String lecturerRole,
+  required bool wifiVerified,
+  required bool livenessPassed,
+}) {
       final isDark = Theme.of(ctx).brightness == Brightness.dark;
       final now = DateTime.now();
       final daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -158,8 +175,6 @@ void showCheckInSuccessDialog(
           ),
         ),
       );
-    },
-  );
 }
 
 /// One verification result: a tinted tile with a tick (passed) or a warning (needs a look).
@@ -227,7 +242,11 @@ void showCheckInFailedDialog(BuildContext context, {required String message, Voi
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (ctx) {
+    builder: (ctx) => _failedDialog(ctx, message: message, onRetry: onRetry),
+  );
+}
+
+Widget _failedDialog(BuildContext ctx, {required String message, VoidCallback? onRetry}) {
       final isDark = Theme.of(ctx).brightness == Brightness.dark;
       final ink = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF334155);
       return Dialog(
@@ -306,7 +325,218 @@ void showCheckInFailedDialog(BuildContext context, {required String message, Voi
           ]),
         ),
       );
+}
+
+const _blue = Color(0xFF2563EB);
+const _sky = Color(0xFF0EA5E9);
+const _amber = Color(0xFFD97706);
+const _gold = Color(0xFFF59E0B);
+
+/// The check-in dialog that opens the moment the scan ends. It says the server is recording the check-in, then turns into
+/// the result in place (recorded, not recorded, saved on this phone, already checked in), so the student always knows
+/// whether it went through. The waiting state cannot be dismissed: the request always ends (it has a timeout).
+class CheckInProgress {
+  CheckInProgress._(this._host);
+  final BuildContext _host;
+  final _stage = ValueNotifier<WidgetBuilder?>(null); // null while waiting for the server
+  BuildContext? _dialog;
+  bool _open = true;
+
+  void _show(WidgetBuilder result) {
+    if (_open) {
+      _stage.value = result;
+    } else if (_host.mounted) {
+      // Closed some other way before the answer came: the result still shows.
+      showDialog(context: _host, barrierDismissible: false, builder: result);
+    }
+  }
+
+  void succeed({
+    required String courseCode,
+    required String courseName,
+    required String timeSlot,
+    required String room,
+    required String classGroup,
+    required String lecturerName,
+    required String lecturerRole,
+    required bool wifiVerified,
+    required bool livenessPassed,
+  }) => _show((ctx) => _successDialog(ctx, courseCode: courseCode, courseName: courseName, timeSlot: timeSlot, room: room,
+      classGroup: classGroup, lecturerName: lecturerName, lecturerRole: lecturerRole, wifiVerified: wifiVerified,
+      livenessPassed: livenessPassed));
+
+  void fail(String message, {VoidCallback? onRetry}) => _show((ctx) => _failedDialog(ctx, message: message, onRetry: onRetry));
+
+  /// Kept on the phone because the server could not be reached: not recorded yet, not refused either.
+  void savedOnPhone() => _show((ctx) => _noticeDialog(ctx, colors: const [_amber, _gold], icon: Icons.save_alt_rounded,
+      title: 'Saved on this phone',
+      message: 'Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.'));
+
+  void alreadyCheckedIn() => _show((ctx) => _noticeDialog(ctx, colors: const [_blue, _sky], icon: Icons.task_alt_rounded,
+      title: 'Already checked in', message: "You're already checked in for this class."));
+
+  /// Closes it if it is still waiting (the student signed out or switched account before the answer).
+  void dismissIfWaiting() {
+    final dialog = _dialog;
+    if (!_open || _stage.value != null || dialog == null || !dialog.mounted) return;
+    final route = ModalRoute.of(dialog);
+    if (route == null) return;
+    route.isCurrent ? Navigator.of(dialog).pop() : Navigator.of(dialog).removeRoute(route);
+  }
+}
+
+CheckInProgress showCheckInProgressDialog(BuildContext context, {required String courseCode, required String courseName}) {
+  final progress = CheckInProgress._(context);
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) {
+      progress._dialog = ctx;
+      return ValueListenableBuilder<WidgetBuilder?>(
+        valueListenable: progress._stage,
+        builder: (ctx, result, _) => PopScope(
+          canPop: result != null,
+          child: AnimatedSwitcher(
+            duration: MediaQuery.disableAnimationsOf(ctx) ? Duration.zero : const Duration(milliseconds: 260),
+            switchInCurve: Curves.easeOutCubic,
+            child: KeyedSubtree(
+              key: ValueKey(result),
+              child: result == null ? _pendingDialog(ctx, courseCode: courseCode, courseName: courseName) : result(ctx),
+            ),
+          ),
+        ),
+      );
     },
+  ).whenComplete(() => progress._open = false);
+  return progress;
+}
+
+Widget _pendingDialog(BuildContext ctx, {required String courseCode, required String courseName}) {
+  final isDark = Theme.of(ctx).brightness == Brightness.dark;
+  final still = MediaQuery.disableAnimationsOf(ctx);
+  return Dialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+    backgroundColor: isDark ? const Color(0xFF222222) : Colors.white,
+    clipBehavior: Clip.antiAlias,
+    elevation: 16,
+    child: SingleChildScrollView(
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 22),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [_blue, _sky]),
+          ),
+          child: Column(children: [
+            Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: .2),
+                border: Border.all(color: Colors.white.withValues(alpha: .55), width: 2),
+              ),
+              child: Center(
+                child: Container(
+                  width: 54,
+                  height: 54,
+                  padding: const EdgeInsets.all(14),
+                  decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white),
+                  // With reduced motion a still hourglass says the same as the turning ring.
+                  child: still
+                      ? const Icon(Icons.hourglass_top_rounded, color: _blue, size: 26)
+                      : const CircularProgressIndicator(strokeWidth: 3, color: _blue),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Semantics(
+              liveRegion: true,
+              child: Text(tr('Recording your attendance…'),
+                  textAlign: TextAlign.center, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: Colors.white)),
+            ),
+            const SizedBox(height: 4),
+            Text(tr('Checking your face and campus network with the server. Keep the app open.'),
+                textAlign: TextAlign.center, style: TextStyle(fontSize: 12.5, color: Colors.white.withValues(alpha: .9))),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF2D2D2D) : const Color(0xFFF5F9FF),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: isDark ? const Color(0xFF333333) : const Color(0xFFE2E8F0)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(gradient: const LinearGradient(colors: [_blue, _sky]), borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.school_rounded, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(courseCode,
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: .4, color: isDark ? const Color(0xFF93C5FD) : _blue)),
+                  const SizedBox(height: 1),
+                  Text(courseName,
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: isDark ? Colors.white : const Color(0xFF0F172A))),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ]),
+    ),
+  );
+}
+
+/// A result that is neither recorded nor refused: a tinted header with its own icon, the explanation, and Close.
+Widget _noticeDialog(BuildContext ctx, {required List<Color> colors, required IconData icon, required String title, required String message}) {
+  final isDark = Theme.of(ctx).brightness == Brightness.dark;
+  return Dialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+    backgroundColor: isDark ? const Color(0xFF222222) : Colors.white,
+    clipBehavior: Clip.antiAlias,
+    elevation: 16,
+    child: SingleChildScrollView(
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 22),
+          decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors)),
+          child: Column(children: [
+            _ResultBadge(icon: icon, color: colors.first),
+            const SizedBox(height: 14),
+            Text(tr(title),
+                textAlign: TextAlign.center, style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: Colors.white)),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(tr(message),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 13.5, height: 1.45, fontWeight: FontWeight.w600, color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF334155))),
+            const SizedBox(height: 18),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: colors.first,
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(50),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(tr('Close'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+            ),
+          ]),
+        ),
+      ]),
+    ),
   );
 }
 

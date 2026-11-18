@@ -50,8 +50,8 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
     try {
       await apiService.adminSaveSemester(form, stored?.id);
       if (!editing) { setForm(empty(today)); setCourseSearch(''); }
-      await onDone();
       void swalSuccess('Semester saved', 'Dates and credit limits now apply.');
+      void onDone();   // the list reloads behind the message; its own failure shows on the list
     } catch (error: unknown) {
       const detail = detailOf(error);
       await swalError('Semester not saved', typeof detail === 'string' ? detail : 'Check the dates, programme and credit limit, then try again.');
@@ -176,8 +176,9 @@ export function SemestersPanel({ programmes, courses, onSaved, ...courseState }:
     setDeleting(term.id);
     try {
       await apiService.adminDeleteSemester(term.id);
-      await load(); onSaved();
+      setTerms(list => list.filter(item => item.id !== term.id));
       void swalSuccess('Semester deleted', `${term.name} was removed.`);
+      void load().then(onSaved);
     } catch (error) {
       const detail = detailOf(error);
       void swalError('Semester not deleted', typeof detail === 'string' ? detail : 'Please try again.');

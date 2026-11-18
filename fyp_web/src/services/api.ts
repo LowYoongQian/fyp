@@ -480,6 +480,8 @@ export interface CampusNetwork {
   cidr: string | null;
   ssid: string | null;
   bssid_prefix: string | null;
+  subnet_range?: string | null;   // the router's local Wi-Fi range; cidr is its ISP public address
+  gateway_ip?: string | null;
   is_active: boolean;
 }
 
@@ -540,9 +542,6 @@ export interface MedicalLeaveRecord {
   status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   remarks?: string | null;
   submitted_at: string;
-  ai_verdict?: 'valid' | 'needs_review';
-  ai_confidence?: number | null;
-  ai_summary?: string;
 }
 
 export interface StudentAttendanceSession {
@@ -924,10 +923,12 @@ export const apiService = {
   },
   adminCreateAssignment: async (assignment: { course_id: number | string; lecturer_id: number | string; role: string }): Promise<CourseStaffAssignment> => {
     const response = await api.post('/admin/assignments', assignment);
+    clearApiCache();   // the assignment list (cached) now has this role
     return response.data;
   },
   adminDeleteAssignment: async (assignmentId: number | string): Promise<any> => {
     const response = await api.delete(`/admin/assignments/${assignmentId}`);
+    clearApiCache();
     return response.data;
   },
 
@@ -979,6 +980,10 @@ export const apiService = {
   // Campus Network whitelist + security settings
   adminDetectCurrentConnection: async (): Promise<{
     client_ip: string;
+    public_ip?: string | null;
+    public_cidr?: string | null;
+    local_ip?: string | null;
+    local_cidr?: string | null;
     ipv6_address?: string;
     cidr: string;
     label: string;

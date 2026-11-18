@@ -33,14 +33,7 @@ def server():
     import uvicorn
 
     from main import app
-    from routers import medical_leave
 
-    original = medical_leave.verify_medical_document
-    medical_leave.verify_medical_document = lambda *_: {
-        "verdict": "valid",
-        "confidence": 1,
-        "summary": "Fixed test AI response",
-    }
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -59,7 +52,6 @@ def server():
     finally:
         service.should_exit = True
         thread.join(10)
-        medical_leave.verify_medical_document = original
         sock.close()
 
 

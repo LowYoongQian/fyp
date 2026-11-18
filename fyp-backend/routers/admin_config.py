@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List, Union, Optional
 
 from domain.security_settings import is_enabled, get_settings, truthy, development_network_demo_allowed
-from integrations.network_verify import get_client_ip
+from integrations.network_verify import get_client_ip, get_server_local_ip, get_server_wifi_details, lookup_public_ip
 from db.database import get_db
 import ipaddress
+import os
 import socket
 from db.models import User, Announcement, CampusNetwork, SecuritySetting
 from integrations.announcement_files import attachment_response
@@ -104,69 +105,55 @@ def delete_announcement(announcement_id: Union[int, str], db: Session = Depends(
     return {"message": "Announcement deleted successfully"}
 
 
-# ASSUMPTION: Server and student client devices share the same local network subnet without NAT in between,
-# unless reverse proxy headers (X-Forwarded-For) are explicitly trusted via the Security Settings policy.
-
 @router.get("/detect-connection")
 def detect_connection(request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """The admin's router as check-in will see it. First its ISP public address: a deployed server sees every phone on that
+    Wi-Fi as that one address. Then its local Wi-Fi range, which only a server running on that same Wi-Fi sees."""
     # Same policy read the check-in path uses, so both agree on what "trusted" means.
-    trust_proxy = is_enabled(db, "trust_proxy_header")
-
-    client_ip = get_client_ip(request, trust_proxy)
+    client_ip = get_client_ip(request, is_enabled(db, "trust_proxy_header"))
     if not client_ip:
         raise HTTPException(503, "Unable to observe the client network address. Check trusted proxy configuration and start Uvicorn with --no-proxy-headers.")
-
-    # Resolve local LAN/Wi-Fi socket interface IP if client is on loopback
-    ipv6_address = None
-    if client_ip in ("127.0.0.1", "::1", "localhost"):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('8.8.8.8', 80))
-            lan_ip = s.getsockname()[0]
-            s.close()
-            if lan_ip and lan_ip not in ("127.0.0.1", "::1"):
-                client_ip = lan_ip
-        except Exception:
-            pass
-
-    # Try resolving host machine IPv6 address
     try:
-        s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-        s6.connect(('2001:4860:4860::8888', 80))
-        ipv6_address = s6.getsockname()[0]
-        s6.close()
-    except Exception:
-        try:
-            addr_info = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET6)
-            for item in addr_info:
-                ip = item[4][0]
-                if not ip.startswith("::1"):
-                    ipv6_address = ip
-                    break
-        except Exception:
-            ipv6_address = None
+        observed = ipaddress.ip_address(client_ip)
+    except ValueError:
+        raise HTTPException(503, "The server could not read your network address.")
 
-    try:
-        ip_obj = ipaddress.ip_address(client_ip)
-        if ip_obj.version == 4:
-            network = ipaddress.ip_network(f"{client_ip}/24", strict=False)
-            cidr = str(network)
-            subnet_name = f"Detected Active Subnet ({cidr})"
-        else:
-            cidr = f"{client_ip}/128"
-            subnet_name = f"Detected IPv6 Connection ({client_ip})"
-            ipv6_address = client_ip
-    except Exception:
-        cidr = f"{client_ip}/32"
-        subnet_name = f"Detected Connection ({client_ip})"
+    public_ip = local_ip = ipv6_address = ssid = bssid = None
+    if observed.is_global:
+        public_ip = client_ip
+    else:
+        local_ip = get_server_local_ip() if observed.is_loopback else client_ip
+        # A local run shares the admin's router, so its own internet address is the router's. A hosted server that sees a
+        # private address is behind an untrusted proxy instead; asking would return the host's address, so it does not.
+        if os.getenv("APP_ENV", "production").strip().lower() == "development":
+            public_ip = lookup_public_ip()
+            ssid, bssid = get_server_wifi_details()
+            try:
+                with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s6:
+                    s6.connect(('2001:4860:4860::8888', 80))
+                    ipv6_address = s6.getsockname()[0]
+            except OSError:
+                pass
 
+    def network_of(address, v4_prefix):
+        parsed = ipaddress.ip_address(address)
+        return str(ipaddress.ip_network(f"{address}/{v4_prefix if parsed.version == 4 else 64}", strict=False))
+
+    public_cidr = network_of(public_ip, 32) if public_ip else None   # the router's one ISP address; IPv6 homes share a /64
+    local_cidr = network_of(local_ip, 24) if local_ip and local_ip != "127.0.0.1" else None
     return {
         "client_ip": client_ip,
-        "ipv6_address": ipv6_address,
-        "cidr": cidr,
-        "label": subnet_name,
-        "user_agent": request.headers.get("user-agent", "Browser Client") if request else "Unknown Client",
-        "protocol": "HTTP Connection"
+        "public_ip": public_ip,
+        "public_cidr": public_cidr,
+        "local_ip": local_ip,
+        "local_cidr": local_cidr,
+        "ipv6_address": ipv6_address or (client_ip if observed.version == 6 and observed.is_global else None),
+        "ssid": ssid,
+        "bssid": bssid,
+        "cidr": public_cidr or local_cidr,
+        "label": f"Router public IP ({public_ip})" if public_ip else f"Local Wi-Fi ({local_cidr or client_ip})",
+        "user_agent": request.headers.get("user-agent", "Browser Client"),
+        "protocol": "HTTP Connection",
     }
 
 
@@ -186,12 +173,16 @@ def _validate_cidr(cidr: str):
 
 @router.post("/campus-networks", response_model=CampusNetworkResponse, status_code=201)
 def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    if not (body.cidr or "").strip():
-        raise HTTPException(status_code=400, detail="A campus CIDR/IP range is required. SSID and BSSID alone cannot verify campus presence.")
-    _validate_cidr(body.cidr)
+    if not (body.cidr or "").strip() and not (body.subnet_range or "").strip():
+        raise HTTPException(status_code=400, detail="Add the router's public IP or its local Wi-Fi range. SSID and BSSID alone cannot verify campus presence.")
+    for value in (body.cidr, body.subnet_range):
+        if (value or "").strip():
+            _validate_cidr(value)
     net = CampusNetwork(
         label=body.label,
-        cidr=body.cidr,
+        cidr=(body.cidr or "").strip() or None,
+        subnet_range=(body.subnet_range or "").strip() or None,
+        gateway_ip=(body.gateway_ip or "").strip() or None,
         ssid=body.ssid,
         bssid_prefix=body.bssid_prefix,
         is_active=body.is_active,
@@ -206,12 +197,14 @@ def create_campus_network(body: CampusNetworkCreate, db: Session = Depends(get_d
 def update_campus_network(net_id: Union[int, str], body: CampusNetworkUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     net = get_or_404(db, CampusNetwork, str(net_id), detail="Campus network rule not found")
     effective_cidr = body.cidr if body.cidr is not None else net.cidr
+    effective_subnet = body.subnet_range if body.subnet_range is not None else net.subnet_range
     effective_active = body.is_active if body.is_active is not None else net.is_active
-    if effective_active and not (effective_cidr or "").strip():
-        raise HTTPException(400, "Add a campus CIDR/IP range before activating this rule.")
-    if body.cidr is not None and body.cidr != "":
-        _validate_cidr(body.cidr)
-    for field in ("label", "cidr", "ssid", "bssid_prefix", "is_active"):
+    if effective_active and not (effective_cidr or "").strip() and not (effective_subnet or "").strip():
+        raise HTTPException(400, "Add the router's public IP or its local Wi-Fi range before activating this rule.")
+    for value in (body.cidr, body.subnet_range):
+        if value:
+            _validate_cidr(value)
+    for field in ("label", "cidr", "subnet_range", "gateway_ip", "ssid", "bssid_prefix", "is_active"):
         val = getattr(body, field)
         if val is not None:
             setattr(net, field, val)

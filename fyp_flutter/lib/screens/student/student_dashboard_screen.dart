@@ -1,4 +1,5 @@
 import '../../widgets/check_in_success_dialog.dart';
+import '../../widgets/network_error_banner.dart';
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 import '../../i18n/tr.dart';
 import '../../widgets/brand_refresh.dart';
@@ -110,6 +111,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool isLoadingSessions = false;
   bool _hasLoadedSessions = false;
   String? sessionsError;
+  // The server could not be reached on the last try, so what is on screen is the saved copy (the banner says so).
+  bool _sessionsFailed = false, _refreshFailed = false, _retryingNetwork = false;
 
   // Report state variables
   int _attendanceFilterIndex = 0; // 0 for Today, 1 for Overall
@@ -350,9 +353,28 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           if (changed.contains('notifications') || changed.contains('notices')) _fetchLiveNotifications(),
           if (changed.contains('notices') && widget.onAnnouncementsRefresh != null) widget.onAnnouncementsRefresh!(),
         ]);
+        // A full refresh loaded everything again, so the "Showing cached view" banner is no longer true.
+        if (mounted && _refreshFailed && changed.containsAll({'timetable', 'sessions', 'attendance'})) setState(() => _refreshFailed = false);
       }
+    } catch (e) {
+      // Keep what is on screen and say it is the saved copy; the next refresh tries again.
+      if (mounted) setState(() => _refreshFailed = true);
+      debugPrint('Background refresh failed: $e');
     } finally {
       _refreshInProgress = false;
+    }
+  }
+
+  Future<void> _retryConnection() async {
+    if (_retryingNetwork) return;
+    setState(() => _retryingNetwork = true);
+    try {
+      await Future.wait([widget.onSyncRequested(), fetchActiveSessions()]);
+      if (mounted && !_sessionsFailed) setState(() => _refreshFailed = false);
+    } catch (_) {
+      // The banner stays; its Retry is still there.
+    } finally {
+      if (mounted) setState(() => _retryingNetwork = false);
     }
   }
 
@@ -416,11 +438,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
       if (current()) {
         final hasChanged = jsonEncode(activeSessions) != jsonEncode(loadedList);
-        if (hasChanged || !_hasLoadedSessions || sessionsError != null) {
+        if (hasChanged || !_hasLoadedSessions || sessionsError != null || _sessionsFailed) {
           setState(() {
             activeSessions = loadedList;
             _hasLoadedSessions = true;
             sessionsError = null;
+            _sessionsFailed = false;
           });
         } else {
           _hasLoadedSessions = true;
@@ -437,6 +460,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       // Only set error and show the Cloud Off block if we have absolutely no cached data
       if (!_hasLoadedSessions && activeSessions.isEmpty && current()) {
         setState(() => sessionsError = _friendlyError(e));
+      } else if (current() && !_sessionsFailed) {
+        setState(() => _sessionsFailed = true);   // the saved list stays, under the network banner
       }
     } finally {
       if (current() && isLoadingSessions) {
@@ -958,6 +983,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
           ),
+
+          if (widget.isDatabaseOffline || _sessionsFailed || _refreshFailed)
+            NetworkErrorBanner(
+              message: 'Network error loading data. Showing cached view.',
+              onRetry: _retryConnection,
+              retrying: _retryingNetwork,
+            ),
 
           // Main View Render
           Expanded(

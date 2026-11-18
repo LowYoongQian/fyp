@@ -14,6 +14,16 @@ String offlineStatus(Object? status) => switch (status) {
   _ => 'Waiting to sync — attendance not confirmed',
 };
 
+/// The icon and colour of a saved attempt's state: green recorded, blue with the lecturer, red needs the student, grey
+/// old, amber still waiting to reach the server.
+({IconData icon, Color color}) offlineStatusLook(Object? status) => switch (status) {
+  'synced' || 'excused' || 'approved' => (icon: Icons.task_alt_rounded, color: const Color(0xFF16A34A)),
+  'needs_review' => (icon: Icons.hourglass_top_rounded, color: const Color(0xFF2563EB)),
+  'rejected' || 'cancelled' || 'failed' => (icon: Icons.error_outline_rounded, color: const Color(0xFFDC2626)),
+  'legacy' => (icon: Icons.history_rounded, color: const Color(0xFF64748B)),
+  _ => (icon: Icons.cloud_upload_outlined, color: const Color(0xFFD97706)),
+};
+
 class OfflineQueueSheet extends StatefulWidget {
   final List<Map<String, Object?>> rows;
   final Future<List<Map<String, Object?>>> Function() onRefresh;
@@ -50,8 +60,13 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final locale = MaterialLocalizations.of(context);
+    final ink = dark ? Colors.white : const Color(0xFF0F172A);
+    final muted = dark ? const Color(0xFFA0A0A0) : const Color(0xFF64748B);
+    final card = dark ? const Color(0xFF2A2A2A) : Colors.white;
+    const blue = Color(0xFF2563EB);
+    final waiting = _rows.where((row) => !['synced', 'excused'].contains(row['status'])).length;
     return FractionallySizedBox(
       heightFactor: .8,
       child: SafeArea(
@@ -60,80 +75,186 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
           children: [
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 children: [
                   Row(
                     children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(colors: [blue, Color(0xFF0EA5E9)]),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.cloud_sync_rounded, color: Colors.white, size: 24),
+                      ),
+                      const SizedBox(width: 12),
                       Expanded(
                         child: Semantics(
                           header: true,
                           child: Text(
                             tr('Saved attendance'),
-                            style: theme.textTheme.titleLarge,
+                            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: ink),
                           ),
                         ),
                       ),
+                      if (waiting > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD97706).withValues(alpha: dark ? .22 : .12),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                          child: Text('$waiting',
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFFD97706))),
+                        ),
                       IconButton(
                         tooltip: tr('Close saved attendance'),
                         onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
+                        icon: const Icon(Icons.close_rounded),
                       ),
                     ],
                   ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      tr('Saved attempts are not proof of attendance. Keep the app open while reconnecting; attempts after class may need lecturer review.'),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: blue.withValues(alpha: dark ? .16 : .07),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: blue.withValues(alpha: .25)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.info_outline_rounded, size: 18, color: blue),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            tr('Saved attempts are not proof of attendance. Keep the app open while reconnecting; attempts after class may need lecturer review.'),
+                            style: TextStyle(fontSize: 12.5, height: 1.4, color: ink),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  if (_rows.isEmpty) Text(tr('No saved attempts.')),
-                  for (final row in _rows) ...[
+                  const SizedBox(height: 16),
+                  if (_rows.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 28),
+                      child: Column(
+                        children: [
+                          Icon(Icons.cloud_done_rounded, size: 44, color: muted.withValues(alpha: .7)),
+                          const SizedBox(height: 10),
+                          Text(tr('No saved attempts.'),
+                              textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, color: muted)),
+                        ],
+                      ),
+                    ),
+                  for (final row in _rows)
                     Builder(
                       builder: (context) {
-                        final date = DateTime.tryParse(
-                          '${row['queued_at']}',
-                        )?.toLocal();
-                        final label =
-                            row['class_label']?.toString().trim() ?? '';
-                        final confirmed = [
-                          'synced',
-                          'excused',
-                        ].contains(row['status']);
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(
-                            confirmed ? Icons.task_alt : Icons.schedule,
-                            color: theme.colorScheme.primary,
+                        final date = DateTime.tryParse('${row['queued_at']}')?.toLocal();
+                        final label = row['class_label']?.toString().trim() ?? '';
+                        final look = offlineStatusLook(row['status']);
+                        final when = date == null
+                            ? tr('Time unavailable')
+                            : '${locale.formatMediumDate(date)} · ${locale.formatTimeOfDay(TimeOfDay.fromDateTime(date))} (${tr('local time')})';
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: card,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: look.color.withValues(alpha: .35)),
                           ),
-                          title: Text(
-                            tr(label.isEmpty ? 'Saved class attempt' : label),
-                          ),
-                          subtitle: Text(
-                            tr('{v}\n{v2}', {'v': offlineStatus(row['status']), 'v2': date == null ? 'Time unavailable' : '${locale.formatMediumDate(date)} · ${locale.formatTimeOfDay(TimeOfDay.fromDateTime(date))} (local time)'}),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: look.color.withValues(alpha: dark ? .2 : .1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(look.icon, size: 18, color: look.color),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      tr(label.isEmpty ? 'Saved class attempt' : label),
+                                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: ink),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      tr(offlineStatus(row['status'])),
+                                      style: TextStyle(fontSize: 12.5, height: 1.35, fontWeight: FontWeight.w600, color: look.color),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 1),
+                                          child: Icon(Icons.schedule_rounded, size: 13, color: muted),
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Expanded(child: Text(when, style: TextStyle(fontSize: 11.5, color: muted))),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         );
                       },
                     ),
-                    const Divider(height: 24),
-                  ],
                   if (_error != null)
-                    Text(
-                      tr(_error!),
-                      style: TextStyle(color: theme.colorScheme.error),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDC2626).withValues(alpha: dark ? .16 : .07),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.wifi_off_rounded, size: 18, color: Color(0xFFDC2626)),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Semantics(
+                              liveRegion: true,
+                              child: Text(tr(_error!),
+                                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                 ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(20),
-              child: SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _busy ? null : _refresh,
-                  icon: const Icon(Icons.refresh),
-                  label: Text(
-                    tr(_busy ? 'Refreshing…' : 'Retry pending / refresh'),
-                  ),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: blue,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: blue.withValues(alpha: .6),   // still blue while refreshing, so the spinner shows
+                  disabledForegroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                onPressed: _busy ? null : _refresh,
+                icon: _busy
+                    ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+                    : const Icon(Icons.refresh_rounded),
+                label: Text(
+                  tr(_busy ? 'Refreshing…' : 'Retry pending / refresh'),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
             ),

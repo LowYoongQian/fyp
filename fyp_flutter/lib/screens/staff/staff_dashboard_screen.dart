@@ -4,6 +4,7 @@ import '../../widgets/brand_refresh.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../../widgets/network_error_banner.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -56,6 +57,7 @@ class StaffDashboard extends StatefulWidget {
 class _StaffDashboardState extends State<StaffDashboard> {
   bool isLoading = true;
   String? loadError;
+  final Set<String> _busyLessons = {};   // classes whose open / cancel / held / replacement request is on its way
 
   List<dynamic> myTimetable = [];
   List<dynamic> myActiveSessions = [];
@@ -261,14 +263,54 @@ class _StaffDashboardState extends State<StaffDashboard> {
     }
   }
 
+  /// Sends one class action. The class's buttons switch off at once (a second tap sends nothing), a lost connection says
+  /// so instead of failing silently, and null means there is no server answer to show.
+  Future<http.Response?> _lessonPost(Map<String, dynamic> lesson, String action, [Map<String, dynamic>? body]) async {
+    final id = '${lesson['id']}';
+    if (_busyLessons.contains(id)) return null;
+    setState(() => _busyLessons.add(id));
+    try {
+      return await http
+          .post(
+            Uri.parse("${widget.apiBaseUrl}/sessions/$id/$action"),
+            headers: {
+              "Authorization": "Bearer ${widget.authToken}",
+              if (body != null) "Content-Type": "application/json",
+            },
+            body: body == null ? null : jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (e) {
+      debugPrint('Class action $action failed: ${e.runtimeType}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(tr('Connection Error: Cannot reach the server. Please check your internet connection.')),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+      return null;
+    } finally {
+      if (mounted) setState(() => _busyLessons.remove(id));
+    }
+  }
+
+  /// The server's reason, or [fallback] when the answer is not the usual JSON (a proxy error page, for example).
+  String _detailOf(http.Response response, String fallback) {
+    try {
+      final detail = (jsonDecode(response.body) as Map)['detail'];
+      return detail is String && detail.isNotEmpty ? detail : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
   Future<void> _openTodayClass(Map<String, dynamic> lesson) async {
-    final response = await http.post(
-      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/open"),
-      headers: {"Authorization": "Bearer ${widget.authToken}"},
-    );
-    if (!mounted) return;
+    final response = await _lessonPost(lesson, 'open');
+    if (response == null || !mounted) return;
     if (response.statusCode == 200) {
-      await Future.wait([fetchTodayClasses(), fetchActiveSessions()]);
+      unawaited(_pollDashboardData(topics: {'sessions'}));   // the lists catch up behind the message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -278,10 +320,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
         ),
       );
     } else {
-      final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(tr(error['detail'] ?? 'Could not open class.')),
+          content: Text(tr(_detailOf(response, 'Could not open class.'))),
           backgroundColor: const Color(0xFFDC2626),
         ),
       );
@@ -320,19 +361,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
       ),
     );
     controller.dispose();
-    if (reason == null) return;
-    final response = await http.post(
-      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/cancel"),
-      headers: {
-        "Authorization": "Bearer ${widget.authToken}",
-        "Content-Type": "application/json",
-      },
-      body: jsonEncode({'reason': reason}),
-    );
-    if (!mounted) return;
+    if (reason == null || !mounted) return;
+    final response = await _lessonPost(lesson, 'cancel', {'reason': reason});
+    if (response == null || !mounted) return;
     if (response.statusCode == 200) {
-      await Future.wait([fetchTodayClasses(), fetchClassesNeedingAttention()]);
-      if (!mounted) return;
+      unawaited(_pollDashboardData(topics: {'sessions'}));
       final addReplacement = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -355,9 +388,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
         await _arrangeReplacement(lesson);
       }
     } else {
-      final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr(error['detail'] ?? 'Could not cancel class.'))),
+        SnackBar(
+          content: Text(tr(_detailOf(response, 'Could not cancel class.'))),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
       );
     }
   }
@@ -383,14 +418,11 @@ class _StaffDashboardState extends State<StaffDashboard> {
         ],
       ),
     );
-    if (confirmed != true) return;
-    final response = await http.post(
-      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/held"),
-      headers: {"Authorization": "Bearer ${widget.authToken}"},
-    );
-    if (!mounted) return;
+    if (confirmed != true || !mounted) return;
+    final response = await _lessonPost(lesson, 'held');
+    if (response == null || !mounted) return;
     if (response.statusCode == 200) {
-      await Future.wait([fetchTodayClasses(), fetchClassesNeedingAttention()]);
+      unawaited(_pollDashboardData(topics: {'sessions'}));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -400,10 +432,9 @@ class _StaffDashboardState extends State<StaffDashboard> {
         ),
       );
     } else {
-      final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(tr(error['detail'] ?? 'Could not resolve class.')),
+          content: Text(tr(_detailOf(response, 'Could not resolve class.'))),
           backgroundColor: const Color(0xFFDC2626),
         ),
       );
@@ -477,22 +508,15 @@ class _StaffDashboardState extends State<StaffDashboard> {
       ),
     );
     roomController.dispose();
-    if (room == null) return;
-    final response = await http.post(
-      Uri.parse("${widget.apiBaseUrl}/sessions/${lesson['id']}/replacement"),
-      headers: {
-        "Authorization": "Bearer ${widget.authToken}",
-        "Content-Type": "application/json",
-      },
-      body: jsonEncode({
-        'scheduled_start': start.toUtc().toIso8601String(),
-        'scheduled_end': end.toUtc().toIso8601String(),
-        'room': room,
-      }),
-    );
-    if (!mounted) return;
+    if (room == null || !mounted) return;
+    final response = await _lessonPost(lesson, 'replacement', {
+      'scheduled_start': start.toUtc().toIso8601String(),
+      'scheduled_end': end.toUtc().toIso8601String(),
+      'room': room,
+    });
+    if (response == null || !mounted) return;
     if (response.statusCode == 201) {
-      await fetchTodayClasses();
+      unawaited(_pollDashboardData(topics: {'sessions'}));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -502,12 +526,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
         ),
       );
     } else {
-      final error = jsonDecode(response.body);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            tr(error['detail'] ?? 'Could not arrange replacement class.'),
-          ),
+          content: Text(tr(_detailOf(response, 'Could not arrange replacement class.'))),
+          backgroundColor: const Color(0xFFDC2626),
         ),
       );
     }
@@ -844,6 +866,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
           ...todayClasses.map((raw) {
             final lesson = Map<String, dynamic>.from(raw as Map);
             final status = (lesson['status'] ?? 'scheduled').toString();
+            final busy = _busyLessons.contains('${lesson['id']}');
             final start = DateTime.tryParse(
               (lesson['scheduled_start'] ?? '').toString(),
             )?.toLocal();
@@ -971,19 +994,19 @@ class _StaffDashboardState extends State<StaffDashboard> {
                     children: [
                       if (status == 'scheduled')
                         FilledButton.icon(
-                          onPressed: () => _openTodayClass(lesson),
+                          onPressed: busy ? null : () => _openTodayClass(lesson),
                           icon: const Icon(Icons.play_arrow, size: 16),
                           label: Text(tr('Open Class')),
                         ),
                       if (status == 'scheduled' || status == 'needs_attention')
                         OutlinedButton.icon(
-                          onPressed: () => _cancelTodayClass(lesson),
+                          onPressed: busy ? null : () => _cancelTodayClass(lesson),
                           icon: const Icon(Icons.event_busy, size: 16),
                           label: Text(tr('Cancel Class')),
                         ),
                       if (status == 'needs_attention')
                         FilledButton.icon(
-                          onPressed: () => _markClassHeld(lesson),
+                          onPressed: busy ? null : () => _markClassHeld(lesson),
                           icon: const Icon(
                             Icons.check_circle_outline,
                             size: 16,
@@ -992,7 +1015,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                         ),
                       if (status == 'cancelled')
                         OutlinedButton.icon(
-                          onPressed: () => _arrangeReplacement(lesson),
+                          onPressed: busy ? null : () => _arrangeReplacement(lesson),
                           icon: const Icon(Icons.event_repeat, size: 16),
                           label: Text(tr('Arrange Replacement')),
                         ),
@@ -1258,7 +1281,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                     children: [
                       Expanded(
                         child: FilledButton.icon(
-                          onPressed: () => _markClassHeld(lesson),
+                          onPressed: _busyLessons.contains('${lesson['id']}') ? null : () => _markClassHeld(lesson),
                           icon: const Icon(Icons.check_circle_outline, size: 15),
                           label: Text(tr('Class Held')),
                         ),
@@ -1266,7 +1289,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () => _cancelTodayClass(lesson),
+                          onPressed: _busyLessons.contains('${lesson['id']}') ? null : () => _cancelTodayClass(lesson),
                           icon: const Icon(Icons.event_busy, size: 15),
                           label: Text(tr('Cancel Class')),
                         ),
@@ -2488,57 +2511,7 @@ class _StaffDashboardState extends State<StaffDashboard> {
 
               // Status Warning Banner
               if (loadError != null)
-                Container(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 4,
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isDarkMode
-                        ? const Color(0xFF451A1A)
-                        : const Color(0xFFFFF1F2),
-                    border: Border.all(
-                      color: const Color(0xFFF43F5E).withValues(alpha: 0.3),
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.cloud_off,
-                        color: Color(0xFFE11D48),
-                        size: 16,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          tr(loadError!),
-                          style: GoogleFonts.inter(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w600,
-                            color: isDarkMode
-                                ? const Color(0xFFFECDD3)
-                                : const Color(0xFFBE123C),
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: loadLecturerData,
-                        child: Text(
-                          tr('Retry'),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFFF43F5E),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                NetworkErrorBanner(message: loadError!, onRetry: loadLecturerData, retrying: isLoading),
 
               // Content Area with Shimmer Loading Placeholder
               Expanded(

@@ -408,6 +408,8 @@ class CampusNetworkCreate(BaseModel):
     label: str
     cidr: Optional[str] = None
     ssid: Optional[str] = None
+    subnet_range: Optional[str] = None   # the router's local Wi-Fi range, beside cidr (its ISP public address)
+    gateway_ip: Optional[str] = None
     bssid_prefix: Optional[str] = None
     is_active: bool = True
 
@@ -415,6 +417,8 @@ class CampusNetworkUpdate(BaseModel):
     label: Optional[str] = None
     cidr: Optional[str] = None
     ssid: Optional[str] = None
+    subnet_range: Optional[str] = None   # the router's local Wi-Fi range, beside cidr (its ISP public address)
+    gateway_ip: Optional[str] = None
     bssid_prefix: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -423,6 +427,8 @@ class CampusNetworkResponse(BaseModel):
     label: str
     cidr: Optional[str] = None
     ssid: Optional[str] = None
+    subnet_range: Optional[str] = None   # the router's local Wi-Fi range, beside cidr (its ISP public address)
+    gateway_ip: Optional[str] = None
     bssid_prefix: Optional[str] = None
     is_active: bool
 

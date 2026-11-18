@@ -133,9 +133,6 @@ def _request_dict(row: AttendanceRequest, course: Course, student: Student | Non
         "end_date": row.end_date.isoformat() if row.end_date else None,
         "proof_file_name": row.proof_file_name,
         "has_proof": bool(row.proof_path),
-        "ai_verdict": row.ai_verdict,
-        "ai_confidence": row.ai_confidence,
-        "ai_summary": row.ai_summary,
     }
 
 

@@ -14,6 +14,10 @@ import { LoadingRegion, ShimmerNetworkDetection, ShimmerNetworkMode, ShimmerNetw
 
 interface DetectedConnection {
   client_ip: string;
+  public_ip?: string | null;
+  public_cidr?: string | null;
+  local_ip?: string | null;
+  local_cidr?: string | null;
   ipv6_address?: string;
   cidr: string;
   label: string;
@@ -53,6 +57,7 @@ export const CampusNetworkManager: React.FC = () => {
   // Create Form Fields
   const [label, setLabel] = useState('');
   const [cidr, setCidr] = useState('');
+  const [subnet, setSubnet] = useState('');
   const [ssid, setSsid] = useState('');
   const [bssidPrefix, setBssidPrefix] = useState('');
   const [location, setLocation] = useState('');
@@ -107,7 +112,7 @@ export const CampusNetworkManager: React.FC = () => {
   const networkSecurityLocked = settings.network_security_locked !== 'false';
 
   const resetForm = () => {
-    setLabel(''); setCidr(''); setSsid(''); setBssidPrefix('');
+    setLabel(''); setCidr(''); setSubnet(''); setSsid(''); setBssidPrefix('');
     setLocation(''); setFormError(null);
   };
 
@@ -161,36 +166,40 @@ export const CampusNetworkManager: React.FC = () => {
     return str;
   };
 
-  // Real Auto-Capture of currently detected Admin IP / CIDR Subnet & Wi-Fi Details
+  // One router, one rule: its ISP public address first (what the deployed server sees for every phone on this Wi-Fi), its local Wi-Fi range beside it.
   const handleAutoCaptureCurrentConnection = async () => {
-    if (!detectedConn) return;
+    if (!detectedConn?.cidr) return;
     setCapturing(true);
     try {
-      const wifiSsid = detectedConn.ssid || 'Campus-Wi-Fi';
+      const wifiSsid = detectedConn.ssid || 'Campus Wi-Fi';
       const wifiBssid = detectedConn.bssid || '';
       const wifiLoc = detectedConn.location || 'Main Campus Node';
       const fullLabel = `${wifiSsid} [${wifiLoc}]`;
+      const localRange = detectedConn.public_cidr ? detectedConn.local_cidr ?? null : null;   // without a public address, cidr already is the local range
 
-      const existing = networks.find(n => n.ssid === wifiSsid || n.cidr === detectedConn.cidr || n.label.includes(wifiSsid));
+      const existing = networks.find(n => n.cidr === detectedConn.cidr);
       if (existing) {
-        if (!existing.is_active) {
-          await apiService.adminUpdateCampusNetwork(existing.id, { is_active: true });
-          setNetworks(prev => prev.map(n => n.id === existing.id ? { ...n, is_active: true } : n));
+        const changes = { ...(!existing.is_active && { is_active: true }), ...(localRange && !existing.subnet_range && { subnet_range: localRange }) };
+        if (Object.keys(changes).length) {
+          clearApiCache();
+          const saved = await apiService.adminUpdateCampusNetwork(existing.id, changes);
+          setNetworks(prev => prev.map(n => n.id === existing.id ? saved : n));
         }
-        await swalSuccess('Network Whitelisted', `Wi-Fi Network "${wifiSsid}" (${detectedConn.cidr}) is active & permitted.`);
+        await swalSuccess('Network Whitelisted', `"${existing.label}" (${detectedConn.cidr}) is active & permitted.`);
       } else {
         clearApiCache();
         const created = await apiService.adminCreateCampusNetwork({
           label: fullLabel,
           cidr: detectedConn.cidr,
-          ssid: wifiSsid,
+          subnet_range: localRange,
+          ssid: detectedConn.ssid || null,
           bssid_prefix: wifiBssid ? wifiBssid.slice(0, 8) : null,
           is_active: true
         });
         setNetworks(prev => [...prev, created]);
         clearApiCache();
-        await fetchAll();
-        await swalSuccess('Connection Whitelisted', `Captured & whitelisted "${wifiSsid}" (${detectedConn.cidr}) for student attendance.`);
+        void fetchAll();   // the saved rule is already listed; the reload only confirms it and reports its own failure
+        void swalSuccess('Connection Whitelisted', `Captured & whitelisted "${wifiSsid}" (${detectedConn.cidr}) for student attendance.`);
       }
     } catch (err: any) {
       await swalError('Whitelisting Failed', err.response?.data?.detail || 'Could not whitelist connection.');
@@ -203,8 +212,8 @@ export const CampusNetworkManager: React.FC = () => {
     e.preventDefault();
     setFormError(null);
     if (!label.trim()) { setFormError('Connection Name / Label is required.'); return; }
-    if (!cidr.trim()) {
-      setFormError('Enter the campus network address.');
+    if (!cidr.trim() && !subnet.trim()) {
+      setFormError('Enter the router’s public IP, its local Wi-Fi subnet, or both.');
       return;
     }
     setCreating(true);
@@ -217,6 +226,7 @@ export const CampusNetworkManager: React.FC = () => {
       const created = await apiService.adminCreateCampusNetwork({
         label: fullLabel,
         cidr: cidr.trim() || null,
+        subnet_range: subnet.trim() || null,
         ssid: ssid.trim() || null,
         bssid_prefix: bssidPrefix.trim() || null,
         is_active: true
@@ -236,16 +246,18 @@ export const CampusNetworkManager: React.FC = () => {
 
   const handleTogglePermission = async (net: CampusNetwork) => {
     const updatedStatus = !net.is_active;
+    const show = (active: boolean) => setNetworks(prev => prev.map(n => n.id === net.id ? { ...n, is_active: active } : n));
+    show(updatedStatus);   // the box ticks at once; a refusal puts it back
     try {
       clearApiCache();
       await apiService.adminUpdateCampusNetwork(net.id, { is_active: updatedStatus });
-      setNetworks(prev => prev.map(n => n.id === net.id ? { ...n, is_active: updatedStatus } : n));
-      await swalSuccess(
+      void swalSuccess(
         updatedStatus ? 'Permission Granted' : 'Permission Revoked',
         `Attendance check-in from "${net.label}" is now ${updatedStatus ? 'permitted' : 'disabled'}.`
       );
     } catch {
-      await swalError('Update Failed', 'Could not toggle network permission.');
+      show(net.is_active);
+      void swalError('Update Failed', 'Could not toggle network permission.');
     }
   };
 
@@ -259,12 +271,12 @@ export const CampusNetworkManager: React.FC = () => {
       }
       clearApiCache();
       setNetworks(prev => prev.filter(n => n.id !== net.id));
-      await fetchAll();
-      await swalSuccess('Rule Removed', 'Campus network deleted.');
+      void fetchAll();
+      void swalSuccess('Rule Removed', 'Campus network deleted.');
     } catch (err: any) {
       console.error('Delete network error:', err);
-      await fetchAll();
-      await swalError('Delete Failed', err.response?.data?.detail || 'Could not delete the network.');
+      void fetchAll();
+      void swalError('Delete Failed', err.response?.data?.detail || 'Could not delete the network.');
     }
   };
 
@@ -321,12 +333,25 @@ export const CampusNetworkManager: React.FC = () => {
         n.label.toLowerCase().includes(q) ||
         (n.ssid || '').toLowerCase().includes(q) ||
         (n.bssid_prefix || '').toLowerCase().includes(q) ||
-        (n.cidr || '').toLowerCase().includes(q)
+        (n.cidr || '').toLowerCase().includes(q) ||
+        (n.subnet_range || '').toLowerCase().includes(q)
       );
     });
   }, [networks, searchQuery]);
 
-  const activePermittedCount = networks.filter(n => n.is_active && n.cidr).length;
+  const activePermittedCount = networks.filter(n => n.is_active && (n.cidr || n.subnet_range)).length;
+  const shownDetected = (value?: string | null) => showDetectedSensitive ? (value || '—') : maskIp(value, false);
+  // One address of the detected router: what it is, and why it may be missing.
+  const addressTile = (Icon: React.ElementType, title: string, address: string | null | undefined, range: string | null | undefined, missing: string, extra?: React.ReactNode) => (
+    <div className={`rounded-xl border p-3.5 space-y-1.5 ${address ? 'bg-white border-slate-200' : 'bg-slate-100/60 border-dashed border-slate-300'}`}>
+      <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500"><Icon className="h-3.5 w-3.5 text-brand-blue" />{title}</span>
+      {address ? <>
+        <p className="font-mono text-base font-bold text-slate-900">{shownDetected(address)}</p>
+        <p className="font-mono text-[11px] text-slate-500">Allowed range: <strong className="text-brand-blue">{shownDetected(range)}</strong></p>
+        {extra}
+      </> : <p className="text-[11px] leading-relaxed text-slate-500">{missing}</p>}
+    </div>
+  );
 
   const isCurrentConnWhitelisted = useMemo(() => {
     if (!detectedConn) return false;
@@ -476,52 +501,54 @@ export const CampusNetworkManager: React.FC = () => {
             <button type="button" onClick={detectLiveConnection} disabled={isDetecting} className="uipro-button uipro-button-secondary shrink-0 py-1.5 px-3 text-xs cursor-pointer">Try again</button>
           </div>
         ) : detectedConn ? (
-          <div key={`card-detected-${showDetectedSensitive}`} aria-busy={isDetecting} className={`p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-3 transition-opacity ${isDetecting ? 'opacity-60' : ''}`}>
-            <div className="flex items-center justify-between">
+          <div key={`card-detected-${showDetectedSensitive}`} aria-busy={isDetecting} className={`p-4 bg-slate-50/90 border border-slate-200/80 rounded-xl space-y-4 transition-opacity ${isDetecting ? 'opacity-60' : ''}`}>
+            <div className="flex items-center justify-between gap-3">
               <span className="text-[9.5px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> Connection Detected
               </span>
-              <span className="text-[10px] font-mono bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200 shadow-xs">
-                Active IP
+              <span className="text-[10px] font-mono bg-white text-slate-600 px-2 py-0.5 rounded border border-slate-200 shadow-xs" title="The address this server received your request from">
+                Server sees {shownDetected(detectedConn.client_ip)}
               </span>
             </div>
 
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl border border-emerald-200/60 shrink-0">
-                  <Wifi className="h-6 w-6" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h4 className="font-bold text-sm text-slate-800">
-                      {detectedConn.ssid
-                        ? `${detectedConn.ssid} (${showDetectedSensitive ? detectedConn.label : maskIp(detectedConn.label, false)})`
-                        : (showDetectedSensitive ? detectedConn.label : maskIp(detectedConn.label, false))}
-                    </h4>
-                    <Lock className="h-3.5 w-3.5 text-slate-400" />
-                  </div>
-                  <div className="text-[11px] text-slate-500 font-mono mt-0.5 space-y-0.5">
-                    <p>
-                      IPv4: <strong className="text-slate-800">{showDetectedSensitive ? detectedConn.client_ip : maskIp(detectedConn.client_ip, false)}</strong>
-                      {' | '}Subnet CIDR: <strong className="text-brand-blue">{showDetectedSensitive ? detectedConn.cidr : maskIp(detectedConn.cidr, false)}</strong>
-                      {detectedConn.bssid && <> | BSSID MAC: <strong className="text-slate-700">{showDetectedSensitive ? detectedConn.bssid : maskIp(detectedConn.bssid, false)}</strong></>}
-                    </p>
-                    {detectedConn.ipv6_address && (
-                      <p className="text-[10.5px] text-slate-500">
-                        IPv6 Address: <strong className="text-purple-700 font-semibold">{showDetectedSensitive ? detectedConn.ipv6_address : maskIp(detectedConn.ipv6_address, false)}</strong>
-                      </p>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Location: <span className="text-slate-700">{detectedConn.location || 'Main Campus Node'}</span> | Protocol: <span className="text-slate-700">{detectedConn.protocol}</span>
-                  </p>
-                </div>
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-100 text-emerald-700 rounded-xl border border-emerald-200/60 shrink-0">
+                <Router className="h-6 w-6" />
               </div>
+              <div className="min-w-0">
+                <h4 className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                  {detectedConn.ssid || 'Your current router'}
+                  <Lock className="h-3.5 w-3.5 text-slate-400" />
+                </h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Phones on this Wi-Fi reach the deployed app through the router’s public IP; the local Wi-Fi range covers a server running on this network.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {addressTile(Globe, 'Public IP (ISP)', detectedConn.public_ip, detectedConn.public_cidr,
+                'Not found: the server could not look up this router’s internet address. Check this computer is online, then Re-Detect.')}
+              {addressTile(Wifi, 'Local Wi-Fi', detectedConn.local_ip, detectedConn.local_cidr,
+                'Not visible: a hosted server only sees the public IP. The phone app still reports its Wi-Fi with each check-in.',
+                (detectedConn.bssid || detectedConn.ipv6_address) && (
+                  <p className="font-mono text-[10.5px] text-slate-500">
+                    {detectedConn.bssid && <>BSSID: <strong className="text-slate-700">{shownDetected(detectedConn.bssid)}</strong></>}
+                    {detectedConn.bssid && detectedConn.ipv6_address && ' · '}
+                    {detectedConn.ipv6_address && <>IPv6: <strong className="text-purple-700">{shownDetected(detectedConn.ipv6_address)}</strong></>}
+                  </p>
+                ))}
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <p className="text-[10px] text-slate-400">
+                Location: <span className="text-slate-700">{detectedConn.location || 'Main Campus Node'}</span> | Protocol: <span className="text-slate-700">{detectedConn.protocol}</span>
+              </p>
 
               <button
                 type="button"
                 onClick={handleAutoCaptureCurrentConnection}
-                disabled={capturing || isDetecting}
+                disabled={capturing || isDetecting || !detectedConn.cidr}
                 className={`py-2 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center gap-2 border ${
                   isCurrentConnWhitelisted
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100/60'
@@ -600,7 +627,7 @@ export const CampusNetworkManager: React.FC = () => {
               Campus Connections
             </h3>
             <p className="text-[10px] text-slate-400 font-sans">
-              Permitted Wi-Fi networks for attendance.
+              Permitted routers for attendance: public IP first, local Wi-Fi second.
             </p>
           </div>
 
@@ -641,7 +668,7 @@ export const CampusNetworkManager: React.FC = () => {
           networksFailed ? loadProblem('the campus connections') : (
             <LoadingRegion label="Loading campus connections…">
               <ShimmerTableSkeleton
-                headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Protocol / Subnet', 'Location', 'Actions']}
+                headers={['Permission', 'Connection Name', 'Wi-Fi SSID', 'BSSID / MAC', 'Public IP (ISP)', 'Local Wi-Fi', 'Location', 'Actions']}
                 rows={5}
                 showPagination={false}
               />
@@ -651,7 +678,7 @@ export const CampusNetworkManager: React.FC = () => {
           <div className="py-14 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl space-y-2">
             <Radio className="h-8 w-8 text-slate-300 mx-auto animate-pulse" />
             <p className="font-semibold text-slate-600">No network connection rules configured yet</p>
-            <p className="text-[11px] text-slate-400">Enter the campus network address, for example 10.52.0.0/16.</p>
+            <p className="text-[11px] text-slate-400">On the campus Wi-Fi, use Auto-Capture above, or add the router’s public IP with Manual Add.</p>
           </div>
         ) : (
           <div key={`table-saved-${showSavedSensitive}`} className="overflow-x-auto border border-slate-100 rounded-xl">
@@ -662,7 +689,8 @@ export const CampusNetworkManager: React.FC = () => {
                   <th className="py-3 px-4">Connection Name</th>
                   <th className="py-3 px-4">Wi-Fi SSID</th>
                   <th className="py-3 px-4">BSSID / MAC</th>
-                  <th className="py-3 px-4">Protocol / Subnet</th>
+                  <th className="py-3 px-4">Public IP (ISP)</th>
+                  <th className="py-3 px-4">Local Wi-Fi</th>
                   <th className="py-3 px-4">Location</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -722,16 +750,18 @@ export const CampusNetworkManager: React.FC = () => {
                         )}
                       </td>
 
-                      {/* Protocol / Subnet */}
-                      <td className="py-3.5 px-4 font-mono">
-                        {net.cidr ? (
-                          <span className="text-brand-blue font-bold">
-                            {showSavedSensitive ? net.cidr : maskIp(net.cidr, false)}
-                          </span>
-                        ) : (
-                          <span className="text-slate-500 font-sans">WPA3-Enterprise</span>
-                        )}
-                      </td>
+                      {/* The router's two addresses: public (ISP) first, local Wi-Fi second */}
+                      {[net.cidr, net.subnet_range].map((range, index) => (
+                        <td key={index} className="py-3.5 px-4 font-mono">
+                          {range ? (
+                            <span className={index === 0 ? 'text-brand-blue font-bold' : 'text-slate-700 font-semibold'}>
+                              {showSavedSensitive ? range : maskIp(range, false)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+                      ))}
 
                       {/* Location */}
                       <td className="py-3.5 px-4 text-slate-600">
@@ -786,6 +816,28 @@ export const CampusNetworkManager: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Router Public IP (ISP)</label>
+                  <TextInput
+                    value={cidr}
+                    onChange={(e) => setCidr(e.target.value)}
+                    placeholder="161.142.145.146"
+                    className="w-full uipro-input mt-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Local Wi-Fi Subnet</label>
+                  <TextInput
+                    value={subnet}
+                    onChange={(e) => setSubnet(e.target.value)}
+                    placeholder="192.168.100.0/24"
+                    className="w-full uipro-input mt-1 font-mono"
+                  />
+                </div>
+              </div>
+              <p className="-mt-1 text-[10px] leading-relaxed text-slate-400">The public IP is what the deployed app sees for every phone on this router (search “what is my IP” while on it). The local subnet only matters when the server runs on this Wi-Fi.</p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Wi-Fi SSID</label>
                   <TextInput
                     value={ssid}
@@ -805,25 +857,14 @@ export const CampusNetworkManager: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">CIDR / Subnet</label>
-                  <TextInput
-                    value={cidr}
-                    onChange={(e) => setCidr(e.target.value)}
-                    placeholder="10.52.0.0/16"
-                    className="w-full uipro-input mt-1 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Campus Location</label>
-                  <TextInput
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    placeholder="Block N - Room 302"
-                    className="w-full uipro-input mt-1"
-                  />
-                </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Campus Location</label>
+                <TextInput
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="Block N - Room 302"
+                  className="w-full uipro-input mt-1"
+                />
               </div>
 
               {formError && (

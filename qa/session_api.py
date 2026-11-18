@@ -41,7 +41,7 @@ assert re.fullmatch(r'qa_migration_[0-9a-f]{12}',name)
 os.environ['DATABASE_URL']=f'postgresql+psycopg://postgres:postgres@127.0.0.1:56422/{name}'
 # safe_env supplies a fresh ephemeral QA signing key; no key file is stored.
 os.environ['ALLOWED_ORIGINS']='http://127.0.0.1:5200'
-for key in ('OPENROUTER_API_KEY','GEMINI_API_KEY','RESEND_API_KEY','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','SUPABASE_SECRET_KEY'):
+for key in ('OPENROUTER_API_KEY','RESEND_API_KEY','SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY','SUPABASE_SECRET_KEY'):
     os.environ[key]=''
 engine=create_engine(os.environ['DATABASE_URL'])
 with engine.connect() as c:

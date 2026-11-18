@@ -15,7 +15,7 @@ env
 .git
 .gitignore
 
-# Secrets: .env is untracked and holds DATABASE_URL / JWT_SECRET_KEY / GEMINI_API_KEY.
+# Secrets: .env is untracked and holds DATABASE_URL / JWT_SECRET_KEY / OPENROUTER_API_KEY.
 # .env.example does not match either pattern, so it still ships.
 .env
 *.env

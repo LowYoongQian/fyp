@@ -156,7 +156,7 @@ flowchart LR
     api --> storage["🗂️ Supabase Storage<br/>photos, documents"]
     api --> mail["✉️ Resend<br/>email"]
     api --> push["🔔 Firebase Cloud Messaging<br/>push"]
-    api --> ai["✨ Gemini · OpenRouter<br/>assistant"]
+    api --> ai["✨ OpenRouter<br/>assistant"]
 ```
 
 | Part | Folder | Built with | Runs on |

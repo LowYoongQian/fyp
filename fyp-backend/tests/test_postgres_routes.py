@@ -202,7 +202,7 @@ def test_real_login_identity_portal_and_logout(pg, kind):
     if kind == 'staff':
         call(pg, 'POST', '/auth/login', {**login,'identifier':body['staff_id']}, role='anonymous')
     else:
-        call(pg, 'POST', '/auth/login', {**login,'identifier':body['student_code']}, role='anonymous',expected=401)
+        call(pg, 'POST', '/auth/login', {**login,'identifier':body['student_code'].lower()}, role='anonymous')   # student ID sign-in, any letter case
     assert pg[1].post('/auth/logout',headers=auth).status_code == 200
     assert pg[1].get('/auth/me',headers=auth).status_code == 401
 

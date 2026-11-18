@@ -11,17 +11,17 @@ void main() {
     await tester.pumpWidget(MaterialApp(home:Scaffold(body:LoginScreen(portalType:portal,isSyncing:busy,onLogin:login,onBackPressed:(){}))));
     await tester.pumpAndSettle();
   }
-  testWidgets('student must enter school email and password before authentication', (tester) async {
-    var calls=0;
-    await show(tester,login:(a,b,c){calls++;});
+  testWidgets('student must enter a school email or student ID and password; a student ID is passed to authentication', (tester) async {
+    List<String>? submitted;
+    await show(tester,login:(a,b,c){submitted=[a,b,c];});
     await tester.tap(find.text('LOGIN')); await tester.pumpAndSettle();
-    expect(find.text('School email is required'),findsOneWidget);
+    expect(find.text('Student ID or Email is required'),findsOneWidget);
     expect(find.text('Password is required'),findsOneWidget);
+    expect(submitted,isNull);
     await tester.enterText(find.byType(TextFormField).first,'ST9000001');
     await tester.enterText(find.byType(TextFormField).last,'Synthetic!123');
     await tester.tap(find.text('LOGIN')); await tester.pumpAndSettle();
-    expect(find.text('Use your school email'),findsOneWidget);
-    expect(calls,0);
+    expect(submitted,['ST9000001','Synthetic!123','student']);
   });
   testWidgets('staff ID and portal are passed to authentication', (tester) async {
     List<String>? submitted;

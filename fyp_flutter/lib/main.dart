@@ -16,6 +16,8 @@ import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
 import 'services/attendance_parity.dart';
 import 'widgets/check_in_success_dialog.dart';
+import 'widgets/saving_indicator.dart';
+import 'services/save_activity.dart';
 import 'widgets/auth_transition_overlay.dart';
 import 'services/offline_checkin_sync.dart';
 import 'services/server_discovery_service.dart';
@@ -41,9 +43,13 @@ import 'widgets/offline_queue_sheet.dart';
 import 'i18n/app_localizations.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await MobilePush.initialize();
-  runApp(const MainApp());
+  // Every package:http request goes through SaveTrackingClient, so a save shows "Saving…" the moment it starts. The binding
+  // starts inside the same zone, so taps, and the requests they send, run in it too.
+  await http.runWithClient(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    await MobilePush.initialize();
+    runApp(const MainApp());
+  }, () => SaveTrackingClient(http.Client()));
 }
 
 class MainApp extends StatefulWidget {
@@ -380,6 +386,7 @@ class MainAppState extends State<MainApp> with SingleTickerProviderStateMixin {
                     key: _screenKey,
                     child: child ?? const AppRoot(),
                   ),
+                  const Positioned(top: 0, left: 0, right: 0, child: SavingIndicator()),
                   if (_fadeFrom != null)
                     Positioned.fill(
                       child: IgnorePointer(
@@ -1507,6 +1514,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         mounted && isStudentLoggedIn && owner == _studentUserId && token == studentAuthToken &&
         server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
     setState(() => isSyncing = true);
+    // Opens at once and becomes the result when the server answers, so the student is never left guessing.
+    final progress = showCheckInProgressDialog(context, courseCode: courseCode, courseName: courseName);
     try {
       // 1. Collect live network facts for location corroboration.
       final netInfo = await NetworkInfoService.collect();
@@ -1553,16 +1562,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
           if (!current()) return;
           setState(() {});
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                tr(
-                  'Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.',
-                ),
-              ),
-              backgroundColor: Color(0xFFF59E0B),
-            ),
-          );
+          progress.savedOnPhone();
         }
         return;
       } on http.ClientException {
@@ -1579,16 +1579,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
           if (!current()) return;
           setState(() {});
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                tr(
-                  'Saved on this phone, not confirmed. Reconnect with the app open; after class, lecturer review is required.',
-                ),
-              ),
-              backgroundColor: Color(0xFFF59E0B),
-            ),
-          );
+          progress.savedOnPhone();
         }
         return;
       }
@@ -1603,12 +1594,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         }
         if ((response.statusCode == 400 || response.statusCode == 409) &&
             isAlreadyCheckedInError(error)) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(tr('You\'re already checked in for this class.')),
-              backgroundColor: Color(0xFF3B82F6),
-            ),
-          );
+          progress.alreadyCheckedIn();
           try { await syncData(context); } catch (_) {}
           return;
         }
@@ -1621,8 +1607,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
       // The server has recorded it: confirm now. The refreshes below can take 25 s or more on a busy server,
       // and a failure in them must not turn a recorded check-in into a "check-in failed" dialog.
-      showCheckInSuccessDialog(
-        context,
+      progress.succeed(
         courseCode: courseCode,
         courseName: courseName,
         timeSlot:
@@ -1661,13 +1646,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       if (current()) {
         // Red result with the reason; Try again reopens the scan when the dashboard passed a way to do so.
         final retry = extraDetails?['retry'];
-        showCheckInFailedDialog(
-          context,
-          message: _friendlyStudentError(e.toString().replaceAll("Exception: ", "")),
+        progress.fail(
+          _friendlyStudentError(e.toString().replaceAll("Exception: ", "")),
           onRetry: retry is Future<void> Function() ? () => retry() : null,
         );
       }
     } finally {
+      progress.dismissIfWaiting();   // signed out or switched account before the answer: nothing to report here
       _attendanceInFlight.remove(attemptKey);
       if (current()) setState(() => isSyncing = false);
     }
@@ -2308,30 +2293,75 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.isNotEmpty)
             SafeArea(
               top: false,
-              child: ListTile(
-                leading: const Icon(Icons.sync),
-                title: Text(
-                  tr('Saved attendance attempts ({_offlineRowsCount})', {
-                    '_offlineRowsCount': _offlineRows.length,
-                  }),
-                ),
-                subtitle: Text(
-                  tr(_offlineRows.map(_offlineLabel).toSet().join(' · ')),
-                  maxLines: 2,
-                ),
-                onTap: () => showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  useSafeArea: true,
-                  builder: (ctx) => OfflineQueueSheet(
-                    rows: _offlineRows,
-                    onRefresh: () async {
-                      await _syncOffline();
-                      return _offlineRows;
-                    },
+              child: Builder(builder: (context) {
+                final dark = Theme.of(context).brightness == Brightness.dark;
+                // The most urgent state colours the bar: something to fix, then still waiting, then with the lecturer.
+                final statuses = {for (final row in _offlineRows) '${row['status'] ?? 'pending'}'};
+                final look = offlineStatusLook(['failed', 'rejected', 'cancelled', 'pending', 'needs_review']
+                    .firstWhere(statuses.contains, orElse: () => statuses.first));
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  child: Material(
+                    color: look.color.withValues(alpha: dark ? .18 : .08),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: look.color.withValues(alpha: .35)),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        useSafeArea: true,
+                        backgroundColor: dark ? const Color(0xFF222222) : const Color(0xFFF8FAFC),
+                        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+                        builder: (ctx) => OfflineQueueSheet(
+                          rows: _offlineRows,
+                          onRefresh: () async {
+                            await _syncOffline();
+                            return _offlineRows;
+                          },
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                        child: Row(children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(color: look.color.withValues(alpha: .16), shape: BoxShape.circle),
+                            child: _offlineBusy
+                                ? Padding(
+                                    padding: const EdgeInsets.all(9),
+                                    child: CircularProgressIndicator(strokeWidth: 2.2, color: look.color),
+                                  )
+                                : Icon(look.icon, size: 19, color: look.color),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(
+                                tr('Saved attendance attempts ({_offlineRowsCount})', {
+                                  '_offlineRowsCount': _offlineRows.length,
+                                }),
+                                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: dark ? Colors.white : const Color(0xFF0F172A)),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                tr(_offlineRows.map(_offlineLabel).toSet().join(' · ')),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: look.color),
+                              ),
+                            ]),
+                          ),
+                          Icon(Icons.chevron_right_rounded, color: look.color),
+                        ]),
+                      ),
+                    ),
                   ),
-                ),
-              ),
+                );
+              }),
             ),
           _buildBottomNavigationBar(),
         ],

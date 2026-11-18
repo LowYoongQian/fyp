@@ -33,7 +33,7 @@ def safe_env():
     env.update(PYTHON_DOTENV_DISABLED='1', PYTHONIOENCODING='utf-8', PYTHONUTF8='1',
                PYTHONPATH=str(BACKEND), JWT_SECRET_KEY=secrets.token_hex(32),
                DATABASE_URL='postgresql+psycopg://postgres:postgres@127.0.0.1:56422/qa_migration_000000000000',
-               OPENROUTER_API_KEY='', GEMINI_API_KEY='', RESEND_API_KEY='',
+               OPENROUTER_API_KEY='', RESEND_API_KEY='',
                SUPABASE_URL='', SUPABASE_SERVICE_ROLE_KEY='', SUPABASE_SECRET_KEY='',
                FCM_CREDENTIALS_JSON='', VITE_API_BASE_URL='http://127.0.0.1:1')
     return env

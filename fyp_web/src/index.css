@@ -1906,3 +1906,34 @@ body :is(button, a[href], [role="tab"], [role="switch"]):focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .login-logo-shine:hover::after { animation: none; opacity: 0.35; background-position: 50% 0; }
 }
+
+/* Form check messages (utils/fieldErrors.ts): the browser's own bubble, replaced by one in the app's look. */
+.field-error-callout {
+  position: fixed; z-index: 10000; display: flex; align-items: flex-start; gap: 8px;
+  max-width: min(22rem, calc(100vw - 16px)); padding: 9px 12px; border-radius: 12px;
+  border: 1px solid #fecdd3; background: #fff1f2; color: #be123c;
+  font-size: 12px; font-weight: 600; line-height: 1.45;
+  box-shadow: 0 12px 28px -12px rgb(190 18 60 / 0.35); pointer-events: none;
+  animation: field-error-in 160ms ease-out;
+}
+.field-error-callout::before {
+  content: ''; position: absolute; top: -6px; left: 18px; width: 10px; height: 10px;
+  background: inherit; border: inherit; border-right: 0; border-bottom: 0; transform: rotate(45deg);
+}
+.field-error-callout.above::before { top: auto; bottom: -6px; transform: rotate(225deg); }
+.field-error-callout svg { flex: none; width: 15px; height: 15px; margin-top: 1px; }
+html.dark .field-error-callout { background: #2a0f17; border-color: #9f1239; color: #fecdd3; }
+[data-field-error] { border-color: #fb7185 !important; box-shadow: 0 0 0 3px rgb(244 63 94 / 0.16) !important; }
+@keyframes field-error-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .field-error-callout { animation: none; } }
+
+/* A pressed button whose save is on its way (utils/pendingButtons.ts): it answers the press at once and takes no second press.
+   No extra spinner where the button already shows its own. */
+[data-pending] { pointer-events: none; }
+button[data-pending]:not([aria-busy="true"]):not(:has(.animate-spin))::after {
+  content: ''; display: inline-block; flex: none; width: 0.9em; height: 0.9em; margin-inline-start: 0.5em; vertical-align: -0.125em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 9999px; animation: pending-spin 0.7s linear infinite;
+}
+button[data-pending="corner"]::after { position: absolute; top: -0.45em; right: -0.6em; width: 0.7em; height: 0.7em; margin: 0; }
+@keyframes pending-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button[data-pending]::after { animation: none; } }

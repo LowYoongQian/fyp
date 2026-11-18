@@ -285,14 +285,20 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
         meetings = db.query(ClassMeeting).filter(
             ClassMeeting.day == day, ClassMeeting.lecturer_id == lecturer.id
         ).all()
+    # The staff app refreshes this every 10 s with an 8 s limit: read courses and today's rows once, not per meeting.
+    day_start, day_end = _scheduled_bounds({"start": "00:00", "end": "23:59"}, today)
+    courses = {c.id: c for c in db.query(Course).filter(Course.id.in_({m.course_id for m in meetings}))} if meetings else {}
+    todays_rows = {(str(row.meeting_id), row.scheduled_start): row for row in db.query(ClassSession).filter(
+        ClassSession.meeting_id.in_([m.id for m in meetings]),
+        ClassSession.scheduled_start >= day_start, ClassSession.scheduled_start <= day_end,
+    )} if meetings else {}
     result = []
     for meeting in meetings:
-        if not within_semester(course_semester(db, meeting.course_id), today):
+        course = courses.get(meeting.course_id)
+        if not within_semester(course.semester if course and course.semester_id else None, today):
             continue
         start, end = _scheduled_bounds({"start": meeting.start, "end": meeting.end}, today)
-        lesson = db.query(ClassSession).filter(
-            ClassSession.meeting_id == meeting.id, ClassSession.scheduled_start == start
-        ).first()
+        lesson = todays_rows.get((str(meeting.id), start))
         if not lesson:
             lesson = ClassSession(
                 course_id=meeting.course_id, meeting_id=meeting.id,
@@ -302,7 +308,6 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
             )
             db.add(lesson)
             db.flush()
-        course = db.query(Course).filter(Course.id == meeting.course_id).first()
         result.append({
             "id": lesson.id, "course_id": lesson.course_id,
             "course_code": course.course_code if course else "", "course_name": course.course_name if course else "",
@@ -312,7 +317,6 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
             "replacement_for_session_id": lesson.replacement_for_session_id,
         })
 
-    day_start, day_end = _scheduled_bounds({"start": "00:00", "end": "23:59"}, today)
     replacements = db.query(ClassSession).filter(
         ClassSession.replacement_for_session_id.isnot(None),
         ClassSession.scheduled_start >= day_start,
@@ -321,10 +325,12 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
     if current_user.role != "admin":
         replacements = replacements.filter(ClassSession.course_id.in_(timetable_access.teaching_course_ids(db, lecturer.id)))
     existing_ids = {str(item["id"]) for item in result}
-    for lesson in replacements.all():
-        if str(lesson.id) in existing_ids:
-            continue
-        course = db.query(Course).filter(Course.id == lesson.course_id).first()
+    replacements = [lesson for lesson in replacements.all() if str(lesson.id) not in existing_ids]
+    missing = {lesson.course_id for lesson in replacements} - set(courses)
+    if missing:
+        courses.update({c.id: c for c in db.query(Course).filter(Course.id.in_(missing))})
+    for lesson in replacements:
+        course = courses.get(lesson.course_id)
         result.append({
             "id": lesson.id, "course_id": lesson.course_id,
             "course_code": course.course_code if course else "", "course_name": course.course_name if course else "",
@@ -349,10 +355,17 @@ def get_classes_needing_attention(db: Session = Depends(get_db),
 
     result = []
     now = utcnow()
-    for lesson in query.order_by(ClassSession.scheduled_start.desc()).all():
-        course = db.query(Course).filter(Course.id == lesson.course_id).first()
-        meeting_id = source_meeting_id(db, lesson)
-        meeting = db.query(ClassMeeting).filter(ClassMeeting.id == meeting_id).first() if meeting_id else None
+    lessons = query.order_by(ClassSession.scheduled_start.desc()).all()
+    # One query each for the courses and meetings behind every row (it used to be two or three per row, refreshed every 10 s).
+    # shortcut: a replacement still walks back to the class it replaces row by row; they are few, batch them if that changes.
+    meeting_of = {lesson.id: lesson.meeting_id or source_meeting_id(db, lesson) for lesson in lessons}
+    meeting_ids = {meeting_id for meeting_id in meeting_of.values() if meeting_id}
+    meetings = {m.id: m for m in db.query(ClassMeeting).filter(ClassMeeting.id.in_(meeting_ids))} if meeting_ids else {}
+    course_ids = {lesson.course_id for lesson in lessons}
+    courses = {c.id: c for c in db.query(Course).filter(Course.id.in_(course_ids))} if course_ids else {}
+    for lesson in lessons:
+        course = courses.get(lesson.course_id)
+        meeting = meetings.get(meeting_of[lesson.id])
         result.append({
             "id": lesson.id, "course_id": lesson.course_id,
             "course_code": course.course_code if course else "",
@@ -891,7 +904,7 @@ def verify_attendance_network(
         networks=active_networks,
     )
 
-    reason = "passed" if network_verified else ("configuration_required" if not any(n.cidr for n in active_networks) else "subnet_mismatch")
+    reason = "passed" if network_verified else ("configuration_required" if not any(n.cidr or n.subnet_range for n in active_networks) else "subnet_mismatch")
 
     return {
         "verified": network_verified,

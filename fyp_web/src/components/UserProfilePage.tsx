@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { swalSuccess } from '../utils/swal';
+import { apiErrorMessage } from '../utils/apiError';
 import {
   User, Mail, ShieldCheck, Lock, Camera, Clock,
   CheckCircle, Loader2, X, KeyRound, Shield, AlertTriangle, Pencil, Save,
@@ -48,7 +49,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
 }) => {
   const { logout } = useAuth();
   const { profile, setProfile, loading, error, retry } = useAccountProfile();
-  const canUseRecoveryEmail = profile?.role === 'student' || profile?.role === 'lecturer';
+  const canUseRecoveryEmail = profile?.role === 'student';   // the server links and resets with a recovery email for students only
   const [activeTab, setActiveTab] = useState<'profile' | 'security'>(initialTab);
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
@@ -208,6 +209,21 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
       setRecoveryStep('code');
     } catch (err: any) {
       setRecoveryError(err.response?.data?.detail || 'Could not send code.');
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  const resendRecoveryCode = async () => {
+    if (recoveryLoading) return;
+    setRecoveryError(null);
+    setRecoveryLoading(true);
+    try {
+      await apiService.requestRecoveryEmail(recoveryEmail.trim());
+      setRecoveryCode('');
+      void swalSuccess('New code sent', `Check ${recoveryEmail.trim()} for the new 6-digit code.`);
+    } catch (err) {
+      setRecoveryError(apiErrorMessage(err, 'Could not send code.'));
     } finally {
       setRecoveryLoading(false);
     }
@@ -739,7 +755,11 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                           placeholder="6-digit code"
                           className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-center font-mono text-base font-bold tracking-[0.35em] text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                         />
-                        <button type="button" onClick={() => setRecoveryStep('email')} className="mt-2 text-[10px] font-bold text-brand-blue">Change email</button>
+                        <p className="mt-2 text-[10px] text-slate-500">We sent a code to <strong className="break-all">{recoveryEmail.trim()}</strong>. It expires in 10 minutes.</p>
+                        <div className="mt-2 flex flex-wrap gap-4">
+                          <button type="button" onClick={() => { setRecoveryStep('email'); setRecoveryError(null); }} className="text-[10px] font-bold text-brand-blue">Change email</button>
+                          <button type="button" onClick={resendRecoveryCode} disabled={recoveryLoading} className="text-[10px] font-bold text-brand-blue disabled:opacity-50">Send a new code</button>
+                        </div>
                       </div>
                     )}
                     {recoveryError && <p className="text-[10px] font-bold text-red-500">{recoveryError}</p>}

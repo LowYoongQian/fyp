@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../../i18n/tr.dart';
 import '../../widgets/brand_refresh.dart';
+import '../../widgets/network_error_banner.dart';
 import '../../widgets/notice_filter_sheet.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../system/notification_filters.dart';
@@ -59,6 +61,8 @@ class AttendanceRequestScreen extends StatefulWidget {
 class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
   static const _blue = Color(0xFF2563EB);
   bool _loading = true;
+  bool _loadFailed = false;   // the last load could not reach the server
+  final Set<Object?> _reviewing = {};   // requests whose decision is on its way
   String _category = 'notifications';
   String _filter = 'pending';
   StaffNoticeGroup _group = StaffNoticeGroup.all;
@@ -92,9 +96,10 @@ class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
           Uri.parse('${widget.apiBaseUrl}/notifications'),
           headers: _headers,
         ),
-      ]);
+      ]).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       setState(() {
+        _loadFailed = false;
         _requests = responses[0].statusCode == 200
             ? jsonDecode(responses[0].body)
             : [];
@@ -102,6 +107,10 @@ class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
             ? jsonDecode(responses[1].body)
             : [];
       });
+    } catch (e) {
+      // What was loaded stays on screen; the banner says the server could not be reached and offers Retry.
+      debugPrint('Notification centre load failed: ${e.runtimeType}');
+      if (mounted) setState(() => _loadFailed = true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -257,28 +266,29 @@ class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
         ),
       ),
     );
-    if (confirmed == true) {
-      final response = await http.patch(
-        Uri.parse(
-          '${widget.apiBaseUrl}/lecturers/me/attendance-requests/${item['id']}',
-        ),
-        headers: _headers,
-        body: jsonEncode({'status': decision, 'note': note.text.trim()}),
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              tr(
-                response.statusCode == 200
-                    ? 'Request updated.'
-                    : 'Could not update request.',
-              ),
-            ),
-          ),
-        );
+    final id = item['id'];
+    if (confirmed == true && mounted && !_reviewing.contains(id)) {
+      // Its Approve and Reject switch off at once, so a second tap cannot send the decision twice.
+      setState(() => _reviewing.add(id));
+      String message;
+      try {
+        final response = await http
+            .patch(
+              Uri.parse('${widget.apiBaseUrl}/lecturers/me/attendance-requests/$id'),
+              headers: _headers,
+              body: jsonEncode({'status': decision, 'note': note.text.trim()}),
+            )
+            .timeout(const Duration(seconds: 20));
+        message = response.statusCode == 200 ? 'Request updated.' : 'Could not update request.';
+      } catch (_) {
+        message = 'Connection Error: Cannot reach the server. Please check your internet connection.';
+      } finally {
+        if (mounted) setState(() => _reviewing.remove(id));
       }
-      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(message))));
+        unawaited(_load());   // the list catches up behind the message
+      }
     }
     note.dispose();
   }
@@ -881,7 +891,7 @@ class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => _review(item, 'rejected'),
+                    onPressed: _reviewing.contains(item['id']) ? null : () => _review(item, 'rejected'),
                     icon: const Icon(Icons.close_rounded, size: 18),
                     label: Text(tr('Reject')),
                     style: OutlinedButton.styleFrom(
@@ -899,7 +909,7 @@ class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: () => _review(item, 'approved'),
+                    onPressed: _reviewing.contains(item['id']) ? null : () => _review(item, 'approved'),
                     icon: const Icon(Icons.check_rounded, size: 18),
                     label: Text(tr('Approve')),
                     style: FilledButton.styleFrom(
@@ -1194,6 +1204,16 @@ class _AttendanceRequestScreenState extends State<AttendanceRequestScreen> {
             const SizedBox(height: 14),
             _tabs(),
             const SizedBox(height: 14),
+            if (_loadFailed)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: NetworkErrorBanner(
+                  message: 'Connection Error: Cannot reach the server. Please check your internet connection.',
+                  onRetry: _load,
+                  retrying: _loading,
+                  margin: EdgeInsets.zero,
+                ),
+              ),
             if (_loading && _notifications.isEmpty && _requests.isEmpty)
               _skeleton()
             else if (onNotifications)

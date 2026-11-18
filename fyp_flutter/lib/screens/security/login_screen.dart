@@ -60,11 +60,12 @@ class _LoginScreenState extends State<LoginScreen> {
     // One brand blue for both portals (the staff dashboard and notification center are blue too).
     const Color primaryColor = Color(0xFF2563EB);
     final String portalTitle = isStudent ? "Student Login" : "Staff Login";
+    // Both portals take the school email or the ID on the card (the server checks which).
     final String idLabel = isStudent
-        ? "School email"
+        ? "Student ID / Email Address"
         : "Staff ID / Email Address";
     final String idHint = isStudent
-        ? "name@student.school.edu"
+        ? "eg. ST0000010 or email"
         : "eg. T000001 or email";
 
     final primaryTextColor = isDarkMode
@@ -225,9 +226,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         controller: _emailOrIdController,
                         enabled: !widget.isSyncing,
                         autofillHints: const [AutofillHints.username],
-                        keyboardType: isStudent
-                            ? TextInputType.emailAddress
-                            : TextInputType.text,
+                        keyboardType: TextInputType.emailAddress,   // letters, digits, @ and . for an email or an ID
                         textInputAction: TextInputAction.next,
                         autocorrect: false,
                         enableSuggestions: false,
@@ -244,12 +243,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         validator: (v) {
                           if (v == null || v.trim().isEmpty) {
-                            return isStudent
-                                ? "School email is required"
-                                : "Staff ID or Email is required";
-                          }
-                          if (isStudent && !v.contains('@')) {
-                            return "Use your school email";
+                            return tr(isStudent
+                                ? "Student ID or Email is required"
+                                : "Staff ID or Email is required");
                           }
                           return null;
                         },

@@ -11,7 +11,7 @@ import type { Programme, Course, LookupKind, LookupStudent, LookupStaff, LookupP
 import { useLookup } from '../../hooks/useLookup';
 import { useRecordPage } from '../../hooks/useRecordPage';
 import { swalSuccess, swalError, swalConfirm } from '../../utils/swal';
-import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays } from 'lucide-react';
+import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays, Lock } from 'lucide-react';
 import { LoadingRegion, ShimmerAcademics, ShimmerText } from '../../components/Shimmer';
 
 /** A bespoke picker's open list in the CustomDropdown look: pale selected and hover rows, rounded and padded, the scrollbar inside the rounded shell. */
@@ -450,9 +450,22 @@ export const AcademicManager: React.FC = () => {
   const [assignCourseOpen, setAssignCourseOpen] = useState(false);
   const [assignErrors, setAssignErrors] = useState<Errors>({});
   const [savingAssignment, setSavingAssignment] = useState(false);
+  // The roles the chosen person already has in the chosen course. One role per person per course: once they have one, the choice is locked.
+  const [heldAnswer, setHeldAnswer] = useState<{ key: string; roles: string[] } | null>(null);
+  const heldKey = assignStaff && assignCourse ? `${assignStaff.id}|${assignCourse.id}` : '';
+  useEffect(() => {
+    if (!heldKey) return;
+    let live = true;
+    const [staffId, courseId] = heldKey.split('|');
+    apiService.adminGetAssignments().then(
+      rows => { if (live) setHeldAnswer({ key: heldKey, roles: rows.filter(row => String(row.lecturer_id) === staffId && String(row.course_id) === courseId).map(row => row.role) }); },
+      () => { if (live) setHeldAnswer({ key: heldKey, roles: [] }); });   // unknown: the server still refuses the same role twice
+    return () => { live = false; };
+  }, [heldKey, version]);
+  const heldRoles = heldAnswer?.key === heldKey ? heldAnswer.roles : [];
   const addAssignment = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (savingAssignment) return;
+    if (savingAssignment || heldRoles.length) return;
     const errors: Errors = { staff: assignStaff ? undefined : 'Choose a staff member.', course: assignCourse ? undefined : 'Choose a course.' };
     setAssignErrors(errors);
     if (focusFirstError(errors, { staff: 'assign-staff', course: 'assign-course' })) return;
@@ -483,7 +496,6 @@ export const AcademicManager: React.FC = () => {
   const [programme, setProgramme] = useState<{ id: string; label: string } | null>(null);
   const [course, setCourse] = useState<LookupCourse | null>(null);
   const [group, setGroup] = useState('');
-  const [semesterText, setSemesterText] = useState('');   // only for an older course without a semester
   // The answer for one course and student; anything else (no course yet, or another pick) reads as not loaded yet.
   const [checkAnswer, setCheckAnswer] = useState<{ key: string; data?: AllocationCheck; failed?: boolean } | null>(null);
   const [openPicker, setOpenPicker] = useState<'' | 'student' | 'programme' | 'course' | 'group'>('');
@@ -543,9 +555,10 @@ export const AcademicManager: React.FC = () => {
     try { localStorage.setItem(`sas_manual_groups_${course.id}`, JSON.stringify([...new Set([...manualGroups(course.id), next])])); } catch { /* the choice still applies to this save */ }
     setGroup(next); setOpenPicker('');
   };
-  const resetAllocation = () => { setStudent(null); setProgramme(null); setCourse(null); setGroup(''); setSemesterText(''); setAllocErrors({}); setOpenPicker(''); };
+  const resetAllocation = () => { setStudent(null); setProgramme(null); setCourse(null); setGroup(''); setAllocErrors({}); setOpenPicker(''); };
 
-  const semesterName = check?.semester?.name || course?.semester?.name || semesterText.trim();
+  // A semester is named and dated only in the Semesters tab; a course outside every semester has to be put in one there first.
+  const semesterName = check?.semester?.name || course?.semester?.name || '';
   const saveAllocation = async (event: React.FormEvent) => {
     event.preventDefault();
     if (savingAllocationRef.current) return;   // a second click while the first save runs (a ref: state only updates after the next render)
@@ -554,7 +567,7 @@ export const AcademicManager: React.FC = () => {
       student: student ? undefined : 'Choose a student.',
       programme: programme ? undefined : 'Choose the student’s programme.',
       course: course ? undefined : 'Choose a course.',
-      semester: !course || semesterName ? undefined : 'Enter the semester for this course.',
+      semester: !course || semesterName ? undefined : 'Add this course to a semester first.',
       group: !course ? undefined : !group ? 'Choose a group.' : chosenGroup?.full ? 'This group is full. Choose another or add a group.' : undefined,
     };
     setAllocErrors(errors);
@@ -613,9 +626,9 @@ export const AcademicManager: React.FC = () => {
       </div>
     );
   };
-  const actions = (primary: string, busy: boolean, busyText: string, onReset?: () => void, dirty = false) => (
+  const actions = (primary: string, busy: boolean, busyText: string, onReset?: () => void, dirty = false, blocked = false) => (
     <div className="flex items-center gap-2 pt-1">
-      <button type="submit" disabled={busy} aria-busy={busy} className="uipro-button uipro-button-primary flex-1 disabled:cursor-wait disabled:opacity-60">{busy ? busyText : primary}</button>
+      <button type="submit" disabled={busy || blocked} aria-busy={busy} className="uipro-button uipro-button-primary flex-1 disabled:cursor-wait disabled:opacity-60">{busy ? busyText : primary}</button>
       {onReset && <button type="button" onClick={onReset} disabled={busy || !dirty} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Reset</button>}
     </div>
   );
@@ -759,17 +772,27 @@ export const AcademicManager: React.FC = () => {
               onSelect={c => { setAssignCourse({ id: String(c.id), label: `${c.course_code} - ${c.course_name}`, code: c.course_code }); setAssignCourseOpen(false); setAssignErrors(current => ({ ...current, course: undefined })); }} />
           </Picker>
         </Field>
-        <fieldset className="space-y-1.5">
+        <fieldset className="space-y-1.5" aria-describedby="assign-role-note">
           <legend className="text-xs font-semibold text-slate-700 dark:text-slate-200">Teaching role</legend>
           <div role="radiogroup" aria-label="Teaching role" className="grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
-            {ROLES.map(role => (
-              <button key={role} type="button" role="radio" aria-checked={assignRole === role} onClick={() => setAssignRole(role)}
-                className={`rounded-lg px-2 py-2 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 ${assignRole === role ? 'bg-white text-brand-blue shadow-sm dark:bg-slate-900 dark:text-blue-300' : 'text-slate-600 hover:text-slate-900 dark:text-slate-300'}`}>{role}</button>
-            ))}
+            {ROLES.map(role => {
+              const held = heldRoles.includes(role), locked = heldRoles.length > 0, on = locked ? held : assignRole === role;
+              return (
+                <button key={role} type="button" role="radio" aria-checked={on} disabled={locked} onClick={() => setAssignRole(role)}
+                  className={`flex items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 disabled:cursor-not-allowed ${
+                    held ? 'bg-slate-200/80 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+                    : locked ? 'text-slate-400 opacity-50 dark:text-slate-500'
+                    : on ? 'bg-white text-brand-blue shadow-sm dark:bg-slate-900 dark:text-blue-300' : 'text-slate-600 hover:text-slate-900 dark:text-slate-300'}`}>
+                  {held && <Lock className="h-3 w-3" aria-hidden="true" />}{role}
+                </button>
+              );
+            })}
           </div>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">The role this person has in this course, whatever their account role is.</p>
+          {heldRoles.length > 0
+            ? <p id="assign-role-note" role="status" className="flex items-start gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300"><Lock className="mt-0.5 h-3 w-3 shrink-0" />{assignStaff?.label} already teaches {assignCourse?.code} as {heldRoles.join(' and ')}. Remove that role from the list to change it.</p>
+            : <p id="assign-role-note" className="text-[11px] text-slate-500 dark:text-slate-400">The role this person has in this course, whatever their account role is.</p>}
         </fieldset>
-        {actions('Assign staff', savingAssignment, 'Assigning…', () => { setAssignStaff(null); setAssignCourse(null); setAssignRole('Lecturer'); setAssignErrors({}); }, !!(assignStaff || assignCourse))}
+        {actions('Assign staff', savingAssignment, 'Assigning…', () => { setAssignStaff(null); setAssignCourse(null); setAssignRole('Lecturer'); setAssignErrors({}); }, !!(assignStaff || assignCourse), heldRoles.length > 0)}
       </form>
     ));
     const chosenGroup = groups.find(item => item.group === group);
@@ -804,9 +827,12 @@ export const AcademicManager: React.FC = () => {
         {course && (
           course.semester || check?.semester
             ? <Field label="Semester" htmlFor="alloc-semester"><p id="alloc-semester" className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">{semesterName} <span className="text-xs text-slate-500">({(check?.semester ?? course.semester)!.start_date} – {(check?.semester ?? course.semester)!.end_date})</span></p></Field>
-            : <Field label="Semester" htmlFor="alloc-semester" error={allocErrors.semester} hint="This course has no semester; type the term it belongs to.">
-                <TextInput id="alloc-semester" type="text" value={semesterText} onChange={event => { setSemesterText(event.target.value); setAllocErrors(current => ({ ...current, semester: undefined })); }} placeholder="e.g. 2026 Semester 1"
-                  aria-invalid={!!allocErrors.semester || undefined} className={`${INPUT} ${allocErrors.semester ? INVALID : ''}`} />
+            : <Field label="Semester" htmlFor="alloc-semester" error={allocErrors.semester} hint="Semesters are named and dated in the Semesters tab.">
+                <div id="alloc-semester" tabIndex={-1} className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-4 py-2.5 text-sm focus:outline-none ${allocErrors.semester ? 'border-rose-300 bg-rose-50 dark:border-rose-500/40 dark:bg-rose-500/10' : 'border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10'}`}>
+                  <span className="text-amber-800 dark:text-amber-200">{course.course_code} is not in a semester yet.</span>
+                  <button type="button" onClick={() => { setActiveSubTab('semesters'); setOpenPicker(''); if (referenceState === 'idle') void loadReference(); }}
+                    className="cursor-pointer rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs font-bold text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-500/40 dark:bg-slate-900 dark:text-amber-200">Open Semesters</button>
+                </div>
               </Field>
         )}
         <Field label="Group" htmlFor="alloc-group" error={allocErrors.group ?? (course && checkState === 'error' ? 'Group seats could not be loaded.' : undefined)} hint={!course ? 'Choose a course first.' : undefined}>

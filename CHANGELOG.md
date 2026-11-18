@@ -1,5 +1,39 @@
 # Changelog
 
+## Mobile app responds at once, with clearer check-in and network messages — 2026-11-18 23:27
+- Any button that saves something now shows "Saving…" at the top right away, and staff class buttons switch off while they work so a second tap sends nothing.
+- Students now see the same red "Network error loading data. Showing cached view." banner as staff, with Retry, when the app cannot reach the server.
+- After the face scan a dialog appears straight away saying your attendance is being recorded, then changes to recorded, not recorded, saved on this phone, or already checked in.
+- The saved-attendance list has a clearer design, with a coloured card and status for each attempt. ChatGPT review pending.
+
+
+## Faster buttons, working recovery email, medical leave without AI — 2026-11-18 22:37
+- Buttons that save something now react the moment you press them and no longer stay stuck for a few seconds after the server has answered.
+- Recovery email: sending a code or entering a wrong code now shows what went wrong and lets you try again or ask for a new code, and the dashboard updates as soon as it is verified. Only students see the recovery email form, as only they can use it.
+- Medical leave no longer uses Gemini or any AI check; every document goes to an administrator.
+- Network Security no longer shows Priority badges on the detected router. ChatGPT review pending.
+
+
+## Admin network, form and academic fixes — 2026-11-18 20:51
+- Network Security now detects your router's public internet address first, plus its local Wi-Fi, and saves both as one campus network, so phones using the deployed app can check in on that Wi-Fi. Re-detect on another router to add it too.
+- Forms show their own styled message under the field instead of the browser's grey "Please fill out this field." bubble.
+- Staff Roles: if a staff member already teaches the chosen course, the role options are greyed out and locked.
+- Student Allocation no longer lets you type a semester title; semesters are set only in the Semesters tab. ChatGPT review pending.
+
+
+## Team update combined — 2026-11-18 18:48
+- Brought in the team's latest commits (face timing logs, QA test fix) alongside the local changes; nothing in them conflicted. ChatGPT review pending.
+
+
+## Staff app refresh — 2026-11-18 17:46
+- The staff app's class lists load with a fixed handful of database queries instead of a few per class, so busy accounts (and admins) no longer time out and show "Network error loading data". ChatGPT review pending.
+
+
+## Opening a moved class and signing in with an ID — 2026-11-18 17:33
+- Lecturers can open a group's class from the web Open Session Window when it is on today (also right after an administrator moves it); the window no longer shows the course's lecture time for every group.
+- Students and staff can sign in with their school email or their ID (e.g. ST0000010, T0000001) on the web and the mobile app. ChatGPT review pending.
+
+
 ## Client handoff — 2026-11-18
 
 - Version remains 0.1.11+4; Android is a Debug-signed demo APK and iOS is an unsigned IPA requiring re-signing. Manual builds only; no new Release or Backend deployment.

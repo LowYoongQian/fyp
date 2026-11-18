@@ -4,6 +4,7 @@ import { useAuth, type SessionData } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check, X, Eye, EyeOff } from 'lucide-react';
 import { swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
+import { apiErrorMessage } from '../../utils/apiError';
 import Swal from 'sweetalert2';
 import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
 import sasLogoLocal from '../../assets/emblem.webp';
@@ -590,9 +591,10 @@ export const Login: React.FC = () => {
     if (!trimmed) {
       return null;
     }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(trimmed)) {
-      return 'Please enter a valid school email address (e.g. student@school.edu)';
+    if (!isEmailOrId(trimmed)) {
+      return portalMode === 'student'
+        ? 'Enter your school email or student ID (e.g. ST0000010)'
+        : 'Enter your school email or staff ID (e.g. T0000001)';
     }
     return null;
   };
@@ -608,8 +610,10 @@ export const Login: React.FC = () => {
     return null;
   };
 
+  // A school email, or the ID on the student or staff card (ST0000010, T0000001); the server decides which account it is.
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const isEmailValid = email.trim() !== '' && emailRegex.test(email.trim());
+  const isEmailOrId = (value: string) => emailRegex.test(value) || /^[A-Za-z]{1,4}\d{1,12}$/.test(value);
+  const isEmailValid = email.trim() !== '' && isEmailOrId(email.trim());
   const isPasswordValid = password !== '' && password.length >= 4;
   const isFormValid = isEmailValid && isPasswordValid;
 
@@ -765,6 +769,7 @@ export const Login: React.FC = () => {
         showCancelButton: true,
         confirmButtonText: 'Send Code',
         cancelButtonText: 'Cancel',
+        showLoaderOnConfirm: true,
         allowOutsideClick: false,
         allowEscapeKey: false,
         buttonsStyling: false,
@@ -800,7 +805,11 @@ export const Login: React.FC = () => {
             Swal.showValidationMessage(isSchool ? 'Use a personal email, not a school address.' : 'Enter a valid personal email address.');
             return false;
           }
-          return value;
+          // Sent from inside the dialog, so a refusal (address in use, wait a minute, mail outage) shows here and can be fixed or retried.
+          return apiService.requestRecoveryEmail(value).then(() => value, error => {
+            Swal.showValidationMessage(apiErrorMessage(error, 'The code could not be sent. Please try again.'));
+            return false;
+          });
         },
       });
 
@@ -836,19 +845,49 @@ export const Login: React.FC = () => {
     }
 
     if (!recoveryEmail) return;
-    await apiService.requestRecoveryEmail(recoveryEmail);
-    const { value: code } = await Swal.fire({
+    const sentTo = recoveryEmail;
+    // A wrong or expired code keeps the dialog open with the reason; "Send a new code" asks again; "Later" leaves it for the Profile page.
+    const verified = await Swal.fire({
       title: 'Check your email',
-      text: 'Enter the 6-digit code we sent.',
+      text: `Enter the 6-digit code we sent to ${sentTo}.`,
       input: 'text',
       inputPlaceholder: '000000',
+      inputAttributes: { inputmode: 'numeric', maxlength: '6', autocomplete: 'one-time-code' },
       allowOutsideClick: false,
       allowEscapeKey: false,
+      showDenyButton: true,
+      showCancelButton: true,
       confirmButtonText: 'Verify Email',
-      preConfirm: value => /^\d{6}$/.test(value.trim()) ? value.trim() : Swal.showValidationMessage('Enter the 6-digit code.'),
+      denyButtonText: 'Send a new code',
+      cancelButtonText: 'Later',
+      showLoaderOnConfirm: true,
+      showLoaderOnDeny: true,
+      preConfirm: async value => {
+        const code = String(value || '').trim();
+        if (!/^\d{6}$/.test(code)) return Swal.showValidationMessage('Enter the 6-digit code.');
+        try {
+          await apiService.verifyRecoveryEmail(code);
+          return true;
+        } catch (error) {
+          Swal.showValidationMessage(apiErrorMessage(error, 'That code did not work. Please try again.'));
+          return false;
+        }
+      },
+      preDeny: async () => {
+        try {
+          await apiService.requestRecoveryEmail(sentTo);
+          Swal.resetValidationMessage();
+          const text = Swal.getHtmlContainer();
+          if (text) text.textContent = `A new code was sent to ${sentTo}. Enter it below.`;
+        } catch (error) {
+          Swal.showValidationMessage(apiErrorMessage(error, 'The code could not be sent. Please try again.'));
+        }
+        return false;
+      },
     });
-    if (code) {
-      await apiService.verifyRecoveryEmail(code);
+    if (verified.isConfirmed) {
+      // The dashboard and its next-step card are already open behind this dialog; tell them the task is done.
+      window.dispatchEvent(new CustomEvent('recovery-email-verified'));
       await swalSuccess('Recovery email ready', 'You can now reset your password safely.');
     }
   };
@@ -1104,7 +1143,7 @@ export const Login: React.FC = () => {
           {/* Email Address */}
           <div className="space-y-1">
             <div className="flex justify-between items-center">
-              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Email Address</label>
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Email or {portalMode === 'student' ? 'Student' : 'Staff'} ID</label>
               {isEmailValid && (
                 <CheckCircle2 className="w-4 h-4 text-emerald-500 dark:text-emerald-400 shrink-0 animate-in fade-in duration-200" />
               )}
@@ -1114,14 +1153,18 @@ export const Login: React.FC = () => {
                 emailError ? 'text-rose-500' : 'text-slate-400'
               }`} />
               <TextInput
-                type="email"
+                type="text"
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                aria-label={`Email or ${portalMode === 'student' ? 'student' : 'staff'} ID`}
                 value={email}
                 onChange={handleEmailChange}
                 onBlur={handleEmailBlur}
                 placeholder={
                   portalMode === 'student'
-                    ? 'e.g. student@student.school.edu'
-                    : 'e.g. staff@staff.school.edu'
+                    ? 'e.g. student@student.school.edu or ST0000010'
+                    : 'e.g. staff@staff.school.edu or T0000001'
                 }
                 className={`w-full uipro-input !pl-11 transition-all ${
                   emailError

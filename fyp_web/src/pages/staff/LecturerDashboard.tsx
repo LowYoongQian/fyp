@@ -48,6 +48,8 @@ interface LecturerDashboardProps {
 
 const CAMPUS_TIME_ZONE = 'Asia/Kuala_Lumpur';
 
+type ScheduleStatus = { canStart: boolean; displayText: string; subText: string; isWithinOneHour: boolean; remaining?: string };
+
 const getCampusClock = (date: Date) => {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: CAMPUS_TIME_ZONE,
@@ -170,7 +172,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
   useLiveRefresh(async () => {
     const [active, summary, today, attention] = await Promise.all([apiService.getActiveSessions(), apiService.getLecturerDashboardSummary(), apiService.getTodayClasses(), apiService.getClassesNeedingAttention()]);
     setActiveSessions(active); setDashboardSummary(summary); setTodayClasses(today); setClassesNeedingAttention(attention);
-  }, ['sessions', 'attendance'], String(user?.user_id));
+  }, ['sessions', 'attendance', 'timetable'], String(user?.user_id));
   useLiveRefresh(async () => {
     const [list, enrolled] = await Promise.all([apiService.getCourses(), apiService.getLecturerEnrolments()]);
     setCourses(list); setEnrolments(enrolled);
@@ -337,16 +339,123 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
       if (!selectedCourseId) throw new Error('Please select a subject course');
       if (!classGroup) throw new Error('Please select a class allocation group');
       const response = await apiService.openSession(selectedCourseId, classGroup);
-      await fetchActiveSessions();
-      setDashboardSummary(await apiService.getLecturerDashboardSummary());
       handleStartMonitor(response.id);
-      await swalSuccess('Session Opened', 'Attendance window is now live for students.');
+      void swalSuccess('Session Opened', 'Attendance window is now live for students.');
+      // The session is open: the lists refresh behind the message, and a slow or failed refresh never reports the opening as failed.
+      void fetchActiveSessions();
+      apiService.getLecturerDashboardSummary().then(setDashboardSummary, err => console.error('Error refreshing summary:', err));
     } catch (err: any) {
       console.error(err);
       setCreationError(err.response?.data?.detail || err.message || 'Failed to open class session.');
     } finally {
       setCreating(false);
     }
+  };
+
+  const campusTime = (iso?: string | null) => iso
+    ? new Intl.DateTimeFormat('en-GB', { timeZone: CAMPUS_TIME_ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso))
+    : '';
+
+  /** The selected group's class today from the live Today list (the lecture when the group is "All"); the next one still to end, if several. */
+  const todayClassFor = (course: Course) => {
+    const mine = todayClasses.filter(lesson => String(lesson.course_id) === String(course.id) && lesson.class_group === classGroup
+      && lesson.role !== 'Replacement' && lesson.scheduled_start && lesson.scheduled_end);
+    return mine.find(lesson => new Date(lesson.scheduled_end!).getTime() > scheduleNow.getTime()) ?? mine[mine.length - 1];
+  };
+
+  const checkScheduleStatus = (course?: Course): ScheduleStatus => {
+    if (!course) {
+      return {
+        canStart: false,
+        displayText: 'No subject course selected',
+        subText: 'Select a course above to view scheduled class time.',
+        isWithinOneHour: false,
+      };
+    }
+
+    const term = course.semester;
+    const campusDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(scheduleNow);
+    if (term && (campusDay < term.start_date || campusDay > term.end_date)) {
+      return { canStart: false, displayText: term.name,
+        subText: `Semester runs ${term.start_date} – ${term.end_date}; attendance is closed outside these dates.`, isWithinOneHour: false };
+    }
+    // The selected group's own class today (or the lecture for "All") decides; the course only carries its lecture's slot.
+    const lesson = classGroup ? todayClassFor(course) : undefined;
+    if (lesson) {
+      const start = new Date(lesson.scheduled_start!).getTime(), end = new Date(lesson.scheduled_end!).getTime(), now = scheduleNow.getTime();
+      const displayText = `Today ${campusTime(lesson.scheduled_start)} - ${campusTime(lesson.scheduled_end)} | ${lesson.room ? `Room: ${lesson.room}` : 'Room TBA'}`;
+      const closed = (subText: string): ScheduleStatus => ({ canStart: false, displayText, subText, isWithinOneHour: false, remaining: '' });
+      if (lesson.status === 'open') return closed('Attendance is already open for this class.');
+      if (lesson.status === 'cancelled') return closed('This class was cancelled for today.');
+      if (lesson.status === 'completed' || now >= end) return closed('This class has ended for today.');
+      const minutes = Math.ceil((start - now) / 60000);
+      if (minutes <= 0) return { canStart: true, displayText, subText: 'Class window is currently active.', isWithinOneHour: true };
+      if (minutes <= 60) return { canStart: true, displayText, subText: `Upcoming: Starts in ${minutes} minutes`, isWithinOneHour: true };
+      return { canStart: false, displayText, subText: 'Scheduled today. Opening unlocks 1h before start.', isWithinOneHour: false,
+        remaining: `Time Remaining: Starts in ${Math.floor(minutes / 60)}h ${minutes % 60}m` };
+    }
+    if (classGroup && classGroup !== 'All') {
+      return { canStart: false, displayText: `No Group ${classGroup.replace('G', '')} class today`,
+        subText: "Opening unlocks 1h before this group's class on its day.", isWithinOneHour: false, remaining: '' };
+    }
+
+    const { schedule_day, schedule_start, schedule_end, schedule_room } = course;
+    const roomStr = schedule_room ? `Room: ${schedule_room}` : 'Room TBA';
+
+    if (!schedule_start) {
+      return {
+        canStart: true,
+        displayText: `Flexible Schedule | ${roomStr}`,
+        subText: 'No fixed timetable assigned. Ready to launch.',
+        isWithinOneHour: true,
+      };
+    }
+
+    const { day: currentDayName, minutes: currentMinutes } = getCampusClock(scheduleNow);
+    const startMinutes = parseScheduleTimeToMinutes(schedule_start);
+    const endMinutes = parseScheduleTimeToMinutes(schedule_end);
+
+    const formattedDay = schedule_day ? (schedule_day.charAt(0).toUpperCase() + schedule_day.slice(1).toLowerCase()) : 'Today';
+    const isSameDay = !schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
+
+    if (isSameDay && startMinutes !== null) {
+      const diffMinutes = startMinutes - currentMinutes;
+
+      if (currentMinutes >= startMinutes && (endMinutes === null || currentMinutes <= endMinutes + 30)) {
+        return {
+          canStart: true,
+          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
+          subText: 'Class window is currently active.',
+          isWithinOneHour: true,
+        };
+      }
+
+      if (diffMinutes > 0 && diffMinutes <= 60) {
+        return {
+          canStart: true,
+          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
+          subText: `Upcoming: Starts in ${diffMinutes} minutes`,
+          isWithinOneHour: true,
+        };
+      }
+
+      if (diffMinutes > 60) {
+        const hoursLeft = (diffMinutes / 60).toFixed(1);
+        return {
+          canStart: false,
+          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
+          subText: `Scheduled today in ${hoursLeft} hours. Unlocks 1 hour before class.`,
+          isWithinOneHour: false,
+        };
+      }
+    }
+
+    return {
+      canStart: false,
+      displayText: `${formattedDay} ${schedule_start}${schedule_end ? ` - ${schedule_end}` : ''} | ${roomStr}`,
+      subText: `Class is scheduled for ${formattedDay}. Opening unlocks 1h before start.`,
+      isWithinOneHour: false,
+    };
   };
 
   const startPolling = (sessionId: number | string) => {
@@ -829,81 +938,6 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                     );
                   }) : undefined;
 
-                  const checkScheduleStatus = (course?: Course) => {
-                    if (!course) {
-                      return {
-                        canStart: false,
-                        displayText: 'No subject course selected',
-                        subText: 'Select a course above to view scheduled class time.',
-                        isWithinOneHour: false,
-                      };
-                    }
-
-                    const term = course.semester;
-                    const campusDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(scheduleNow);
-                    if (term && (campusDay < term.start_date || campusDay > term.end_date)) {
-                      return { canStart: false, displayText: term.name,
-                        subText: `Semester runs ${term.start_date} – ${term.end_date}; attendance is closed outside these dates.`, isWithinOneHour: false };
-                    }
-                    const { schedule_day, schedule_start, schedule_end, schedule_room } = course;
-                    const roomStr = schedule_room ? `Room: ${schedule_room}` : 'Room TBA';
-
-                    if (!schedule_start) {
-                      return {
-                        canStart: true,
-                        displayText: `Flexible Schedule | ${roomStr}`,
-                        subText: 'No fixed timetable assigned. Ready to launch.',
-                        isWithinOneHour: true,
-                      };
-                    }
-
-                    const { day: currentDayName, minutes: currentMinutes } = getCampusClock(scheduleNow);
-                    const startMinutes = parseScheduleTimeToMinutes(schedule_start);
-                    const endMinutes = parseScheduleTimeToMinutes(schedule_end);
-
-                    const formattedDay = schedule_day ? (schedule_day.charAt(0).toUpperCase() + schedule_day.slice(1).toLowerCase()) : 'Today';
-                    const isSameDay = !schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
-
-                    if (isSameDay && startMinutes !== null) {
-                      const diffMinutes = startMinutes - currentMinutes;
-
-                      if (currentMinutes >= startMinutes && (endMinutes === null || currentMinutes <= endMinutes + 30)) {
-                        return {
-                          canStart: true,
-                          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
-                          subText: 'Class window is currently active.',
-                          isWithinOneHour: true,
-                        };
-                      }
-
-                      if (diffMinutes > 0 && diffMinutes <= 60) {
-                        return {
-                          canStart: true,
-                          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
-                          subText: `Upcoming: Starts in ${diffMinutes} minutes`,
-                          isWithinOneHour: true,
-                        };
-                      }
-
-                      if (diffMinutes > 60) {
-                        const hoursLeft = (diffMinutes / 60).toFixed(1);
-                        return {
-                          canStart: false,
-                          displayText: `${formattedDay} ${schedule_start} - ${schedule_end || ''} | ${roomStr}`,
-                          subText: `Scheduled today in ${hoursLeft} hours. Unlocks 1 hour before class.`,
-                          isWithinOneHour: false,
-                        };
-                      }
-                    }
-
-                    return {
-                      canStart: false,
-                      displayText: `${formattedDay} ${schedule_start}${schedule_end ? ` - ${schedule_end}` : ''} | ${roomStr}`,
-                      subText: `Class is scheduled for ${formattedDay}. Opening unlocks 1h before start.`,
-                      isWithinOneHour: false,
-                    };
-                  };
-
                   const scheduleStatus = checkScheduleStatus(selectedCourse);
 
                   return (
@@ -938,11 +972,11 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                             {scheduleStatus.subText}
                           </div>
 
-                          {!scheduleStatus.canStart && (
+                          {!scheduleStatus.canStart && scheduleStatus.remaining !== '' && (
                             <div className="pt-2 mt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-[11px]">
                               <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1 truncate w-full">
                                 <Clock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-                                {(() => {
+                                {scheduleStatus.remaining ?? (() => {
                                   const { schedule_day, schedule_start } = selectedCourse;
                                   if (!schedule_start) return 'Flexible schedule';
 
@@ -1066,30 +1100,7 @@ export const LecturerDashboard: React.FC<LecturerDashboardProps> = ({ onNavigate
                     );
                   }) : undefined;
 
-                  let canStart = false;
-                  if (!selectedCourse) {
-                    canStart = false;
-                  } else if (!selectedCourse.schedule_start) {
-                    canStart = true;
-                  } else {
-                    const campusClock = getCampusClock(scheduleNow);
-                    const currentDayName = campusClock.day;
-                    const startMinutes = parseScheduleTimeToMinutes(selectedCourse.schedule_start);
-                    const endMinutes = parseScheduleTimeToMinutes(selectedCourse.schedule_end);
-                    const currentMinutes = campusClock.minutes;
-
-                    const formattedDay = selectedCourse.schedule_day ? (selectedCourse.schedule_day.charAt(0).toUpperCase() + selectedCourse.schedule_day.slice(1).toLowerCase()) : 'Today';
-                    const isSameDay = !selectedCourse.schedule_day || formattedDay.toLowerCase() === currentDayName.toLowerCase();
-
-                    if (isSameDay && startMinutes !== null) {
-                      const diffMinutes = startMinutes - currentMinutes;
-                      if (currentMinutes >= startMinutes && (endMinutes === null || currentMinutes <= endMinutes + 30)) {
-                        canStart = true;
-                      } else if (diffMinutes > 0 && diffMinutes <= 60) {
-                        canStart = true;
-                      }
-                    }
-                  }
+                  const canStart = !!selectedCourse && checkScheduleStatus(selectedCourse).canStart;
 
                   const isLocked = !!selectedCourseId && !!classGroup && !canStart;
                   const isButtonDisabled = creating || !canStart || !selectedCourseId || !classGroup;

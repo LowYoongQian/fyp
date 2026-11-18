@@ -368,8 +368,8 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableF
     try {
       await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
       setEditing(null);
-      await loadTimetable();
-      swalSuccess(
+      void loadTimetable();   // reports its own failure; the saved slot is not in doubt
+      void swalSuccess(
         'Timetable slot updated',
         `${editing.classGroup || 'All groups'} · ${editForm.day} ${editForm.start}-${editForm.end}`
       );

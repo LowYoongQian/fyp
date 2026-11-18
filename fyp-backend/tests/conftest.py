@@ -21,7 +21,7 @@ for key in ('DATABASE_URL', 'FYP_QA_MIGRATED_URL', 'FYP_QA_DATABASE_URL', 'LOCAL
 os.environ.setdefault('DATABASE_URL', 'postgresql+psycopg://postgres:postgres@127.0.0.1:56422/qa_migration_000000000000')
 # Tests never reuse a personal or production signing key.
 os.environ['JWT_SECRET_KEY'] = secrets.token_hex(32)
-for key in ('OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'RESEND_API_KEY', 'FCM_CREDENTIALS_JSON'):
+for key in ('OPENROUTER_API_KEY', 'RESEND_API_KEY', 'FCM_CREDENTIALS_JSON'):
     os.environ[key] = ''
 # A clean checkout has no ignored artifacts directory; browser tests create
 # their local logs/screenshots there, never as versioned fixtures.
