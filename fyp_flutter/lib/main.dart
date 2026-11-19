@@ -1646,8 +1646,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       if (current()) {
         // Red result with the reason; Try again reopens the scan when the dashboard passed a way to do so.
         final retry = extraDetails?['retry'];
+        final raw = e.toString().replaceAll("Exception: ", "").trim();
+        final friendly = _friendlyStudentError(raw);
         progress.fail(
-          _friendlyStudentError(e.toString().replaceAll("Exception: ", "")),
+          // The server's exact words (e.g. the IP it saw) under the plain reason, so the cause can be checked.
+          friendly == raw ? raw : '$friendly\n\nServer: $raw',
           onRetry: retry is Future<void> Function() ? () => retry() : null,
         );
       }

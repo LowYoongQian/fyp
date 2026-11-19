@@ -1,5 +1,9 @@
 # Changelog
 
+## Check-in refusal shows your IP — 2026-11-19 14:14
+- When check-in is refused as off-campus, the dialog now also shows the server's exact error, including the IP address it saw, so it can be compared with the whitelisted router address in Network Security. ChatGPT review pending.
+
+
 ## v0.1.12
 
 - Fix a check-in progress dialog that could stay open after the attempt was abandoned.

@@ -633,10 +633,8 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
 
         # Fail-closed: reject the check-in if the network can't be verified
         if not network_verified and truthy(cfg["fail_closed"]):
-            raise HTTPException(
-                status_code=403,
-                detail=verify_detail
-            )
+            # The address the server saw is the student's own; showing it lets them and the admin see which network to whitelist.
+            raise HTTPException(status_code=403, detail=f"{verify_detail} (IP seen by the server: {source_ip or 'unknown'})")
     else:
         network_verified = True  # check disabled -> don't block
 
