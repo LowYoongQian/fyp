@@ -23,7 +23,7 @@ from domain.audit import reset_audit_client_ip, set_audit_client_ip
 from domain.security_settings import is_enabled
 from domain.session_sync import sync_class_sessions
 from domain.live_updates import listen_for_commits
-from integrations.network_verify import get_client_ip, get_server_local_ip, trusted_proxy_ranges
+from integrations.network_verify import client_ip_source, get_client_ip, get_server_local_ip, trusted_proxy_ranges
 from routers import (
     admin_academic,
     admin_lookup,
@@ -353,6 +353,7 @@ def _check_feedback_severity_schema():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     trusted_proxy_ranges()  # Fail startup on unsafe proxy wildcard configuration.
+    client_ip_source()  # Fail startup on an unknown CLIENT_IP_SOURCE instead of guessing how to read the address.
     await asyncio.to_thread(_check_face_enrolment_schema)
     await asyncio.to_thread(_check_face_photo_schema)
     await asyncio.to_thread(_check_alert_delivery_schema)

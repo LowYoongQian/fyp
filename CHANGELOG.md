@@ -1,5 +1,12 @@
 # Changelog
 
+## Client IP detection on Azure — 2026-11-20 00:03
+- The backend can now read the visitor's address from the Azure App Service front end (setting CLIENT_IP_SOURCE=azure_app_service), so Network Security detection and campus check-in work on the hosted server.
+- On the hosted server only the campus public IP counts; a saved local Wi-Fi range, the server's own address or anything the phone reports can never approve a check-in.
+- Check-in now says "Unable to verify your network" when the server has no reliable address, and "Your connection is outside the approved campus network" when it does but it is not campus. Both block attendance.
+- Captured addresses are suggested as a single address (/32 for IPv4, /128 for IPv6). ChatGPT review pending.
+
+
 ## Mobile v0.1.13 — 2026-11-19
 - App version raised to 0.1.13 so the v0.1.13 APK build can run (it shows the server's check-in error and observed IP).
 

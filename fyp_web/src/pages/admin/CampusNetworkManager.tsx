@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
 import type { CampusNetwork, SecuritySettings } from '../../services/api';
 import { swalSuccess, swalError, swalConfirmDelete } from '../../utils/swal';
+import { apiErrorMessage } from '../../utils/apiError';
 import {
   ShieldAlert, Wifi, Plus, Trash2, Loader2, Network,
   ToggleLeft, ToggleRight, Save, Globe, X, Router,
@@ -51,6 +52,7 @@ export const CampusNetworkManager: React.FC = () => {
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectionSettled, setDetectionSettled] = useState(false);   // the first detection has finished, well or badly
   const [detectionFailed, setDetectionFailed] = useState(false);
+  const [detectionReason, setDetectionReason] = useState('');   // the server's own reason, e.g. which address evidence was missing
   const [capturing, setCapturing] = useState(false);
   const [detectedConn, setDetectedConn] = useState<DetectedConnection | null>(null);
 
@@ -96,12 +98,13 @@ export const CampusNetworkManager: React.FC = () => {
     const run = ++detectRun.current;
     setIsDetecting(true);
     setDetectionFailed(false);
+    setDetectionReason('');
     try {
       const conn = await apiService.adminDetectCurrentConnection();
       if (run === detectRun.current) setDetectedConn(conn);
     } catch (err) {
       console.error('Failed to detect client connection', err);
-      if (run === detectRun.current) { setDetectedConn(null); setDetectionFailed(true); }   // never keep an old result as if it were current
+      if (run === detectRun.current) { setDetectedConn(null); setDetectionFailed(true); setDetectionReason(apiErrorMessage(err, '')); }   // never keep an old result as if it were current
     } finally {
       if (run === detectRun.current) { setIsDetecting(false); setDetectionSettled(true); }
     }
@@ -497,7 +500,10 @@ export const CampusNetworkManager: React.FC = () => {
           <LoadingRegion label="Detecting your connection…"><ShimmerNetworkDetection /></LoadingRegion>
         ) : detectionFailed ? (
           <div role="alert" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 sm:flex-row sm:items-center sm:justify-between">
-            <p>Could not detect your connection.</p>
+            <div>
+              <p>Could not detect your connection.</p>
+              {detectionReason && <p className="mt-1 text-[11px] text-amber-700">{detectionReason}</p>}
+            </div>
             <button type="button" onClick={detectLiveConnection} disabled={isDetecting} className="uipro-button uipro-button-secondary shrink-0 py-1.5 px-3 text-xs cursor-pointer">Try again</button>
           </div>
         ) : detectedConn ? (

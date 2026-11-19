@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 from typing import List, Union, Optional
 
 from domain.security_settings import is_enabled, get_settings, truthy, development_network_demo_allowed
-from integrations.network_verify import get_client_ip, get_server_local_ip, get_server_wifi_details, lookup_public_ip
+from integrations.network_verify import (get_server_local_ip, get_server_wifi_details, hosted_deployment, lookup_public_ip,
+                                         resolve_client_ip)
 from db.database import get_db
 import ipaddress
 import os
@@ -110,9 +111,10 @@ def detect_connection(request: Request, db: Session = Depends(get_db), current_u
     """The admin's router as check-in will see it. First its ISP public address: a deployed server sees every phone on that
     Wi-Fi as that one address. Then its local Wi-Fi range, which only a server running on that same Wi-Fi sees."""
     # Same policy read the check-in path uses, so both agree on what "trusted" means.
-    client_ip = get_client_ip(request, is_enabled(db, "trust_proxy_header"))
+    client_ip, reason = resolve_client_ip(request, is_enabled(db, "trust_proxy_header"))
     if not client_ip:
-        raise HTTPException(503, "Unable to observe the client network address. Check trusted proxy configuration and start Uvicorn with --no-proxy-headers.")
+        # The reason is a short code for the administrator (e.g. client_ip_missing), never a header value.
+        raise HTTPException(503, f"Unable to verify your network ({reason}). Check CLIENT_IP_SOURCE and the proxy settings, or enter the campus IP range manually.")
     try:
         observed = ipaddress.ip_address(client_ip)
     except ValueError:
@@ -124,7 +126,7 @@ def detect_connection(request: Request, db: Session = Depends(get_db), current_u
     else:
         # A hosted app can see a proxy's private peer address. Do not offer its
         # range for whitelisting as if it were the administrator's router.
-        if os.getenv("WEBSITE_SITE_NAME") or os.getenv("APP_ENV", "production").strip().lower() != "development":
+        if hosted_deployment() or os.getenv("APP_ENV", "production").strip().lower() != "development":
             raise HTTPException(503, "Unable to detect a public router address. Check trusted proxy configuration or enter the campus IP range manually.")
         local_ip = get_server_local_ip() if observed.is_loopback else client_ip
         public_ip = lookup_public_ip()
@@ -136,12 +138,13 @@ def detect_connection(request: Request, db: Session = Depends(get_db), current_u
         except OSError:
             pass
 
-    def network_of(address, v4_prefix):
+    def network_of(address, v4_prefix, v6_prefix):
         parsed = ipaddress.ip_address(address)
-        return str(ipaddress.ip_network(f"{address}/{v4_prefix if parsed.version == 4 else 64}", strict=False))
+        return str(ipaddress.ip_network(f"{address}/{v4_prefix if parsed.version == 4 else v6_prefix}", strict=False))
 
-    public_cidr = network_of(public_ip, 32) if public_ip else None   # the router's one ISP address; IPv6 homes share a /64
-    local_cidr = network_of(local_ip, 24) if local_ip and local_ip != "127.0.0.1" else None
+    # One captured public address is suggested as exactly that address; a broader campus range is the admin's own entry.
+    public_cidr = network_of(public_ip, 32, 128) if public_ip else None
+    local_cidr = network_of(local_ip, 24, 64) if local_ip and local_ip != "127.0.0.1" else None
     return {
         "client_ip": client_ip,
         "public_ip": public_ip,

@@ -49,7 +49,7 @@ from integrations.face import (
     _embedding_to_floats,
     _extract_face_embedding,
 )
-from integrations.network_verify import get_client_ip, verify_network
+from integrations.network_verify import get_client_ip, hosted_deployment, verify_network
 from integrations.live_face import extract_live_embedding
 from routers.attendance_features import add_notification
 from schemas import (
@@ -629,6 +629,7 @@ def student_check_in(id: str, body: AttendanceSubmit, request: Request, db: Sess
             reported_ssid=body.wifi_ssid,
             reported_bssid=body.bssid,
             networks=active_networks,
+            public_only=hosted_deployment(),
         )
 
         # Fail-closed: reject the check-in if the network can't be verified
@@ -900,9 +901,11 @@ def verify_attendance_network(
         reported_ssid=reported_ssid,
         reported_bssid=reported_bssid,
         networks=active_networks,
+        public_only=hosted_deployment(),
     )
 
-    reason = "passed" if network_verified else ("configuration_required" if not any(n.cidr or n.subnet_range for n in active_networks) else "subnet_mismatch")
+    reason = ("passed" if network_verified else "network_unverified" if not source_ip
+              else "configuration_required" if not any(n.cidr or n.subnet_range for n in active_networks) else "subnet_mismatch")
 
     return {
         "verified": network_verified,
