@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.12
+
+- Fix a check-in progress dialog that could stay open after the attempt was abandoned.
+- Clear the Saving indicator after 45 seconds while allowing the request to finish.
+- Prevent Azure campus-network detection from suggesting a private proxy address.
+
 ## Mobile app responds at once, with clearer check-in and network messages — 2026-11-18 23:27
 - Any button that saves something now shows "Saving…" at the top right away, and staff class buttons switch off while they work so a second tap sends nothing.
 - Students now see the same red "Network error loading data. Showing cached view." banner as staff, with Retry, when the app cannot reach the server.
