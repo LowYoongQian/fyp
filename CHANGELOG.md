@@ -1,5 +1,9 @@
 # Changelog
 
+## Mobile v0.1.13 — 2026-11-19
+- App version raised to 0.1.13 so the v0.1.13 APK build can run (it shows the server's check-in error and observed IP).
+
+
 ## Check-in refusal shows your IP — 2026-11-19 14:14
 - When check-in is refused as off-campus, the dialog now also shows the server's exact error, including the IP address it saw, so it can be compared with the whitelisted router address in Network Security. ChatGPT review pending.
 
