@@ -1,8 +1,8 @@
 """Admin calendar settings and role-scoped read-only timetable metadata."""
-from datetime import date
+from datetime import date, timedelta
 from uuid import UUID
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
@@ -13,7 +13,7 @@ from db.models import AcademicSemester, ClassSession, Course, Enrolment, Lecture
 from domain import semester_rollover, timetable_access
 from domain.audit import log_audit_event
 from domain.class_lifecycle import class_is_live
-from domain.semesters import campus_date, lock_programme, semester_dict, validate_credit_loads
+from domain.semesters import campus_date, lock_programme, semester_dict
 from utils.db_helpers import my_course_ids, require_own_profile
 from utils.security import get_current_user, require_admin
 from utils.timeutil import campus_now, iso_utc, utcnow
@@ -21,18 +21,34 @@ from utils.timeutil import campus_now, iso_utc, utcnow
 router = APIRouter(tags=["Academic Calendar"])
 
 
-class SemesterWrite(BaseModel):
+class SemesterFields(BaseModel):
     programme_id: UUID
     name: str = Field(min_length=1, max_length=255)
     start_date: date
-    end_date: date
-    max_student_credits: float = Field(gt=0, le=60, allow_inf_nan=False)
     course_ids: list[UUID] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode="after")
-    def valid_dates(self):
+    def valid_name(self):
         self.name = self.name.strip()
-        if not self.name or self.end_date < self.start_date:
+        if not self.name:
+            raise ValueError("Provide a semester name")
+        return self
+
+
+class SemesterCreate(SemesterFields):
+    semester_type: Literal["long", "short"]
+
+    @property
+    def end_date(self):
+        return self.start_date + timedelta(days=97 if self.semester_type == "long" else 48)
+
+
+class SemesterWrite(SemesterFields):
+    end_date: date
+
+    @model_validator(mode="after")
+    def valid_dates(self):
+        if self.end_date < self.start_date:
             raise ValueError("Provide a semester name and an end date on or after its start date")
         if (self.end_date - self.start_date).days > 730:
             raise ValueError("A semester cannot exceed two years")
@@ -143,10 +159,8 @@ def save_semester(db, user, body, semester_id=None):
         start, end = lesson.scheduled_start or lesson.opened_at, lesson.scheduled_end or lesson.opened_at
         if not start or not end or not (body.start_date <= campus_date(start) <= campus_date(end) <= body.end_date):
             raise HTTPException(409, "Close the open class before changing semester dates to exclude its attendance window")
-    validate_credit_loads(db, courses, body.max_student_credits)
     before = semester_dict(row) if row.id else None
     row.name, row.start_date, row.end_date = body.name, body.start_date, body.end_date
-    row.max_student_credits = body.max_student_credits
     db.add(row); db.flush()
     for course in courses:
         course.semester_id = row.id
@@ -158,7 +172,7 @@ def save_semester(db, user, body, semester_id=None):
 
 
 @router.post("/admin/semesters", status_code=201)
-def create_semester(body: SemesterWrite, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def create_semester(body: SemesterCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return save_semester(db, current_user, body)
 
 
@@ -170,7 +184,7 @@ def update_semester(semester_id: UUID, body: SemesterWrite, db: Session = Depend
 @router.delete("/admin/semesters/{semester_id}")
 def delete_semester(semester_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     """Removes a semester, ongoing ones included. Its courses are kept with their students, classes and attendance; they only
-    leave the semester (so its dates and credit limit stop applying), which then lets the admin delete them or the programme."""
+    leave the semester (so its dates stop applying), which then lets the admin delete them or the programme."""
     row = db.get(AcademicSemester, str(semester_id))
     if row is None:
         raise HTTPException(404, "Semester not found")

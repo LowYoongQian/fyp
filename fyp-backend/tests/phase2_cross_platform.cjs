@@ -21,7 +21,7 @@ const api=localUrl('http://127.0.0.1:58006'),web=localUrl('http://127.0.0.1:5200
    try {
     await page.goto(web+'/login');
     const email=role==='admin'?'qa-e2e-admin@staff.school.edu':role==='teacher'?scenario.teacher_email:scenario.students[role].email;
-    await page.locator('input[type=email]').fill(email);
+    await page.locator('input[autocomplete=username]').fill(email);
     await page.locator('input[type=password]').fill(role==='admin'?'Synthetic-E2E!123':'Synthetic!123');
     const pending=page.waitForResponse(r=>r.url()===api+'/auth/login' && r.request().method()==='POST');
     await page.getByRole('button',{name:'Sign In',exact:true}).click();

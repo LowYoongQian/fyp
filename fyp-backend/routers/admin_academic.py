@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
@@ -7,19 +10,19 @@ from pydantic import BaseModel
 from db.database import get_db
 from domain import timetable_access
 from domain.audit import log_admin_action
-from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, add_missing_meetings, groups_for_course,
-                              lecture_meetings, meeting_key_for, pick_slot_for_new)
+from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, add_missing_meetings, conflicting_meetings, groups_for_course,
+                              lecturer_slot_conflict, lecture_meetings, meeting_key_for, pick_slot_for_new)
 from domain.session_sync import sync_class_sessions
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, AcademicSemester, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
-from domain.semesters import lock_programme, lock_programmes, require_enrolment_credit_limit, run_transaction, semester_dict, validate_credit_loads
+from domain.semesters import lock_programme, lock_programmes, enrolment_semester, run_transaction, semester_dict
 from utils.security import require_admin, require_lecturer
 from utils.db_helpers import get_or_404, ensure_unique
-from utils.timeutil import utcnow
+from utils.timeutil import campus_now, local_offset, utcnow
 from schemas import (
     MessageResponse,
     ProgrammeCreate, ProgrammeResponse,
     CourseCreate, CourseResponse,
-    AssignmentCreate, AssignmentResponse
+    AssignmentCreate, AssignmentBatchCreate, AssignmentResponse
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin Academic"])
@@ -127,7 +130,6 @@ def get_courses(programme_id: Optional[UUID] = Query(None), db: Session = Depend
             "id": c.id,
             "course_name": c.course_name,
             "course_code": c.course_code,
-            "credit_hours": c.credit_hours,
             "semester_id": c.semester_id,
             "semester": semester_dict(c.semester) if c.semester_id else None,
             "lecturer_id": c.lecturer_id,
@@ -154,7 +156,6 @@ def create_course(body: CourseCreate, db: Session = Depends(get_db), current_use
     course = Course(
         course_name=body.course_name,
         course_code=body.course_code,
-        credit_hours=body.credit_hours,
         lecturer_id=body.lecturer_id,
         programme_id=body.programme_id,
     )
@@ -191,10 +192,7 @@ def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_
     if course.semester_id:
         if body.programme_id != course.programme_id:
             raise HTTPException(409, "A semester course cannot be moved to another programme")
-        peers = db.query(Course).filter(Course.semester_id == course.semester_id).all()
-        validate_credit_loads(db, peers, course.semester.max_student_credits,
-                              credit_override={str(course.id): body.credit_hours})
-        
+
     ensure_unique(db, Course, Course.course_code, body.course_code, exclude_id=course_id, detail="Course code already exists")
 
     # Validate foreign keys up front (see create_course) — clear 400, not a 500.
@@ -208,7 +206,7 @@ def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_
     changed = []
     for field, new in (
         ("course_name", body.course_name), ("course_code", body.course_code),
-        ("credit_hours", body.credit_hours), ("lecturer_id", body.lecturer_id),
+        ("lecturer_id", body.lecturer_id),
         ("programme_id", body.programme_id),
     ):
         old = getattr(course, field)
@@ -217,7 +215,6 @@ def update_course(course_id: str, body: CourseCreate, db: Session = Depends(get_
 
     course.course_name = body.course_name
     course.course_code = body.course_code
-    course.credit_hours = body.credit_hours
     course.lecturer_id = body.lecturer_id
     course.programme_id = body.programme_id
 
@@ -296,48 +293,54 @@ def get_assignments(db: Session = Depends(get_db), current_user: User = Depends(
 
 @router.post("/assignments", response_model=AssignmentResponse, status_code=201)
 def create_assignment(body: AssignmentCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    existing = db.query(CourseStaffAssignment).filter(
-        CourseStaffAssignment.course_id == body.course_id,
-        CourseStaffAssignment.lecturer_id == body.lecturer_id,
-        CourseStaffAssignment.role == body.role
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Staff already assigned to this course in this role")
-        
-    assignment = CourseStaffAssignment(
-        course_id=body.course_id,
-        lecturer_id=body.lecturer_id,
-        role=body.role
-    )
-    db.add(assignment)
-    db.flush()  # assign assignment.id
+    return save_assignment_roles(db, current_user, body.course_id, body.lecturer_id, [body.role], single=True)[0]
 
-    # Tutor/Practical assignments are their own weekly meeting — auto-assign a
-    # clash-free slot and record it. (A "Lecturer" role assignment is not a
-    # separate meeting; the course's Lecture already covers it.)
-    if body.role in ("Tutor", "Practical"):
-        # One meeting per enrolled group: the groups meet separately, so a single row
-        # could not say when each of them sits. A course with nobody enrolled yet gets
-        # no meeting here; each group's meeting is added when its first student is
-        # enrolled (create_enrolment), because inventing a group would be a lie the
-        # CHECK constraint is there to prevent.
-        try:
-            add_missing_meetings(db, assignment.course_id, [assignment], groups_for_course(db, assignment.course_id))
-        except ValueError as e:
-            db.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
 
-    db.commit()
-    db.refresh(assignment)
+@router.post("/assignments/batch", response_model=list[AssignmentResponse], status_code=201)
+def create_assignments(body: AssignmentBatchCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    return save_assignment_roles(db, current_user, str(body.course_id), str(body.lecturer_id), [role.value for role in body.roles])
 
-    # Names, not ids: an audit trail of raw UUIDs cannot be read back later.
-    course = db.query(Course).filter(Course.id == body.course_id).first()
-    lecturer = db.query(Lecturer).filter(Lecturer.id == body.lecturer_id).first()
-    log_admin_action(db, current_user, "CREATE_ASSIGNMENT",
-                     f"Assigned {lecturer.name if lecturer else body.lecturer_id} as {body.role} "
-                     f"for {course.course_code if course else body.course_id}")
 
-    return assignment
+def save_assignment_roles(db, user, course_id, lecturer_id, roles, single=False):
+    def work():
+        course = db.query(Course).filter_by(id=course_id).with_for_update().first()
+        if not course:
+            raise HTTPException(400, "Selected course does not exist")
+        lecturer = db.query(Lecturer).filter_by(id=lecturer_id).with_for_update().first()
+        if not lecturer:
+            raise HTTPException(404, "Lecturer not found")
+        saved = []
+        for role in dict.fromkeys(roles):
+            row = db.query(CourseStaffAssignment).filter_by(course_id=course_id, lecturer_id=lecturer_id, role=role).first()
+            if row and single:
+                raise HTTPException(400, "Staff already assigned to this course in this role")
+            if role == "Lecturer":
+                if course.lecturer_id and course.lecturer_id != lecturer_id:
+                    raise HTTPException(409, "The Lecture already has a different lecturer. Remove that allocation first.")
+                for lecture in db.query(ClassMeeting).filter_by(course_id=course_id, role="Lecture").all():
+                    if lecture.lecturer_id != lecturer_id:
+                        conflict = lecturer_slot_conflict(db, lecture, lecturer_id)
+                        if conflict:
+                            raise HTTPException(409, f"This lecturer already teaches another class on {conflict.day} during {conflict.start}-{conflict.end}.")
+                        lecture.lecturer_id = lecturer_id
+                course.lecturer_id = lecturer_id
+            if row is None:
+                if role == "Tutor" and db.query(CourseStaffAssignment.id).filter_by(course_id=course_id, role=role).first():
+                    raise HTTPException(409, f"Another staff member already teaches {role} for this course's groups.")
+                row = CourseStaffAssignment(course_id=course_id, lecturer_id=lecturer_id, role=role)
+                db.add(row)
+                db.flush()
+                if role in ("Tutor", "Practical"):
+                    try:
+                        add_missing_meetings(db, course_id, [row], groups_for_course(db, course_id))
+                    except ValueError as error:
+                        raise HTTPException(400, str(error)) from error
+                log_admin_action(db, user, "CREATE_ASSIGNMENT",
+                                 f"Assigned {lecturer.name} as {role} for {course.course_code}", commit=False)
+            saved.append(row)
+        return saved
+    return run_transaction(db, work)
+
 
 @router.delete("/assignments/{assignment_id}", response_model=MessageResponse)
 def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
@@ -350,6 +353,10 @@ def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current
         f"{assignment.course.course_code if assignment.course else assignment.course_id}"
     )
 
+    if assignment.role == "Lecturer" and assignment.course.lecturer_id == assignment.lecturer_id:
+        assignment.course.lecturer_id = None
+        db.query(ClassMeeting).filter_by(course_id=assignment.course_id, role="Lecture",
+                                         lecturer_id=assignment.lecturer_id).update({"lecturer_id": None})
     db.delete(assignment)
     db.commit()
 
@@ -403,7 +410,9 @@ class TimetableSlotUpdate(BaseModel):
 @router.put("/timetable/{meeting_id}", response_model=MessageResponse)
 def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
                           db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    meeting = get_or_404(db, ClassMeeting, meeting_id, detail="Timetable slot not found")
+    meeting = db.query(ClassMeeting).filter_by(id=meeting_id).with_for_update().first()
+    if meeting is None:
+        raise HTTPException(404, "Timetable slot not found")
 
     def _to_min(hhmm: str) -> int:
         try:
@@ -429,13 +438,25 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
         raise HTTPException(status_code=400,
             detail=f"Class times must fall within the {TIMES[0][0]}-{TIMES[-1][1]} teaching day")
 
+    time_changed = (meeting.day, meeting.start, meeting.end) != (body.day, body.start, body.end)
+    if time_changed:
+        local = campus_now()
+        midnight = local.replace(hour=0, minute=0, second=0, microsecond=0) - local_offset()
+        session_start = func.coalesce(ClassSession.scheduled_start, ClassSession.opened_at)
+        generated = db.query(ClassSession.id).filter(
+            ClassSession.meeting_id == meeting.id, session_start >= midnight,
+            session_start < midnight + timedelta(days=1)).first()
+        term = meeting.course.semester
+        in_window = (meeting.day == local.strftime("%A") and meeting.start <= local.strftime("%H:%M") < meeting.end
+                     and (term is None or term.start_date <= local.date() <= term.end_date))
+        if generated or in_window:
+            raise HTTPException(409, "Today's class has already been generated or is in progress. Its day and times must stay fixed; edit the weekly slot on another day.")
+
     # Clash check against every OTHER meeting on the same day. Two classes clash
     # when their time ranges OVERLAP (not just when identical): [a,b) overlaps
     # [c,d) iff a < d and c < b. No shared room, no double-booked lecturer.
-    others = db.query(ClassMeeting).filter(ClassMeeting.id != meeting_id).all()
+    others = conflicting_meetings(db, meeting.course).filter(ClassMeeting.id != meeting_id, ClassMeeting.day == body.day).all()
     for o in others:
-        if o.day != body.day:
-            continue
         if not (new_start < _to_min(o.end) and _to_min(o.start) < new_end):
             continue  # no time overlap
         if o.room == body.room:
@@ -463,7 +484,7 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     # HH:MM, and every scheduler/session comparison consumes that same contract.
     normalized_start = f"{new_start // 60:02d}:{new_start % 60:02d}"
     normalized_end = f"{new_end // 60:02d}:{new_end % 60:02d}"
-    if (meeting.day, meeting.start, meeting.end) != (body.day, normalized_start, normalized_end):
+    if time_changed:
         meeting.effective_from = utcnow()   # a moved class is new from now on; days before the move must not become missed classes
     meeting.day, meeting.start, meeting.end, meeting.room = body.day, normalized_start, normalized_end, body.room
     from routers.attendance_features import notify_timetable_change
@@ -545,7 +566,7 @@ def enrol_student(db, student_id, course_id, semester, class_group):
     if course.programme_id and str(student.programme_id or "") != str(course.programme_id):
         raise HTTPException(400, "A course can only be added from the student's own study programme." if student.programme_id
                             else "Allocate the student to this course's study programme first.")
-    term = require_enrolment_credit_limit(db, student.id, course)
+    term = enrolment_semester(db, course)
     if term:
         if student.programme_id != term.programme_id:
             raise HTTPException(400, "Allocate the student to this study programme before enrolling in its semester")
@@ -642,7 +663,17 @@ def save_student_allocation(body: dict, db: Session = Depends(get_db), current_u
 
 @router.delete("/enrolments/{enrolment_id}", response_model=MessageResponse)
 def delete_enrolment(enrolment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    enrol = get_or_404(db, Enrolment, enrolment_id, "Enrolment")
+    enrol = db.query(Enrolment).filter_by(id=enrolment_id).with_for_update().first()
+    if enrol is None:
+        raise HTTPException(404, "Enrolment not found")
+
+    completed = db.query(ClassSession.id).filter(
+        ClassSession.course_id == enrol.course_id, ClassSession.status == "completed",
+        ClassSession.class_group.in_(["All", enrol.class_group])).first()
+    recorded = db.query(AttendanceRecord.id).join(ClassSession).filter(
+        ClassSession.course_id == enrol.course_id, AttendanceRecord.student_id == enrol.student_id).first()
+    if completed or recorded:
+        raise HTTPException(409, "This enrolment is needed for attendance history: the student has a completed class or an attendance record in this course.")
 
     # Read before the delete makes the relationships unavailable.
     deleted_desc = (

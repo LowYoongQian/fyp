@@ -359,7 +359,6 @@ class ProgrammeResponse(BaseModel):
 class CourseCreate(BaseModel):
     course_name: str
     course_code: str
-    credit_hours: float = Field(default=3.0, gt=0, le=60, allow_inf_nan=False)
     lecturer_id: Optional[Any] = None
     programme_id: Optional[Any] = None
     # No schedule_* fields: the timetable lives in class_meetings and is edited through
@@ -369,7 +368,6 @@ class CourseResponse(BaseModel):
     id: Any
     course_name: str
     course_code: str
-    credit_hours: Optional[float] = 3.0
     lecturer_id: Optional[Any] = None
     programme_id: Optional[Any] = None
 
@@ -381,6 +379,12 @@ class AssignmentCreate(BaseModel):
     course_id: Any
     lecturer_id: Any
     role: StaffRole
+
+class AssignmentBatchCreate(BaseModel):
+    course_id: UUID
+    lecturer_id: UUID
+    roles: list[StaffRole] = Field(min_length=1, max_length=3)
+
 
 class AssignmentResponse(BaseModel):
     id: Any

@@ -123,7 +123,6 @@ def get_my_enrolments(
             "course_id": e.course_id,
             "course_code": e.course.course_code if e.course else "Unknown",
             "course_name": e.course.course_name if e.course else "Unknown",
-            "credit_hours": e.course.credit_hours if e.course else 3.0,
             "semester": e.semester,
             "class_group": e.class_group,
             **timetable_access.lecture_slot(e.course, m),

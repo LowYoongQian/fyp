@@ -111,17 +111,16 @@ def lookup_courses(search: str = SEARCH, skip: int = SKIP, limit: int = LIMIT, p
             query = query.filter(Course.id.notin_(enrolled_ids))
         query = query.filter(or_(Course.semester_id.is_(None), AcademicSemester.end_date >= today))
     rows, more = _page(query.order_by(Course.course_code, Course.id), skip, limit)
-    return {"items": [{"id": c.id, "course_code": c.course_code, "course_name": c.course_name, "credit_hours": c.credit_hours,
+    return {"items": [{"id": c.id, "course_code": c.course_code, "course_name": c.course_name,
                        "programme_id": c.programme_id, "semester_id": c.semester_id, "semester": semester_dict(term_row) if term_row else None,
                        "enrolled": c.id in enrolled_ids} for c, term_row in rows],
             "has_more": more}
 
 
 @router.get("/allocation")
-def allocation_check(course_id: UUID, student_id: Optional[UUID] = None, db: Session = Depends(get_db),
+def allocation_check(course_id: UUID, db: Session = Depends(get_db),
                      current_user: User = Depends(require_admin)):
-    """What the allocation form needs once a course is picked: the course's groups with their real seat counts (25 seats each) and, for
-    the chosen student, the credits already used in the course's semester. Read only; the save itself re-checks all of it."""
+    """Return group seat counts and semester dates for the selected course."""
     course = db.get(Course, str(course_id))
     if not course:
         raise HTTPException(404, "Course not found")
@@ -129,10 +128,5 @@ def allocation_check(course_id: UUID, student_id: Optional[UUID] = None, db: Ses
     groups = sorted({*counts, *(g for (g,) in db.query(ClassMeeting.class_group).filter(ClassMeeting.course_id == course.id, ClassMeeting.class_group.isnot(None))), "G1"},
                     key=lambda g: (int(g[1:]) if g[1:].isdigit() else 999, g))
     term = db.get(AcademicSemester, course.semester_id) if course.semester_id else None
-    used = None
-    if term and student_id:
-        used = sum(float(credit or 0) for (credit,) in db.query(Course.credit_hours).join(Enrolment, Enrolment.course_id == Course.id)
-                   .filter(Enrolment.student_id == str(student_id), Course.semester_id == term.id).distinct())
     return {"groups": [{"group": g, "count": counts.get(g, 0), "full": counts.get(g, 0) >= 25} for g in groups],
-            "semester": semester_dict(term) if term else None, "course_credits": course.credit_hours,
-            "credits_used": used, "credits_limit": term.max_student_credits if term else None}
+            "semester": semester_dict(term) if term else None}

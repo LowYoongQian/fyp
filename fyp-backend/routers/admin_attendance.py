@@ -49,7 +49,7 @@ def get_sessions(programme_id: UUID = Query(...), course_id: UUID = Query(...), 
     # This handler then only READS and derives display status in-memory.
     sync_class_sessions()
     # The background sync runs after this answer, so this course's classes due within the hour are added here and now.
-    if materialize_upcoming(db, utcnow(), local_offset(), calculate_schedule(db), course_id=course.id):
+    if materialize_upcoming(db, utcnow(), local_offset(), calculate_schedule(db, course_id=course.id, for_session_creation=True), course_id=course.id):
         db.commit()
 
     sessions = db.query(ClassSession).options(

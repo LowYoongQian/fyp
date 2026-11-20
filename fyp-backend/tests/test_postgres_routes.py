@@ -1,7 +1,7 @@
 """Synthetic PostgreSQL contract tests; never accepts a production database URL.
 
 Oracles: administrator-provisioned accounts (auth.py), school ID schema,
-CHANGELOG semester history/credit limits and timetable clash prevention.
+Semester history and timetable clash prevention.
 Production route functions and JWT guards run without role overrides.
 Each test rolls back its outer transaction, including endpoint commits.
 """
@@ -138,7 +138,7 @@ def test_school_domain_rejection_leaves_no_profile(pg, kind, body):
 
 def academic(pg):
     programme = call(pg, 'POST', '/admin/programmes', {'code':'QA','name':'Synthetic'}, expected=201)
-    body = dict(course_code='QA101',course_name='Synthetic Course',programme_id=programme['id'],credit_hours=3)
+    body = dict(course_code='QA101',course_name='Synthetic Course',programme_id=programme['id'])
     course = call(pg, 'POST', '/admin/courses', body, expected=201)
     return programme, course, body
 
@@ -159,10 +159,10 @@ def test_course_crud_preserves_meeting_and_rejects_invalid_references(pg):
 def test_semester_overlap_history_and_delete_preserves_courses(pg):
     programme, course, _ = academic(pg)
     today = campus_now().date()
-    body = dict(programme_id=programme['id'],name='QA Term',start_date=str(today),end_date=str(today+timedelta(days=60)),max_student_credits=18,course_ids=[course['id']])
+    body = dict(programme_id=programme['id'],name='QA Term',start_date=str(today),semester_type='short',course_ids=[course['id']])
     term = call(pg, 'POST', '/admin/semesters', body, expected=201)
     call(pg, 'POST', '/admin/semesters', {**body,'name':'Overlapping','course_ids':[]}, expected=409)
-    call(pg, 'PUT', '/admin/semesters/' + term['id'], {**body,'course_ids':[]}, expected=409)
+    call(pg, 'PUT', '/admin/semesters/' + term['id'], {**body,'end_date':term['end_date'],'course_ids':[]}, expected=409)
     call(pg, 'DELETE', '/admin/courses/' + course['id'], expected=409)
     call(pg, 'DELETE', '/admin/semesters/' + term['id'])
     pg[0].expire_all()
@@ -308,7 +308,7 @@ def attendance_context(pg):
     pg[2]['enrolled']={'Authorization':'Bearer '+login['access_token']}
     programme,course,_=academic(pg)
     today=campus_now().date()
-    call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Attendance Term',start_date=str(today),end_date=str(today+timedelta(days=30)),max_student_credits=18,course_ids=[course['id']]),expected=201)
+    call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Attendance Term',start_date=str(today),semester_type='short',course_ids=[course['id']]),expected=201)
     now=utcnow()
     lesson=ClassSession(course_id=course['id'],class_group='G1',is_open=True,status='open',opened_at=now-timedelta(minutes=5),scheduled_start=now-timedelta(minutes=5),scheduled_end=now+timedelta(minutes=55))
     pg[0].add_all([Enrolment(student_id=student.id,course_id=course['id'],class_group='G1'),lesson]);pg[0].commit()
@@ -370,22 +370,21 @@ def test_failed_face_preconditions_never_write_attendance(pg, reason, detail):
     assert pg[0].query(AttendanceRecord).count()==0
 
 
-def test_enrolment_programme_credit_cap_and_duplicate_are_atomic(pg):
+def test_enrolment_checks_programme_and_duplicate_across_multiple_courses(pg):
     from db.models import Enrolment
     _,student=provision(pg)
     programme,course,body=academic(pg)
     second=call(pg,'POST','/admin/courses',{**body,'course_code':'QA102'},expected=201)
     today=campus_now().date()
-    call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Capped term',start_date=str(today),end_date=str(today+timedelta(days=30)),max_student_credits=3,course_ids=[course['id'],second['id']]),expected=201)
+    call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Allocation term',start_date=str(today),semester_type='short',course_ids=[course['id'],second['id']]),expected=201)
     payload=dict(student_id=str(student.id),course_id=course['id'],class_group='G1')
     call(pg,'POST','/admin/enrolments',payload,expected=400)
     assert pg[0].query(Enrolment).count()==0
     call(pg,'PUT','/admin/students/'+str(student.id)+'/programme',dict(programme_id=programme['id']))
     call(pg,'POST','/admin/enrolments',payload,expected=201)
-    # Cap is checked before duplicate detection; both errors must preserve exactly one enrolment.
-    call(pg,'POST','/admin/enrolments',{**payload,'course_id':second['id']},expected=409)
-    assert pg[0].query(Enrolment).count()==1
-    assert pg[0].query(Enrolment).one().course_id==course['id']
+    call(pg,'POST','/admin/enrolments',{**payload,'course_id':second['id']},expected=201)
+    call(pg,'POST','/admin/enrolments',payload,expected=400)
+    assert {row.course_id for row in pg[0].query(Enrolment)} == {course['id'], second['id']}
 
 
 def test_notifications_recipient_isolation_read_idempotency_and_inbox_count(pg):
@@ -607,7 +606,7 @@ def test_flow_b_staff_opens_student_checks_in_auto_closes_at_5pm_three_roles_agr
     programme,course,body=academic(pg)
     call(pg,'PUT','/admin/courses/'+course['id'],{**body,'lecturer_id':str(teacher.id)})
     today=campus_now().date()
-    call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Flow B Term',start_date=str(today),end_date=str(today+timedelta(days=30)),max_student_credits=18,course_ids=[course['id']]),expected=201)
+    call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Flow B Term',start_date=str(today),semester_type='short',course_ids=[course['id']]),expected=201)
     call(pg,'PUT','/admin/students/'+str(student.id)+'/programme',dict(programme_id=programme['id']))
     call(pg,'POST','/admin/enrolments',dict(student_id=str(student.id),course_id=course['id'],class_group='G1'),expected=201)
     meeting=pg[0].query(ClassMeeting).one()
@@ -759,8 +758,7 @@ def test_class_today_reuses_regular_row_and_includes_staff_replacement(pg, monke
     today = campus_now().date()
     call(pg, 'POST', '/admin/semesters', {
         'programme_id': programme['id'], 'name': 'Synthetic Today Term',
-        'start_date': str(today), 'end_date': str(today + timedelta(days=30)),
-        'max_student_credits': 18, 'course_ids': [course['id']],
+        'start_date': str(today), 'semester_type': 'short', 'course_ids': [course['id']],
     }, expected=201)
     now = datetime.combine(today, time(7, 30))
     monkeypatch.setattr(sessions, 'utcnow', lambda: now)
@@ -837,7 +835,7 @@ def test_runtime_auto_allocation_respects_partially_overlapping_manual_slots(pg,
     teacher=None
     if resource=='teacher':
         _,teacher=provision(pg,'staff')
-    body=dict(course_code='RUNTIME1',course_name='Synthetic first',programme_id=programme['id'],credit_hours=3,
+    body=dict(course_code='RUNTIME1',course_name='Synthetic first',programme_id=programme['id'],
               lecturer_id=str(teacher.id) if teacher else None)
     first=call(pg,'POST','/admin/courses',body,expected=201)
     old=pg[0].query(ClassMeeting).filter_by(course_id=first['id']).one()
@@ -860,3 +858,153 @@ def test_runtime_auto_allocation_allows_touching_manual_slot(pg):
     second=call(pg,'POST','/admin/courses',{**body,'course_code':'QA102'},expected=201)
     new=pg[0].query(ClassMeeting).filter_by(course_id=second['id']).one()
     assert (new.day,new.start,new.end,new.room)==('Monday','20:00','22:00','Lab 2')
+
+
+@pytest.mark.parametrize("term_type,end_date", [("short", "2027-02-21"), ("long", "2027-04-11")])
+def test_semester_end_counts_both_calendar_dates(pg, monkeypatch, term_type, end_date):
+    from routers import academic_calendar
+    monkeypatch.setattr(academic_calendar, "campus_now", lambda: datetime(2027, 1, 4))
+    programme, course, _ = academic(pg)
+    result = call(pg, "POST", "/admin/semesters", {
+        "programme_id": programme["id"], "name": "Test term", "start_date": "2027-01-04",
+        "semester_type": term_type, "end_date": "2099-01-01", "course_ids": [course["id"]]}, expected=201)
+    assert result["end_date"] == end_date
+
+
+def test_enrolment_protects_group_hours_before_absences_are_materialized(pg):
+    from db.models import AttendanceRecord, ClassSession, Enrolment
+    db = pg[0]
+    _, student = provision(pg)
+    programme, course, _ = academic(pg)
+    call(pg, "PUT", f"/admin/students/{student.id}/programme", {"programme_id": programme["id"]})
+    def enrol(group):
+        call(pg, "POST", "/admin/enrolments", dict(student_id=student.id, course_id=course["id"], class_group=group), expected=201)
+        return db.query(Enrolment).one().id
+    original = enrol("G6")
+    call(pg, "DELETE", f"/admin/enrolments/{original}")
+    corrected = enrol("G7")
+    other = ClassSession(course_id=course["id"], class_group="G6", status="completed", is_open=False)
+    db.add(other)
+    db.commit()
+    call(pg, "DELETE", f"/admin/enrolments/{corrected}")
+    owed = enrol("G6")
+    assert db.query(AttendanceRecord).count() == 0
+    call(pg, "DELETE", f"/admin/enrolments/{owed}", expected=409)
+    # A missing mark for the one-hour tutorial remains in the denominator.
+    lecture = ClassSession(course_id=course["id"], class_group="All", status="completed", is_open=False,
+                           scheduled_start=datetime(2026, 11, 2, 1), scheduled_end=datetime(2026, 11, 2, 3))
+    other.scheduled_start, other.scheduled_end = datetime(2026, 11, 3, 1), datetime(2026, 11, 3, 2)
+    db.add(lecture)
+    db.flush()
+    db.add(AttendanceRecord(student_id=student.id, session_id=lecture.id, status="present"))
+    db.commit()
+    login = call(pg, "POST", "/auth/login", {"identifier": student.student_code, "password": "Synthetic!123"}, role="anonymous")
+    pg[2]["enrolled"] = {"Authorization": "Bearer " + login["access_token"]}
+    enrolment, = call(pg, "GET", "/students/me/enrolments", role="enrolled")
+    assert enrolment["completed_classes"] == 2 and enrolment["attendance_rate"] == 66.7
+    lecture.status = other.status = "open"
+    db.add(AttendanceRecord(student_id=student.id, session_id=other.id, status="present"))
+    db.commit()
+    call(pg, "DELETE", f"/admin/enrolments/{owed}", expected=409)
+    assert db.query(Enrolment).one().id == owed
+
+
+def test_materialized_session_freezes_only_its_local_day(pg, monkeypatch):
+    from db.models import ClassSession
+    from routers import admin_academic
+    db = pg[0]
+    _, course, _ = academic(pg)
+    slot = db.query(ClassMeeting).one()
+    slot.day, slot.start, slot.end = "Monday", "09:00", "11:00"
+    held = ClassSession(course_id=course["id"], meeting_id=slot.id, class_group="All", is_open=False,
+                        status="completed", scheduled_start=datetime(2027, 1, 4, 1), scheduled_end=datetime(2027, 1, 4, 3))
+    db.add(held)
+    db.commit()
+    held_id, original_start, original_end = held.id, held.scheduled_start, held.scheduled_end
+    monkeypatch.setattr(admin_academic, "sync_class_sessions", lambda **kw: None)
+    monkeypatch.setattr(admin_academic, "campus_now", lambda: datetime(2027, 1, 4, 22))
+    path = f"/admin/timetable/{slot.id}"
+    body = dict(day=slot.day, start=slot.start, end=slot.end, room=slot.room)
+    for change in (dict(start="08:00"), dict(end="12:00"), dict(day="Tuesday")):
+        call(pg, "PUT", path, {**body, **change}, expected=409)
+    # The next Monday's live window is protected even before its row exists.
+    monkeypatch.setattr(admin_academic, "campus_now", lambda: datetime(2027, 1, 11, 9, 30))
+    call(pg, "PUT", path, {**body, "end": "12:00"}, expected=409)
+    monkeypatch.setattr(admin_academic, "campus_now", lambda: datetime(2027, 1, 5, 0, 1))
+    call(pg, "PUT", path, {**body, "start": "08:00"})
+    db.refresh(held)
+    assert (held.id, held.status, held.scheduled_start, held.scheduled_end) == (held_id, "completed", original_start, original_end)
+    assert db.query(ClassSession).count() == 1
+
+
+def test_batch_roles_are_atomic_and_retries_keep_the_same_meetings(pg, monkeypatch):
+    from db.models import CourseStaffAssignment, Enrolment
+    from routers import admin_academic
+    db = pg[0]
+    _, staff = provision(pg, "staff")
+    _, student = provision(pg)
+    _, course, _ = academic(pg)
+    db.add(Enrolment(course_id=course["id"], student_id=student.id, class_group="G6"))
+    db.commit()
+    path = "/admin/assignments/batch"
+    body = dict(course_id=course["id"], lecturer_id=staff.id)
+    def save(roles, expected=201):
+        return call(pg, "POST", path, {**body, "roles": roles}, expected=expected)
+    real_add = admin_academic.add_missing_meetings
+    def fail_practical(db, course_id, assignments, groups):
+        if assignments[0].role == "Practical":
+            raise ValueError("No practical slots available")
+        return real_add(db, course_id, assignments, groups)
+    with monkeypatch.context() as patch:
+        patch.setattr(admin_academic, "add_missing_meetings", fail_practical)
+        save(["Lecturer", "Tutor", "Practical"], 400)
+    assert db.query(CourseStaffAssignment).count() == 0
+    assert db.query(ClassMeeting).one().lecturer_id is None
+    for roles in (["Lecturer"], ["Lecturer", "Tutor"], ["Lecturer", "Tutor", "Practical"]):
+        saved = save(roles)
+        assert [r["role"] for r in saved] == roles
+        meetings = {m.id for m in db.query(ClassMeeting)}
+        assert len(meetings) == len(roles)
+        assert save(roles) == saved
+        assert {m.id for m in db.query(ClassMeeting)} == meetings
+    second = Lecturer(name="Second tutor", staff_id="T900002", role="Tutor")
+    db.add(second)
+    db.commit()
+    call(pg, "POST", path, {**body, "lecturer_id": second.id, "roles": ["Tutor"]}, expected=409)
+    assert {m.id for m in db.query(ClassMeeting)} == meetings
+
+
+def test_assigning_lecturer_rejects_overlapping_lecture_without_saving_roles(pg):
+    from db.models import CourseStaffAssignment
+    db = pg[0]
+    _, staff = provision(pg, "staff")
+    _, first, body = academic(pg)
+    second = call(pg, "POST", "/admin/courses", {**body, "course_code": "QA102"}, expected=201)
+    for course, room in ((first, "Lab 1"), (second, "Lab 2")):
+        slot = db.query(ClassMeeting).filter_by(course_id=course["id"]).one()
+        call(pg, "PUT", f"/admin/timetable/{slot.id}",
+             dict(day="Monday", start="10:00", end="12:00", room=room))
+    call(pg, "POST", "/admin/assignments/batch",
+         dict(course_id=first["id"], lecturer_id=staff.id, roles=["Lecturer"]), expected=201)
+    call(pg, "POST", "/admin/assignments/batch",
+         dict(course_id=second["id"], lecturer_id=staff.id, roles=["Tutor", "Lecturer"]), expected=409)
+    assert db.query(CourseStaffAssignment).filter_by(course_id=second["id"]).count() == 0
+    assert db.query(ClassMeeting).filter_by(course_id=second["id"]).one().lecturer_id is None
+
+
+def test_disjoint_semesters_can_reuse_room_and_teacher(pg):
+    from db.models import AcademicSemester
+    db = pg[0]
+    programme, course, body = academic(pg)
+    next_course = call(pg, "POST", "/admin/courses", {**body, "course_code": "QA102"}, expected=201)
+    today = campus_now().date()
+    for item, offset in ((course, -60), (next_course, 1)):
+        term = AcademicSemester(programme_id=programme["id"], name=item["course_code"],
+                                start_date=today+timedelta(days=offset), end_date=today+timedelta(days=offset+48))
+        db.add(term)
+        db.flush()
+        db.get(Course, item["id"]).semester_id = term.id
+    db.commit()
+    old = db.query(ClassMeeting).filter_by(course_id=course["id"]).one()
+    new = db.query(ClassMeeting).filter_by(course_id=next_course["id"]).one()
+    call(pg, "PUT", f"/admin/timetable/{new.id}", dict(day=old.day, start=old.start, end=old.end, room=old.room))

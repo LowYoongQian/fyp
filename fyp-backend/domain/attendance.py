@@ -36,7 +36,7 @@ def require_session_enrolment(db, session, student_id, status_code: int = 400):
     enrolment = db.query(Enrolment).filter(
         Enrolment.student_id == student_id,
         Enrolment.course_id == session.course_id,
-    ).first()
+    ).with_for_update(read=True).first()
     if not enrolment:
         raise HTTPException(status_code=status_code,
                             detail="That student is not enrolled in this course")

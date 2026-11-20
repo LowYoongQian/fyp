@@ -130,7 +130,7 @@ export function StudentDetailsDialog({ student, onClose, onChangePassword }: { s
           <Field label="Programme">{details.programme ? `${details.programme.code} · ${details.programme.name}` : null}</Field>
           <div className="sm:col-span-2"><dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Enrolled courses</dt>
             <dd className="mt-1 space-y-1 text-xs text-slate-800">{details.courses.length ? details.courses.map(course =>
-              <p key={`${course.code}-${course.class_group}`}>{course.code} · {course.name} · {course.credits ?? NA} credits · {course.semester || NA} · Group {course.class_group || NA}</p>) : NA}</dd></div>
+              <p key={`${course.code}-${course.class_group}`}>{course.code} · {course.name} · {course.semester || NA} · Group {course.class_group || NA}</p>) : NA}</dd></div>
         </Group>
         <Group title="Face registration">
           <Field label="Status">{details.face.is_registered ? 'Registered' : 'Not registered'}</Field>

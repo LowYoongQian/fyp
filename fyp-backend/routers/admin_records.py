@@ -57,7 +57,7 @@ def course_records(search: str = SEARCH, page: int = PAGE, per_page: int = PER_P
         query = query.filter(_match(Course.course_code, Course.course_name, Programme.code, Programme.name)(search.strip()))
     rows, total, page = _page(query.order_by(Course.course_code, Course.id), page, per_page)
     # lecturer_id: the edit form sends it back unchanged (the course update replaces it, so leaving it out would clear it).
-    return {"items": [{"id": c.id, "course_code": c.course_code, "course_name": c.course_name, "credit_hours": c.credit_hours,
+    return {"items": [{"id": c.id, "course_code": c.course_code, "course_name": c.course_name,
                        "lecturer_id": c.lecturer_id, "programme_id": c.programme_id, "programme_code": pcode, "programme_name": pname,
                        "semester": semester_dict(term) if term else None, "enrolment_count": e, "session_count": s}
                       for c, pcode, pname, term, e, s in rows],

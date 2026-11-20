@@ -1,7 +1,6 @@
 """Real admin/staff APIs prepare a fresh synthetic cross-platform scenario."""
 import json,os,sys,struct
 from pathlib import Path
-from datetime import date,timedelta
 from uuid import uuid4
 import httpx
 from common import BACKEND as root, RUNTIME, guard_container, safe_env
@@ -30,11 +29,12 @@ teacher_email=f'p2-teacher-{suffix}@staff.school.edu'
 request('POST','/admin/staff',{'email':teacher_email,'password':password,'name':'Phase2 Synthetic Teacher','staff_id':'T'+suffix,'role':'Lecturer'},admin,201)
 teacher=request('GET','/admin/staff?search=T'+suffix,token=admin)['items'][0]
 programme=request('POST','/admin/programmes',{'code':'P2'+suffix,'name':'Phase2 Synthetic Programme'},admin,201)
-course_body={'course_code':'P2'+suffix,'course_name':'Phase2 Synthetic Attendance','programme_id':programme['id'],'credit_hours':3,'lecturer_id':teacher['id']}
+course_body={'course_code':'P2'+suffix,'course_name':'Phase2 Synthetic Attendance','programme_id':programme['id']}
 course=request('POST','/admin/courses',course_body,admin,201)
+request('POST','/admin/assignments/batch',{'course_id':course['id'],'lecturer_id':teacher['id'],'roles':['Lecturer']},admin,201)
 from utils.timeutil import campus_now
 today=campus_now().date()
-request('POST','/admin/semesters',{'programme_id':programme['id'],'name':'Phase2 Synthetic Term','start_date':str(today),'end_date':str(today+timedelta(days=30)),'max_student_credits':18,'course_ids':[course['id']]},admin,201)
+request('POST','/admin/semesters',{'programme_id':programme['id'],'name':'Phase2 Synthetic Term','start_date':str(today),'semester_type':'short','course_ids':[course['id']]},admin,201)
 students={}
 for owner,prefix in [('A','8'),('B','7')]:
     email=f'p2-{owner.lower()}-{suffix}@student.school.edu';code='ST'+prefix+suffix
@@ -54,6 +54,8 @@ with SessionLocal() as db:
     db.commit()
 request('PUT','/admin/timetable/'+meeting_id,{'day':today.strftime('%A'),'start':'15:00','end':'17:00','room':'Phase2 Synthetic Room'},admin)
 staff=request('POST','/auth/login',{'identifier':teacher_email,'password':password})['access_token']
+todays_classes=request('GET','/sessions/today',token=staff)
+assert any(row['course_id']==course['id'] and row['role']=='Lecture' for row in todays_classes)
 lesson=request('POST','/sessions/open',{'course_id':course['id'],'class_group':'All','meeting_id':meeting_id},staff,201)
 proof={'synthetic_only':True,'database':name,'programme_id':programme['id'],'course_id':course['id'],'course_code':course['course_code'],'meeting_id':meeting_id,'session_id':lesson['id'],'students':students,'teacher_email':teacher_email,'teacher_code':'T'+suffix,
        'boundaries':'Real admin/staff/auth/attendance/database routes. Fake face vector, network verification, verified recovery email fixture and controlled 15:30/17:00 clock; no camera/model acceptance.'}

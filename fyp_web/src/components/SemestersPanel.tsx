@@ -13,7 +13,14 @@ import { TextInput } from './LimitedTextField';
 import { useMalaysiaToday } from '../hooks/useMalaysiaToday';
 import { swalConfirm, swalError, swalSuccess } from '../utils/swal';
 
-const empty = (today: string): SemesterWrite => ({ name: '', programme_id: '', start_date: today, end_date: '', max_student_credits: 18, course_ids: [] });
+const empty = (today: string): SemesterWrite => ({ name: '', programme_id: '', start_date: today, end_date: '', course_ids: [] });
+function semesterEnd(start: string, type: 'long' | 'short') {
+  if (!start) return '';
+  const date = new Date(start + 'T00:00:00Z');
+  date.setUTCDate(date.getUTCDate() + (type === 'long' ? 97 : 48));
+  return date.toISOString().slice(0, 10);
+}
+
 const SEARCH_AT = 8; // A search box only earns its place once the list is long enough to scroll.
 const detailOf = (error: unknown) => (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
 
@@ -28,7 +35,9 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
   programmes: Programme[]; courses: Course[]; stored?: AcademicSemester; onDone: () => Promise<void>; onCancel?: () => void;
 }) {
   const today = useMalaysiaToday();
-  const [form, setForm] = useState<SemesterWrite>(() => stored ? { ...stored, course_ids: stored.course_ids || [] } : empty(today));
+  const [semesterType, setSemesterType] = useState<'long' | 'short'>('long');
+  const [draft, setForm] = useState<SemesterWrite>(() => stored ? { ...stored, course_ids: stored.course_ids || [] } : empty(today));
+  const form = stored ? draft : { ...draft, end_date: semesterEnd(draft.start_date, semesterType) };
   const [saving, setSaving] = useState(false);
   const [courseSearch, setCourseSearch] = useState('');
   const editing = !!stored;
@@ -48,13 +57,18 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
     if (saving || !datesReady) return;
     setSaving(true);
     try {
-      await apiService.adminSaveSemester(form, stored?.id);
-      if (!editing) { setForm(empty(today)); setCourseSearch(''); }
-      void swalSuccess('Semester saved', 'Dates and credit limits now apply.');
+      if (stored) {
+        await apiService.adminSaveSemester(form, stored.id);
+      } else {
+        const { programme_id, name, start_date, course_ids } = form;
+        await apiService.adminSaveSemester({ programme_id, name, start_date, course_ids, semester_type: semesterType });
+      }
+      if (!editing) { setForm(empty(today)); setSemesterType('long'); setCourseSearch(''); }
+      void swalSuccess('Semester saved', 'Semester dates saved.');
       void onDone();   // the list reloads behind the message; its own failure shows on the list
     } catch (error: unknown) {
       const detail = detailOf(error);
-      await swalError('Semester not saved', typeof detail === 'string' ? detail : 'Check the dates, programme and credit limit, then try again.');
+      await swalError('Semester not saved', typeof detail === 'string' ? detail : 'Check the dates and programme, then try again.');
     } finally { setSaving(false); }
   };
 
@@ -92,7 +106,7 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
           return <button key={course.id} type="button" role="checkbox" aria-checked={checked} disabled={fixed || saving} onClick={() => toggleCourse(id, checked)}
             className={`flex w-full items-start gap-3 rounded-lg p-3 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 disabled:cursor-not-allowed ${checked ? 'bg-blue-50 dark:bg-blue-500/10' : 'bg-slate-50 hover:bg-blue-50/60 dark:bg-slate-800'} ${fixed ? 'opacity-70' : ''}`}>
             <span aria-hidden="true" className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-brand-blue bg-brand-blue text-white' : 'border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-900'}`}>{checked && <Check className="h-3 w-3" />}</span>
-            <span className="min-w-0 break-words"><span className="block font-semibold">{course.course_code} · {course.credit_hours ?? 0} credits</span>
+            <span className="min-w-0 break-words"><span className="block font-semibold">{course.course_code}</span>
               <span className="text-slate-500">{course.course_name}{fixed ? (checked ? ' · In this semester (locked)' : ' · Already assigned to another semester') : ''}</span></span>
           </button>;
         })}
@@ -107,18 +121,19 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
       onChange={value => setForm({ ...form, programme_id: value, course_ids: [] })} />}
 </div>
     <label className={`block ${label}`}>Semester name<TextInput required aria-label="Semester name" className={field} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="2026 Semester 2" /></label>
+    {!editing && <label className={label}>Semester type
+      <select className={field} value={semesterType} onChange={event => setSemesterType(event.target.value === 'short' ? 'short' : 'long')}>
+        <option value="long">Long sem (14 weeks)</option><option value="short">Short sem (7 weeks)</option>
+      </select>
+    </label>}
     <div className="space-y-2">
       <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${editing ? '' : 'lg:grid-cols-1'}`}>
-        <div className={label}><span className="flex items-center gap-1">Start date<InfoTip label="About the semester dates">Dates before today cannot be chosen (Malaysia time; today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''} Choose both a start and an end date.</InfoTip></span><DatePicker label="Semester start date" value={form.start_date} today={today} min={today} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={start_date => setForm({ ...form, start_date })} /></div>
-        <div className={label}><span className="flex items-center gap-1">End date<InfoTip label="About End date">The semester ends at the end of this date (Malaysia time).</InfoTip></span><DatePicker label="Semester end date" value={form.end_date} today={today} min={endMin} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={end_date => setForm({ ...form, end_date })} /></div>
+        <div className={label}><span className="flex items-center gap-1">Start date<InfoTip label="About the semester dates">Dates before today cannot be chosen (Malaysia time; today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''}</InfoTip></span><DatePicker label="Semester start date" value={form.start_date} today={today} min={today} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={start_date => setForm({ ...form, start_date })} /></div>
+        <div className={label}><span className="flex items-center gap-1">End date<InfoTip label="About End date">The semester ends at the end of this date (Malaysia time).</InfoTip></span>{editing ? <DatePicker label="Semester end date" value={form.end_date} today={today} min={endMin} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={end_date => setForm({ ...form, end_date })} /> : <input aria-label="Semester end date" className={field} value={form.end_date} readOnly />}</div>
       </div>
       {/* Read out with the date pickers; shown to everyone else behind the (i) beside Start date. */}
       <p id={`${idPrefix}-date-help`} className="sr-only">Dates before today are not selectable (Malaysia time, today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''}</p>
       {dateError && <p role="alert" className="text-xs font-semibold text-rose-600">{dateError}</p>}
-    </div>
-    <div className={label}>
-      <span className="flex items-center gap-1"><label htmlFor={`${idPrefix}-credits`}>Maximum academic credits per student</label><InfoTip label="About Maximum academic credits">The most credits a student can enrol in this semester.</InfoTip></span>
-      <input id={`${idPrefix}-credits`} required type="number" min="0.5" max="60" step="0.5" aria-label="Maximum student credits" className={field} value={form.max_student_credits} onChange={event => setForm({ ...form, max_student_credits: Number(event.target.value) })} />
     </div>
     <fieldset className="space-y-3"><legend className="mb-2 text-xs font-semibold">Courses in this semester</legend>
       <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">{courseList()}</div>
@@ -170,7 +185,7 @@ export function SemestersPanel({ programmes, courses, onSaved, ...courseState }:
 
   const remove = async (term: AcademicSemester) => {
     const count = term.course_ids?.length ?? 0;
-    const courseText = count ? `Its ${count} course${count === 1 ? '' : 's'} stay with their students, classes and attendance, but leave this semester, so its dates and credit limit no longer apply to them.` : 'No courses are in this semester.';
+    const courseText = count ? `Its ${count} course${count === 1 ? '' : 's'} stay with their students, classes and attendance, but leave this semester, so its dates no longer apply to them.` : 'No courses are in this semester.';
     const ongoing = term.status === 'active' ? ' This semester is ongoing.' : '';
     if (!await swalConfirm(`Delete ${term.name}?`, `${courseText}${ongoing} Afterwards its courses and programme can be deleted.`, 'Delete semester', true)) return;
     setDeleting(term.id);
@@ -193,7 +208,7 @@ export function SemestersPanel({ programmes, courses, onSaved, ...courseState }:
       {!loaded && !loadError && <ShimmerSemesterCards />}
       {loaded && !loadError && !terms.length && <p className="py-8 text-center text-xs text-slate-400">No semesters yet.</p>}
       {terms.map(term => <article key={term.id} className="flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 sm:flex-row dark:border-slate-700 dark:bg-slate-800">
-        <div className="min-w-0 space-y-2"><h4 className="break-words text-sm font-bold">{term.name}</h4><p className="text-xs text-slate-500">{programmes.find(p => String(p.id) === term.programme_id)?.code} · {term.start_date} – {term.end_date}</p><p className="text-xs">{term.max_student_credits} credits maximum per student · {term.course_ids?.length ?? 0} courses</p><span className="inline-block rounded-full bg-blue-100 px-3 py-1 text-[10px] font-bold uppercase text-blue-700 dark:bg-blue-900 dark:text-blue-200">{term.status}</span></div>
+        <div className="min-w-0 space-y-2"><h4 className="break-words text-sm font-bold">{term.name}</h4><p className="text-xs text-slate-500">{programmes.find(p => String(p.id) === term.programme_id)?.code} · {term.start_date} – {term.end_date}</p><p className="text-xs">{term.course_ids?.length ?? 0} courses</p><span className="inline-block rounded-full bg-blue-100 px-3 py-1 text-[10px] font-bold uppercase text-blue-700 dark:bg-blue-900 dark:text-blue-200">{term.status}</span></div>
         <div className="flex shrink-0 gap-2 self-start">
           <button type="button" disabled={!!deleting} aria-label={`Edit ${term.name}`} onClick={() => setEditing(term)} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-brand-blue disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"><Pencil className="h-4 w-4" />Edit</button>
           <button type="button" disabled={!!deleting} aria-label={`Delete ${term.name}`} onClick={() => void remove(term)} className="flex items-center gap-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900 dark:bg-slate-900 dark:hover:bg-rose-950/40"><Trash2 className="h-4 w-4" />{deleting === term.id ? 'Deleting…' : 'Delete'}</button>

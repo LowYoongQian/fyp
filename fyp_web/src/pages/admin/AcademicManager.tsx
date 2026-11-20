@@ -11,7 +11,7 @@ import type { Programme, Course, LookupKind, LookupStudent, LookupStaff, LookupP
 import { useLookup } from '../../hooks/useLookup';
 import { useRecordPage } from '../../hooks/useRecordPage';
 import { swalSuccess, swalError, swalConfirm } from '../../utils/swal';
-import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays, Lock } from 'lucide-react';
+import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays } from 'lucide-react';
 import { LoadingRegion, ShimmerAcademics, ShimmerText } from '../../components/Shimmer';
 
 /** A bespoke picker's open list in the CustomDropdown look: pale selected and hover rows, rounded and padded, the scrollbar inside the rounded shell. */
@@ -160,14 +160,13 @@ const RowEdit: React.FC<{ label: string; onClick: () => void }> = ({ label, onCl
 );
 
 /**
- * Edit a saved course: code, title, credits and programme (put it in a programme, move it to another, or take it out). A course in a
+ * Edit a saved course: code, title and programme (put it in a programme, move it to another, or take it out). A course in a
  * semester keeps its programme (the server refuses a move, since the semester belongs to that programme), so the picker says so instead.
  * The course's lecturer is sent back unchanged.
  */
 function EditCourseDialog({ row, onClose, onSaved }: { row: CourseRecord; onClose: () => void; onSaved: (code: string) => void }) {
   const [code, setCode] = useState(row.course_code);
   const [name, setName] = useState(row.course_name);
-  const [credits, setCredits] = useState(String(row.credit_hours ?? 3));
   const [programme, setProgramme] = useState<{ id: string; label: string } | null>(
     row.programme_id ? { id: String(row.programme_id), label: `${row.programme_code} - ${row.programme_name}` } : null);
   const [open, setOpen] = useState(false);
@@ -178,19 +177,17 @@ function EditCourseDialog({ row, onClose, onSaved }: { row: CourseRecord; onClos
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving) return;
-    const value = Number(credits);
     const next: Errors = {
       code: code.trim() ? undefined : 'Enter a course code.',
       name: name.trim() ? undefined : 'Enter the course title.',
-      credits: credits && Number.isFinite(value) && value >= 0.5 && value <= 12 && value * 2 === Math.round(value * 2) ? undefined : 'Use 0.5 to 12 credits, in steps of 0.5.',
     };
     setErrors(next);
     setFailure(null);
-    if (focusFirstError(next, { code: 'edit-course-code', name: 'edit-course-name', credits: 'edit-course-credits' })) return;
+    if (focusFirstError(next, { code: 'edit-course-code', name: 'edit-course-name' })) return;
     setSaving(true);
     try {
       const saved = await apiService.adminUpdateCourse(row.id, {
-        course_code: code.trim(), course_name: name.trim(), credit_hours: value, lecturer_id: row.lecturer_id ?? null, programme_id: programme?.id ?? null,
+        course_code: code.trim(), course_name: name.trim(), lecturer_id: row.lecturer_id ?? null, programme_id: programme?.id ?? null,
       } as never);
       onSaved(saved.course_code ?? code.trim());
     } catch (error) {
@@ -218,10 +215,6 @@ function EditCourseDialog({ row, onClose, onSaved }: { row: CourseRecord; onClos
           <Field label="Course title" htmlFor="edit-course-name" error={errors.name}>
             <TextInput id="edit-course-name" type="text" value={name} aria-invalid={!!errors.name || undefined} aria-describedby={errors.name ? 'edit-course-name-error' : undefined}
               onChange={event => { setName(event.target.value); setErrors(current => ({ ...current, name: undefined })); }} className={`${INPUT} ${errors.name ? INVALID : ''}`} />
-          </Field>
-          <Field label="Credits" htmlFor="edit-course-credits" error={errors.credits} hint={locked ? 'Academic credits, 0.5 to 12. Students in its semester must still fit its credit limit.' : 'Academic credits, 0.5 to 12.'}>
-            <input id="edit-course-credits" type="number" min="0.5" max="12" step="0.5" value={credits} aria-invalid={!!errors.credits || undefined} aria-describedby={errors.credits ? 'edit-course-credits-error' : undefined}
-              onChange={event => { setCredits(event.target.value); setErrors(current => ({ ...current, credits: undefined })); }} className={`${INPUT} ${errors.credits ? INVALID : ''}`} />
           </Field>
           <Field label="Programme" htmlFor="edit-course-programme"
             hint={locked ? `It is in the semester ${row.semester!.name}, which belongs to this programme, so it cannot move. Delete that semester first to change it.`
@@ -393,7 +386,6 @@ export const AcademicManager: React.FC = () => {
   // ---------------- Courses ----------------
   const [courseCode, setCourseCode] = useState('');
   const [courseName, setCourseName] = useState('');
-  const [courseCredits, setCourseCredits] = useState('3');
   const [courseProgramme, setCourseProgramme] = useState<{ id: string; label: string } | null>(null);
   const [courseProgrammeOpen, setCourseProgrammeOpen] = useState(false);
   const [courseErrors, setCourseErrors] = useState<Errors>({});
@@ -401,18 +393,16 @@ export const AcademicManager: React.FC = () => {
   const addCourse = async (event: React.FormEvent) => {
     event.preventDefault();
     if (savingCourse) return;
-    const credits = Number(courseCredits);
     const errors: Errors = {
       code: courseCode.trim() ? undefined : 'Enter a course code.',
       name: courseName.trim() ? undefined : 'Enter the course title.',
-      credits: courseCredits && Number.isFinite(credits) && credits >= 0.5 && credits <= 12 && credits * 2 === Math.round(credits * 2) ? undefined : 'Use 0.5 to 12 credits, in steps of 0.5.',
     };
     setCourseErrors(errors);
-    if (focusFirstError(errors, { code: 'course-code', name: 'course-name', credits: 'course-credits' })) return;
+    if (focusFirstError(errors, { code: 'course-code', name: 'course-name' })) return;
     setSavingCourse(true);
     try {
-      const saved = await apiService.adminCreateCourse({ course_name: courseName.trim(), course_code: courseCode.trim(), credit_hours: credits, lecturer_id: null, programme_id: courseProgramme?.id ?? null } as never);
-      setCourseCode(''); setCourseName(''); setCourseCredits('3'); setCourseProgramme(null); setCourseErrors({});
+      const saved = await apiService.adminCreateCourse({ course_name: courseName.trim(), course_code: courseCode.trim(), lecturer_id: null, programme_id: courseProgramme?.id ?? null } as never);
+      setCourseCode(''); setCourseName(''); setCourseProgramme(null); setCourseErrors({});
       showSaved('courses', saved.course_code, String(saved.id));
       if (referenceState !== 'idle') void loadReference();
       void swalSuccess('Course added', `${saved.course_code} is ready to use.`);
@@ -445,13 +435,13 @@ export const AcademicManager: React.FC = () => {
   // ---------------- Staff roles ----------------
   const [assignStaff, setAssignStaff] = useState<{ id: string; label: string } | null>(null);
   const [assignCourse, setAssignCourse] = useState<{ id: string; label: string; code: string } | null>(null);
-  const [assignRole, setAssignRole] = useState<(typeof ROLES)[number]>('Lecturer');
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [assignStaffOpen, setAssignStaffOpen] = useState(false);
   const [assignCourseOpen, setAssignCourseOpen] = useState(false);
   const [assignErrors, setAssignErrors] = useState<Errors>({});
   const [savingAssignment, setSavingAssignment] = useState(false);
-  // The roles the chosen person already has in the chosen course. One role per person per course: once they have one, the choice is locked.
-  const [heldAnswer, setHeldAnswer] = useState<{ key: string; roles: string[] } | null>(null);
+  // The roles the chosen person already has in the chosen course.
+  const [heldAnswer, setHeldAnswer] = useState<{ key: string; roles: string[]; failed?: boolean } | null>(null);
   const heldKey = assignStaff && assignCourse ? `${assignStaff.id}|${assignCourse.id}` : '';
   useEffect(() => {
     if (!heldKey) return;
@@ -459,23 +449,25 @@ export const AcademicManager: React.FC = () => {
     const [staffId, courseId] = heldKey.split('|');
     apiService.adminGetAssignments().then(
       rows => { if (live) setHeldAnswer({ key: heldKey, roles: rows.filter(row => String(row.lecturer_id) === staffId && String(row.course_id) === courseId).map(row => row.role) }); },
-      () => { if (live) setHeldAnswer({ key: heldKey, roles: [] }); });   // unknown: the server still refuses the same role twice
+      () => { if (live) setHeldAnswer({ key: heldKey, roles: [], failed: true }); });
     return () => { live = false; };
   }, [heldKey, version]);
   const heldRoles = heldAnswer?.key === heldKey ? heldAnswer.roles : [];
+  const rolesReady = !!heldKey && heldAnswer?.key === heldKey && !heldAnswer.failed;
+  const newRoles = selectedRoles.filter(role => !heldRoles.includes(role));
   const addAssignment = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (savingAssignment || heldRoles.length) return;
+    if (savingAssignment || !rolesReady || !newRoles.length) return;
     const errors: Errors = { staff: assignStaff ? undefined : 'Choose a staff member.', course: assignCourse ? undefined : 'Choose a course.' };
     setAssignErrors(errors);
     if (focusFirstError(errors, { staff: 'assign-staff', course: 'assign-course' })) return;
     setSavingAssignment(true);
     try {
-      const saved = await apiService.adminCreateAssignment({ course_id: assignCourse!.id, lecturer_id: assignStaff!.id, role: assignRole });
+      const saved = await apiService.adminCreateAssignments({ course_id: assignCourse!.id, lecturer_id: assignStaff!.id, roles: newRoles });
       const code = assignCourse!.code;
-      setAssignStaff(null); setAssignCourse(null); setAssignErrors({});
-      showSaved('staff', code, saved?.id ? String(saved.id) : undefined);
-      void swalSuccess('Staff assigned', `${assignRole} role added for ${code}.`);
+      setAssignStaff(null); setAssignCourse(null); setSelectedRoles([]); setAssignErrors({});
+      showSaved('staff', code, saved[0] ? String(saved[0].id) : undefined);
+      void swalSuccess('Staff assigned', `${newRoles.join(", ")} saved for ${code}.`);
     } catch (error) {
       const status = (error as ApiFailure).response?.status;
       void swalError(status ? 'Not assigned' : 'Could not confirm', status ? detailOf(error, 'Please try again.') : 'The connection failed. Check the list before trying again; your entries are kept.');
@@ -496,7 +488,7 @@ export const AcademicManager: React.FC = () => {
   const [programme, setProgramme] = useState<{ id: string; label: string } | null>(null);
   const [course, setCourse] = useState<LookupCourse | null>(null);
   const [group, setGroup] = useState('');
-  // The answer for one course and student; anything else (no course yet, or another pick) reads as not loaded yet.
+  // The answer for one course; anything else (no course yet, or another pick) reads as not loaded yet.
   const [checkAnswer, setCheckAnswer] = useState<{ key: string; data?: AllocationCheck; failed?: boolean } | null>(null);
   const [openPicker, setOpenPicker] = useState<'' | 'student' | 'programme' | 'course' | 'group'>('');
   const [allocErrors, setAllocErrors] = useState<Errors>({});
@@ -507,13 +499,13 @@ export const AcademicManager: React.FC = () => {
 
   const manualGroups = (courseId: string): string[] => { try { return JSON.parse(localStorage.getItem(`sas_manual_groups_${courseId}`) || '[]'); } catch { return []; } };
 
-  // A course was picked: fetch its real groups and the student's credits; choose the first group with room.
-  const checkKey = course ? `${course.id}|${student?.id ?? ''}` : '';
+  // A course was picked: fetch its real groups; choose the first group with room.
+  const checkKey = course?.id ?? '';
   useEffect(() => {
     if (!checkKey) return;
-    const [courseId, studentId] = checkKey.split('|');
+    const courseId = checkKey;
     const controller = new AbortController();
-    apiService.adminAllocationCheck(courseId, studentId || undefined, controller.signal).then(result => {
+    apiService.adminAllocationCheck(courseId, controller.signal).then(result => {
       setCheckAnswer({ key: checkKey, data: result });
       setGroup(current => current || result.groups.find(item => !item.full)?.group || '');
     }, () => { if (!controller.signal.aborted) setCheckAnswer({ key: checkKey, failed: true }); });
@@ -658,7 +650,7 @@ export const AcademicManager: React.FC = () => {
             <div className="min-w-0 space-y-1">
               <p className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm font-bold text-brand-blue">{row.course_code}</span><StatusPill status={row.semester?.status ?? 'undated'} /></p>
               <p className="break-words text-sm font-semibold text-slate-800 dark:text-slate-100">{row.course_name}</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400">{row.credit_hours ?? 0} credits · {row.programme_code ? `${row.programme_code} - ${row.programme_name}` : 'No programme'}{row.semester ? ` · ${row.semester.name} (${row.semester.start_date} – ${row.semester.end_date})` : ''}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{row.programme_code ? `${row.programme_code} - ${row.programme_name}` : 'No programme'}{row.semester ? ` · ${row.semester.name} (${row.semester.start_date} – ${row.semester.end_date})` : ''}</p>
               <p className="text-xs text-slate-500 dark:text-slate-400">{row.enrolment_count} enrolled · {row.session_count} class session{row.session_count === 1 ? '' : 's'}</p>
             </div>
             <div className="flex shrink-0 gap-1">
@@ -741,10 +733,6 @@ export const AcademicManager: React.FC = () => {
           <TextInput id="course-name" type="text" placeholder="e.g. Database Management Systems" value={courseName} aria-invalid={!!courseErrors.name || undefined} aria-describedby={courseErrors.name ? 'course-name-error' : undefined}
             onChange={event => { setCourseName(event.target.value); setCourseErrors(current => ({ ...current, name: undefined })); }} className={`${INPUT} ${courseErrors.name ? INVALID : ''}`} />
         </Field>
-        <Field label="Credits" htmlFor="course-credits" error={courseErrors.credits} hint="Academic credits, 0.5 to 12.">
-          <input id="course-credits" type="number" min="0.5" max="12" step="0.5" value={courseCredits} aria-invalid={!!courseErrors.credits || undefined} aria-describedby={courseErrors.credits ? 'course-credits-error' : undefined}
-            onChange={event => { setCourseCredits(event.target.value); setCourseErrors(current => ({ ...current, credits: undefined })); }} className={`${INPUT} ${courseErrors.credits ? INVALID : ''}`} />
-        </Field>
         <Field label="Programme (optional)" htmlFor="course-programme" hint="A course in a programme can only be taken by that programme’s students.">
           <Picker id="course-programme" name="course-programme" value={courseProgramme?.label ?? ''} placeholder="No programme" open={courseProgrammeOpen} setOpen={setCourseProgrammeOpen}>
             <LookupMenu<LookupProgramme> kind="programmes" placeholder="Search programme code or name"
@@ -753,7 +741,7 @@ export const AcademicManager: React.FC = () => {
               onSelect={p => { setCourseProgramme({ id: String(p.id), label: `${p.code} - ${p.name}` }); setCourseProgrammeOpen(false); }} />
           </Picker>
         </Field>
-        {actions('Add course', savingCourse, 'Adding…', () => { setCourseCode(''); setCourseName(''); setCourseCredits('3'); setCourseProgramme(null); setCourseErrors({}); }, !!(courseCode || courseName || courseProgramme || courseCredits !== '3'))}
+        {actions('Add course', savingCourse, 'Adding…', () => { setCourseCode(''); setCourseName(''); setCourseProgramme(null); setCourseErrors({}); }, !!(courseCode || courseName || courseProgramme))}
       </form>
     ));
     if (tab === 'staff') return formCard('Assign staff', Plus, (
@@ -762,41 +750,33 @@ export const AcademicManager: React.FC = () => {
           <Picker id="assign-staff" name="assign-staff" value={assignStaff?.label ?? ''} placeholder="Choose staff" open={assignStaffOpen} setOpen={setAssignStaffOpen} invalid={!!assignErrors.staff}>
             <LookupMenu<LookupStaff> kind="staff" placeholder="Search name, staff ID or email"
               option={s => ({ primary: s.name, secondary: s.staff_id, secondaryMono: true })} selectedId={assignStaff?.id ?? ''}
-              onSelect={s => { setAssignStaff({ id: String(s.id), label: `${s.name} (${s.staff_id})` }); setAssignStaffOpen(false); setAssignErrors(current => ({ ...current, staff: undefined })); }} />
+              onSelect={s => { setSelectedRoles([]); setAssignStaff({ id: String(s.id), label: `${s.name} (${s.staff_id})` }); setAssignStaffOpen(false); setAssignErrors(current => ({ ...current, staff: undefined })); }} />
           </Picker>
         </Field>
         <Field label="Course" htmlFor="assign-course" error={assignErrors.course}>
           <Picker id="assign-course" name="assign-course" value={assignCourse?.label ?? ''} placeholder="Choose a course" open={assignCourseOpen} setOpen={setAssignCourseOpen} invalid={!!assignErrors.course}>
             <LookupMenu<LookupCourse> kind="courses" placeholder="Search course code or name"
               option={c => ({ primary: c.course_code, secondary: c.course_name, mono: true })} selectedId={assignCourse?.id ?? ''}
-              onSelect={c => { setAssignCourse({ id: String(c.id), label: `${c.course_code} - ${c.course_name}`, code: c.course_code }); setAssignCourseOpen(false); setAssignErrors(current => ({ ...current, course: undefined })); }} />
+              onSelect={c => { setSelectedRoles([]); setAssignCourse({ id: String(c.id), label: `${c.course_code} - ${c.course_name}`, code: c.course_code }); setAssignCourseOpen(false); setAssignErrors(current => ({ ...current, course: undefined })); }} />
           </Picker>
         </Field>
         <fieldset className="space-y-1.5" aria-describedby="assign-role-note">
           <legend className="text-xs font-semibold text-slate-700 dark:text-slate-200">Teaching role</legend>
-          <div role="radiogroup" aria-label="Teaching role" className="grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
-            {ROLES.map(role => {
-              const held = heldRoles.includes(role), locked = heldRoles.length > 0, on = locked ? held : assignRole === role;
-              return (
-                <button key={role} type="button" role="radio" aria-checked={on} disabled={locked} onClick={() => setAssignRole(role)}
-                  className={`flex items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40 disabled:cursor-not-allowed ${
-                    held ? 'bg-slate-200/80 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
-                    : locked ? 'text-slate-400 opacity-50 dark:text-slate-500'
-                    : on ? 'bg-white text-brand-blue shadow-sm dark:bg-slate-900 dark:text-blue-300' : 'text-slate-600 hover:text-slate-900 dark:text-slate-300'}`}>
-                  {held && <Lock className="h-3 w-3" aria-hidden="true" />}{role}
-                </button>
-              );
-            })}
+          <div className="flex flex-wrap gap-4">
+            {ROLES.map(role => <label key={role} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={heldRoles.includes(role) || selectedRoles.includes(role)} disabled={!rolesReady || heldRoles.includes(role)}
+                onChange={event => setSelectedRoles(previous => event.target.checked ? [...previous, role] : previous.filter(item => item !== role))} />
+              {role}{heldRoles.includes(role) && ' (assigned)'}
+            </label>)}
           </div>
-          {heldRoles.length > 0
-            ? <p id="assign-role-note" role="status" className="flex items-start gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300"><Lock className="mt-0.5 h-3 w-3 shrink-0" />{assignStaff?.label} already teaches {assignCourse?.code} as {heldRoles.join(' and ')}. Remove that role from the list to change it.</p>
-            : <p id="assign-role-note" className="text-[11px] text-slate-500 dark:text-slate-400">The role this person has in this course, whatever their account role is.</p>}
+          <p id="assign-role-note" className="text-xs text-slate-500">{heldKey && heldAnswer?.key === heldKey && heldAnswer.failed
+            ? <>Assigned roles could not be loaded. <button type="button" className="underline" onClick={refresh}>Retry</button></>
+            : heldKey && !rolesReady ? 'Loading assigned roles…' : 'Select the teaching roles to add. Assigned roles can be removed from the list.'}</p>
         </fieldset>
-        {actions('Assign staff', savingAssignment, 'Assigning…', () => { setAssignStaff(null); setAssignCourse(null); setAssignRole('Lecturer'); setAssignErrors({}); }, !!(assignStaff || assignCourse), heldRoles.length > 0)}
+        {actions('Assign staff', savingAssignment, 'Assigning…', () => { setAssignStaff(null); setAssignCourse(null); setSelectedRoles([]); setAssignErrors({}); }, !!(assignStaff || assignCourse || selectedRoles.length), !rolesReady || !newRoles.length)}
       </form>
     ));
     const chosenGroup = groups.find(item => item.group === group);
-    const creditsAfter = check?.credits_used != null && course ? check.credits_used + Number(check.course_credits ?? course.credit_hours ?? 0) : null;
     return formCard('Enrol student', Plus, (
       <form noValidate onSubmit={saveAllocation} className="space-y-4">
         <Field label="Student" htmlFor="alloc-student" error={allocErrors.student} hint="Students without a course this semester are listed first; search to find anyone.">
@@ -858,8 +838,6 @@ export const AcademicManager: React.FC = () => {
             <dt className="text-slate-500 dark:text-slate-400">Course</dt><dd className="min-w-0 break-words font-semibold text-slate-800 dark:text-slate-100">{course.course_code} - {course.course_name}</dd>
             <dt className="text-slate-500 dark:text-slate-400">Group</dt><dd className="font-semibold text-slate-800 dark:text-slate-100">{group ? groupLabel(group) : '—'}</dd>
             <dt className="text-slate-500 dark:text-slate-400">Semester</dt><dd className="font-semibold text-slate-800 dark:text-slate-100">{semesterName || '—'}</dd>
-            {creditsAfter != null && check?.credits_limit != null && <><dt className="text-slate-500 dark:text-slate-400">Credits</dt>
-              <dd className={`font-semibold ${creditsAfter > check.credits_limit ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-100'}`}>{creditsAfter} of {check.credits_limit} after saving{creditsAfter > check.credits_limit ? ' — over the limit' : ''}</dd></>}
           </dl>
         )}
         {actions('Save Student Allocation', savingAllocation, 'Saving Allocation...', resetAllocation, !!student)}

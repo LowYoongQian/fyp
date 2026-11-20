@@ -1,10 +1,11 @@
 import random
 from datetime import datetime, timedelta
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from db.models import ClassMeeting, Course, CourseStaffAssignment, Enrolment
-from utils.timeutil import local_offset
+from db.models import AcademicSemester, ClassMeeting, Course, CourseStaffAssignment, Enrolment
+from utils.timeutil import campus_now, local_offset
 
 # ---------------------------------------------------------------------------
 # Timetable = the class_meetings table (single source of truth).
@@ -53,7 +54,7 @@ def meeting_key_for(role: str, course_id, assignment_id, class_group=None) -> st
     return f"{role}-{assignment_id}-{class_group}"
 
 
-def calculate_schedule(db: Session) -> dict:
+def calculate_schedule(db: Session, *, course_id=None, for_session_creation=False) -> dict:
     """Return { meeting_key: {day,start,end,room,role,course_id,assignment_id,class_group} }
     read from class_meetings.
 
@@ -67,7 +68,13 @@ def calculate_schedule(db: Session) -> dict:
     The identifying fields ride along in each value so callers that need every group
     of one assignment can filter on them instead of parsing the key back apart.
     """
-    rows = db.query(ClassMeeting).options(joinedload(ClassMeeting.course)).all()
+    rows = db.query(ClassMeeting).options(joinedload(ClassMeeting.course))
+    if course_id is not None:
+        rows = rows.filter(ClassMeeting.course_id == course_id)
+    if for_session_creation:
+        # Keep the schedule read and the dated session insert atomic with a timetable edit.
+        rows = rows.order_by(ClassMeeting.id).with_for_update(read=True, of=ClassMeeting)
+
     return {
         meeting_key_for(r.role, r.course_id, r.assignment_id, r.class_group): {
             "day": r.day, "start": r.start, "end": r.end, "room": r.room,
@@ -117,7 +124,7 @@ def get_course_group_slots(db: Session, course_id: str, class_group: str) -> lis
     check using another group's slot, and left the window calculation taking whichever
     tutorial the database happened to list first.
     """
-    slots = calculate_schedule(db).values()
+    slots = calculate_schedule(db, course_id=course_id).values()
     if class_group == "All":
         return [s for s in slots if s["course_id"] == course_id and s["role"] == "Lecture"]
     return [
@@ -295,11 +302,31 @@ def generate_clashfree_slots(db: Session) -> list:
     return [{**m, **allocated[m["meeting_key"]]} for m in meetings]
 
 
+def conflicting_meetings(db, course):
+    """Only semesters sharing calendar dates can compete for a weekly slot."""
+    query = db.query(ClassMeeting).join(Course).outerjoin(AcademicSemester, Course.semester_id == AcademicSemester.id)
+    term = course.semester
+    overlaps = AcademicSemester.end_date >= (term.start_date if term else campus_now().date())
+    if term:
+        overlaps &= AcademicSemester.start_date <= term.end_date
+    return query.filter(or_(Course.semester_id.is_(None), overlaps))
+
+
+def lecturer_slot_conflict(db, meeting, lecturer_id):
+    start, end = _hhmm_to_min(meeting.start), _hhmm_to_min(meeting.end)
+    same_day = conflicting_meetings(db, meeting.course).filter(
+        ClassMeeting.id != meeting.id, ClassMeeting.day == meeting.day,
+        ClassMeeting.lecturer_id == lecturer_id,
+    )
+    return next((slot for slot in same_day if start < _hhmm_to_min(slot.end)
+                 and _hhmm_to_min(slot.start) < end), None)
+
+
 def pick_slot_for_new(db: Session, course_id: str, lecturer_id, role: str) -> dict:
     """Pick one clash-free slot for a single new meeting, against the slots
     already taken by existing class_meetings rows. Raises ValueError if full."""
     occupied_rooms, occupied_lecturers, occupied_courses = set(), set(), set()
-    for r in db.query(ClassMeeting).all():
+    for r in conflicting_meetings(db, db.get(Course, course_id)).all():
         # A manually edited lesson need not use a default grid interval.
         # Reserve each candidate interval it overlaps; touching remains allowed.
         for t in TIMES:

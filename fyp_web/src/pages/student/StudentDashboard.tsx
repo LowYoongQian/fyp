@@ -202,7 +202,6 @@ export const StudentDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
     : overallAttendance === null ? 'No completed classes'
     : hasLowCourse ? 'Below 80% in at least one course — review course attendance'
     : 'No course below the 80% attendance threshold';
-  const totalCreditHours = enrolments.reduce((acc, curr) => acc + (curr.credit_hours ?? 0), 0);
   const weeklyTrendData = statistics.weekly;
   const courseComparisonData = enrolments.map(e => ({
     code: e.course_code, name: e.course_name, rate: getAttendanceRateForCourse(e.course_id),
@@ -332,7 +331,7 @@ export const StudentDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
           <div className="space-y-1">
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">Current Courses</span>
             <span className="text-2xl font-display font-extrabold text-slate-900 dark:text-slate-100">{scopeReady ? enrolments.length : '—'}</span>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">{!scopeReady ? 'Updating' : enrolments.length ? `(${totalCreditHours} Credit Hours total)` : 'No current courses assigned'}</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">{!scopeReady ? 'Updating' : enrolments.length ? '' : 'No current courses assigned'}</span>
           </div>
           <div className="p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 text-blue-600 dark:text-blue-400 rounded-xl">
             <BookOpen className="h-5 w-5" />
@@ -598,7 +597,7 @@ export const StudentDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
                         {e.course_name}
                       </h4>
                       <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
-                        Credit Hours: {e.credit_hours} · Room: {e.schedule_room || 'TBA'}
+                        Room: {e.schedule_room || 'TBA'}
                       </p>
                     </div>
 

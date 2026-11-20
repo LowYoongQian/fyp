@@ -139,7 +139,6 @@ export interface Course {
   id: number | string;
   course_name: string;
   course_code: string;
-  credit_hours?: number | null;
   lecturer_id: number | string | null;
   lecturer_name?: string | null;
   programme_id?: number | string | null;
@@ -178,16 +177,16 @@ export interface Enrolment {
 export type LookupKind = 'students' | 'staff' | 'programmes' | 'courses';
 export type RecordKind = 'programmes' | 'courses' | 'assignments' | 'students';
 export type ProgrammeRecord = { id: string; code: string; name: string; student_count: number; course_count: number };
-export type CourseRecord = { id: string; course_code: string; course_name: string; credit_hours: number | null; lecturer_id: string | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
+export type CourseRecord = { id: string; course_code: string; course_name: string; lecturer_id: string | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
 export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; role: string };
 export type StudentRecord = { id: string; name: string; student_code: string; programme_id: string | null; programme_code: string | null; programme_name: string | null;
   enrolments: { id: string; course_id: string; course_code: string; course_name: string; class_group: string; semester_name: string | null; status: 'active' | 'upcoming' | 'ended' | 'undated' }[] };
-export type AllocationCheck = { groups: { group: string; count: number; full: boolean }[]; semester: AcademicSemester | null; course_credits: number | null; credits_used: number | null; credits_limit: number | null };
+export type AllocationCheck = { groups: { group: string; count: number; full: boolean }[]; semester: AcademicSemester | null };
 export type LookupPage<T> = { items: T[]; has_more: boolean };
 export type LookupStudent = { id: string; name: string; student_code: string; email: string; programme_id: string | null; programme_code: string | null; current_enrolled: boolean };
 export type LookupStaff = { id: string; name: string; staff_id: string; email: string; role: string };
 export type LookupProgramme = { id: string; code: string; name: string };
-export type LookupCourse = { id: string; course_code: string; course_name: string; credit_hours: number | null; programme_id: string | null; semester_id: string | null; semester: AcademicSemester | null; enrolled: boolean };
+export type LookupCourse = { id: string; course_code: string; course_name: string; programme_id: string | null; semester_id: string | null; semester: AcademicSemester | null; enrolled: boolean };
 
 export interface Programme {
   id: number | string;
@@ -201,13 +200,12 @@ export interface AcademicSemester {
   name: string;
   start_date: string;
   end_date: string;
-  max_student_credits: number;
   status: 'upcoming' | 'active' | 'ended';
   course_ids?: string[];
 }
 /** Read-only plan for carrying a semester's courses into a later one. `ready` is false while the system has no safe way to apply it. */
 export type RolloverCourse = {
-  course_id: string; course_code: string; course_name: string; credit_hours: number | null;
+  course_id: string; course_code: string; course_name: string;
   lecturer: { name: string; active: boolean } | null; staff: { name: string; role: string; active: boolean }[];
   groups: { group: string; students: number }[]; students: number; unassigned_students: number; students_eligible: number; students_without_active_account: number;
   would_copy: { staff: number; groups: number }; issues: string[]; status: 'clear' | 'needs_attention';
@@ -218,7 +216,7 @@ export type RolloverPreview = {
   totals: { source_courses: number; selected: number; needing_attention: number; students: number };
   courses: RolloverCourse[]; not_included: { course_id: string; course_code: string | null; reason: string }[];
 };
-export type SemesterWrite = Pick<AcademicSemester, 'programme_id' | 'name' | 'start_date' | 'end_date' | 'max_student_credits'> & { course_ids: string[] };
+export type SemesterWrite = Pick<AcademicSemester, 'programme_id' | 'name' | 'start_date' | 'end_date'> & { course_ids: string[] };
 /** One row of the semester list: authorised metadata from the semester records, with whether its timetable may be opened and why not. */
 export type TimetableSemester = AcademicSemester & {
   state: 'current' | 'upcoming' | 'ended';
@@ -427,7 +425,7 @@ export interface StudentDetails {
     recovery_email: string | null; recovery_email_verified: boolean;
   } | null;
   programme: { code: string; name: string } | null;
-  courses: { code: string; name: string; credits: number | null; semester: string | null; class_group: string | null }[];
+  courses: { code: string; name: string; semester: string | null; class_group: string | null }[];
   face: { is_registered: boolean; registration_version: string | null; sample_count: number | null; updated_at: string | null; photo_available: boolean };
 }
 
@@ -504,7 +502,6 @@ export interface StudentEnrolmentDetail {
   course_id: number | string;
   course_code: string;
   course_name: string;
-  credit_hours: number;
   semester: string;
   class_group: string;
   meeting_id?: string | null;
@@ -787,9 +784,9 @@ export const apiService = {
   // One page of an Academic Manager tab's record list, searched and paged on the server (ACADEMIC-UX-12). Never cached.
   adminRecords: async <T,>(kind: RecordKind, params: { search?: string; page: number; per_page: number }, signal?: AbortSignal): Promise<RecordPage<T>> =>
     (await api.get(`/admin/records/${kind}`, { params, signal, timeout: 15000 })).data,
-  // The picked course's groups with real seat counts, and the chosen student's credits in its semester. Read only.
-  adminAllocationCheck: async (courseId: string, studentId: string | undefined, signal?: AbortSignal): Promise<AllocationCheck> =>
-    (await api.get('/admin/lookup/allocation', { params: { course_id: courseId, student_id: studentId || undefined }, signal, timeout: 15000 })).data,
+  // The picked course's groups with seat counts.
+  adminAllocationCheck: async (courseId: string, signal?: AbortSignal): Promise<AllocationCheck> =>
+    (await api.get('/admin/lookup/allocation', { params: { course_id: courseId }, signal, timeout: 15000 })).data,
 
   // Admin backend CRUD endpoints
   adminGetStudents: async (skip?: number, limit?: number, search?: string): Promise<{ items: AdminStudent[]; total: number }> => {
@@ -865,7 +862,7 @@ export const apiService = {
   adminGetSemesters: async (): Promise<AcademicSemester[]> => (await api.get('/admin/semesters')).data,
   adminPreviewRollover: async (body: { source_semester_id: string; target_semester_id: string; course_ids?: string[] }, signal?: AbortSignal): Promise<RolloverPreview> =>
     (await api.post('/admin/semesters/rollover-preview', body, { signal })).data,
-  adminSaveSemester: async (body: SemesterWrite, id?: string): Promise<AcademicSemester> =>
+  adminSaveSemester: async (body: SemesterWrite | (Omit<SemesterWrite, 'end_date'> & { semester_type: 'long' | 'short' }), id?: string): Promise<AcademicSemester> =>
     (await (id ? api.put(`/admin/semesters/${id}`, body) : api.post('/admin/semesters', body))).data,
   adminDeleteSemester: async (id: string): Promise<{ message: string; detached_courses: number }> =>
     (await api.delete(`/admin/semesters/${id}`)).data,
@@ -921,8 +918,8 @@ export const apiService = {
     clearApiCache();
     return response.data;
   },
-  adminCreateAssignment: async (assignment: { course_id: number | string; lecturer_id: number | string; role: string }): Promise<CourseStaffAssignment> => {
-    const response = await api.post('/admin/assignments', assignment);
+  adminCreateAssignments: async (assignment: { course_id: string; lecturer_id: string; roles: string[] }): Promise<CourseStaffAssignment[]> => {
+    const response = await api.post('/admin/assignments/batch', assignment);
     clearApiCache();   // the assignment list (cached) now has this role
     return response.data;
   },

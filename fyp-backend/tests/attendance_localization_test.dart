@@ -56,7 +56,7 @@ void main({bool native = false}) {
             'startTime':'00:00','endTime':'23:59','room':'QA Room',
           }],announcements:const [],isDatabaseOffline:false,isSyncing:false,
           onLogout:(){},onSyncRequested:() async {},onTimetableRefresh:() async=>[],onRegisterFace:(){},
-          onCheckInComplete:(a,b,c,d,e,f,{int? challengeMs,Map<String,dynamic>? extraDetails}){},
+          onCheckInComplete:(a,b,c,d,e,{int? challengeMs,Map<String,dynamic>? extraDetails}){},
         ))));
         for(var i=0;i<15;i++) {await tester.pump(const Duration(milliseconds:20));}
         final dynamic dashboard=tester.state(find.byType(MainScreen));

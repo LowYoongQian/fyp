@@ -147,7 +147,7 @@ def _sync_class_sessions_now(db: Session):
         tz_offset = local_offset()
 
         now_local = now_utc + tz_offset
-        schedule_map = calculate_schedule(db)
+        schedule_map = calculate_schedule(db, for_session_creation=True)
         materialize_upcoming(db, now_utc, tz_offset, schedule_map)
 
         # Fetch existing dated classes once; scheduled_start is authoritative for

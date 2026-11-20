@@ -128,7 +128,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());await tester.pump(const Duration(seconds:11));
     },()=>MockClient((r) async {
       if(offline || r.headers['Authorization']!='Bearer A') return http.Response('{}',503);
-      if(r.url.path=='/lecturers/me/courses') return http.Response(jsonEncode([{'id':'A-course','course_code':secretA,'course_name':secretA,'credit_hours':3}]),200);
+      if(r.url.path=='/lecturers/me/courses') return http.Response(jsonEncode([{'id':'A-course','course_code':secretA,'course_name':secretA}]),200);
       if(r.url.path=='/lecturers/me/timetable') return http.Response(jsonEncode([{'id':'A-meeting','course_id':'A-course','course_code':secretA,'course_name':secretA,'schedule_day':'Monday','schedule_start':'10:00','schedule_end':'12:00'}]),200);
       return http.Response('[]',200);
     }));

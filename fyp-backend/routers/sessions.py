@@ -226,6 +226,8 @@ def open_session(body: SessionCreate, db: Session = Depends(get_db), current_use
     # clock is UTC on Railway — so this rejected every on-time open by 8 hours.
     now_local = campus_now()
     require_semester_date(db, course.id, now_local.date())
+    # Serialize opening against timetable edits and other opens for this course.
+    db.query(ClassMeeting.id).filter(ClassMeeting.course_id == course.id).order_by(ClassMeeting.id).with_for_update().all()
     slot = validate_session_opening(db, body.course_id, body.class_group, now_local, body.meeting_id)
     if not slot:
         raise HTTPException(status_code=400, detail="No matching class is scheduled today")
@@ -278,13 +280,11 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
     """Return today's owned timetable rows, materialized without opening attendance."""
     today = campus_now().date()
     day = today.strftime("%A")
-    if current_user.role == "admin":
-        meetings = db.query(ClassMeeting).filter(ClassMeeting.day == day).all()
-    else:
+    query = db.query(ClassMeeting).filter(ClassMeeting.day == day)
+    if current_user.role != "admin":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        meetings = db.query(ClassMeeting).filter(
-            ClassMeeting.day == day, ClassMeeting.lecturer_id == lecturer.id
-        ).all()
+        query = query.filter(ClassMeeting.lecturer_id == lecturer.id)
+    meetings = query.order_by(ClassMeeting.id).with_for_update().all()
     # The staff app refreshes this every 10 s with an 8 s limit: read courses and today's rows once, not per meeting.
     day_start, day_end = _scheduled_bounds({"start": "00:00", "end": "23:59"}, today)
     courses = {c.id: c for c in db.query(Course).filter(Course.id.in_({m.course_id for m in meetings}))} if meetings else {}

@@ -128,7 +128,7 @@ def build_preview(db: Session, source_id: str, target_id: str, course_ids=None) 
             issues.append("The target semester already has a course with this name.")
         eligible = sum(1 for e in enrolled if (s := students.get(e.student_id)) and (a := student_accounts.get(s.user_id)) and a.status == "Active")
         rows.append({
-            "course_id": course.id, "course_code": course.course_code, "course_name": course.course_name, "credit_hours": course.credit_hours,
+            "course_id": course.id, "course_code": course.course_code, "course_name": course.course_name,
             "lecturer": {"name": owner.name, "active": active(owner)} if owner else None,
             "staff": [{"name": staff[a.lecturer_id].name if a.lecturer_id in staff else "Unknown", "role": a.role, "active": active(staff.get(a.lecturer_id))} for a in assigned],
             "groups": [{"group": g, "students": n} for g, n in sorted(counts.items())], "students": len(enrolled), "unassigned_students": unassigned,

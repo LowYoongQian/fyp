@@ -80,7 +80,7 @@ def get_student_details(
         } if user else None,
         "programme": {"code": programme.code, "name": programme.name} if programme else None,
         "courses": sorted((
-            {"code": e.course.course_code, "name": e.course.course_name, "credits": e.course.credit_hours,
+            {"code": e.course.course_code, "name": e.course.course_name,
              "semester": e.course.semester.name if e.course.semester else e.semester, "class_group": e.class_group}
             for e in enrolments if e.course), key=lambda c: c["code"]),
         "face": {

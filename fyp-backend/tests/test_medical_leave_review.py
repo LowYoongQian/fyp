@@ -192,7 +192,7 @@ def test_background_sync_applies_future_leave_before_end_of_day_absences(db, mon
         scheduled_start=datetime(2026, 10, 7, 1), scheduled_end=datetime(2026, 10, 7, 3))
     db.add(lesson)
     db.commit()
-    monkeypatch.setattr(session_sync, "calculate_schedule", lambda _: {})
+    monkeypatch.setattr(session_sync, "calculate_schedule", lambda _, **kwargs: {})
     monkeypatch.setattr(session_sync, "utcnow", lambda: datetime(2026, 10, 7, 4))
     session_sync._sync_class_sessions_now(db)
     assert db.query(AttendanceRecord).one().status == "leave"

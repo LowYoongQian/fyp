@@ -167,14 +167,12 @@ class AcademicSemester(Base):
     __table_args__ = (
         UniqueConstraint("programme_id", "name", name="uq_semester_programme_name"),
         CheckConstraint("end_date >= start_date", name="ck_semester_dates"),
-        CheckConstraint("max_student_credits > 0 AND max_student_credits <= 60", name="ck_semester_credit_limit"),
     )
     id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     programme_id = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="RESTRICT"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
-    max_student_credits = Column(Float, nullable=False)
 
 
 class Student(Base):
@@ -211,7 +209,6 @@ class Course(Base):
     id           = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     course_name  = Column(String, nullable=False)
     course_code  = Column(String, unique=True, nullable=False)
-    credit_hours = Column(Float, default=3.0)
     planned_total_hours = Column(Float, nullable=True)
     semester_id  = Column(UUID(as_uuid=False), ForeignKey("academic_semesters.id", ondelete="RESTRICT"), nullable=True, index=True)
     lecturer_id  = Column(UUID(as_uuid=False), ForeignKey("lecturers.id"), index=True)
@@ -230,6 +227,7 @@ class Course(Base):
 # Course staff assignments table
 class CourseStaffAssignment(Base):
     __tablename__ = "course_staff_assignments"
+    __table_args__ = (UniqueConstraint("course_id", "lecturer_id", "role", name="uq_course_staff_role"),)
     id            = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     course_id     = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
     lecturer_id   = Column(UUID(as_uuid=False), ForeignKey("lecturers.id", ondelete="CASCADE"), nullable=False, index=True)
