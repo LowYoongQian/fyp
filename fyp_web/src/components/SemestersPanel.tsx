@@ -121,11 +121,10 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
       onChange={value => setForm({ ...form, programme_id: value, course_ids: [] })} />}
 </div>
     <label className={`block ${label}`}>Semester name<TextInput required aria-label="Semester name" className={field} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="2026 Semester 2" /></label>
-    {!editing && <label className={label}>Semester type
-      <select className={field} value={semesterType} onChange={event => setSemesterType(event.target.value === 'short' ? 'short' : 'long')}>
-        <option value="long">Long sem (14 weeks)</option><option value="short">Short sem (7 weeks)</option>
-      </select>
-    </label>}
+    {!editing && <div className={label}><span>Semester type</span>
+      <CustomDropdown<'long' | 'short'> fullWidth className="w-full" ariaLabel="Semester type" value={semesterType} onChange={setSemesterType}
+        options={[{ value: 'long', label: 'Long sem (14 weeks)' }, { value: 'short', label: 'Short sem (7 weeks)' }]} />
+    </div>}
     <div className="space-y-2">
       <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${editing ? '' : 'lg:grid-cols-1'}`}>
         <div className={label}><span className="flex items-center gap-1">Start date<InfoTip label="About the semester dates">Dates before today cannot be chosen (Malaysia time; today is {today}).{stored && (stored.start_date < today || stored.end_date < today) ? ' A saved past date stays unless you change it.' : ''}</InfoTip></span><DatePicker label="Semester start date" value={form.start_date} today={today} min={today} invalid={!!dateError} describedBy={`${idPrefix}-date-help`} onChange={start_date => setForm({ ...form, start_date })} /></div>

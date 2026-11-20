@@ -178,7 +178,7 @@ export type LookupKind = 'students' | 'staff' | 'programmes' | 'courses';
 export type RecordKind = 'programmes' | 'courses' | 'assignments' | 'students';
 export type ProgrammeRecord = { id: string; code: string; name: string; student_count: number; course_count: number };
 export type CourseRecord = { id: string; course_code: string; course_name: string; lecturer_id: string | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
-export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; role: string };
+export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; roles: { id: string; role: string }[] };
 export type StudentRecord = { id: string; name: string; student_code: string; programme_id: string | null; programme_code: string | null; programme_name: string | null;
   enrolments: { id: string; course_id: string; course_code: string; course_name: string; class_group: string; semester_name: string | null; status: 'active' | 'upcoming' | 'ended' | 'undated' }[] };
 export type AllocationCheck = { groups: { group: string; count: number; full: boolean }[]; semester: AcademicSemester | null };

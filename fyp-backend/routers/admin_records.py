@@ -5,7 +5,7 @@ Each list is searched, ordered and cut into pages in the database (at most 50 ro
 uses the shared record-page shape {items, total, page, per_page, stats}.
 """
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -68,14 +68,22 @@ def course_records(search: str = SEARCH, page: int = PAGE, per_page: int = PER_P
 def assignment_records(search: str = SEARCH, page: int = PAGE, per_page: int = PER_PAGE,
                        db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     """Who teaches what, in which teaching role (the assignment's own role, never the staff account's generic role)."""
-    query = (db.query(CourseStaffAssignment, Lecturer.name, Lecturer.staff_id, Course.course_code, Course.course_name)
-             .join(Lecturer, Lecturer.id == CourseStaffAssignment.lecturer_id)
-             .join(Course, Course.id == CourseStaffAssignment.course_id))
+    assignment = CourseStaffAssignment
+    columns = (assignment.lecturer_id, Lecturer.name, Lecturer.staff_id, assignment.course_id, Course.course_code, Course.course_name)
+    query = (db.query(*columns).select_from(assignment)
+             .join(Lecturer, Lecturer.id == assignment.lecturer_id)
+             .join(Course, Course.id == assignment.course_id))
     if search.strip():
-        query = query.filter(_match(Lecturer.name, Lecturer.staff_id, Course.course_code, Course.course_name, CourseStaffAssignment.role)(search.strip()))
-    rows, total, page = _page(query.order_by(Course.course_code, CourseStaffAssignment.role, Lecturer.name, CourseStaffAssignment.id), page, per_page)
-    return {"items": [{"id": a.id, "lecturer_id": a.lecturer_id, "lecturer_name": name, "staff_id": staff_id, "course_id": a.course_id,
-                       "course_code": code, "course_name": cname, "role": a.role} for a, name, staff_id, code, cname in rows],
+        query = query.filter(_match(Lecturer.name, Lecturer.staff_id, Course.course_code, Course.course_name, assignment.role)(search.strip()))
+    rows, total, page = _page(query.group_by(*columns).order_by(Course.course_code, Lecturer.name, assignment.lecturer_id, assignment.course_id), page, per_page)
+    groups = {(teacher, course): {"id": f"{teacher}:{course}", "lecturer_id": teacher, "lecturer_name": name, "staff_id": staff,
+                                 "course_id": course, "course_code": code, "course_name": title, "roles": []}
+              for teacher, name, staff, course, code, title in rows}
+    if groups:
+        roles = db.query(assignment).filter(tuple_(assignment.lecturer_id, assignment.course_id).in_(list(groups)))
+        for role in roles.order_by(assignment.role):
+            groups[role.lecturer_id, role.course_id]["roles"].append({"id": role.id, "role": role.role})
+    return {"items": list(groups.values()),
             "total": total, "page": page, "per_page": per_page, "stats": {}}
 
 

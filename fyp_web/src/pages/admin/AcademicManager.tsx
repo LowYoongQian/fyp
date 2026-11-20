@@ -466,7 +466,7 @@ export const AcademicManager: React.FC = () => {
       const saved = await apiService.adminCreateAssignments({ course_id: assignCourse!.id, lecturer_id: assignStaff!.id, roles: newRoles });
       const code = assignCourse!.code;
       setAssignStaff(null); setAssignCourse(null); setSelectedRoles([]); setAssignErrors({});
-      showSaved('staff', code, saved[0] ? String(saved[0].id) : undefined);
+      showSaved('staff', code, saved[0] ? `${saved[0].lecturer_id}:${saved[0].course_id}` : undefined);
       void swalSuccess('Staff assigned', `${newRoles.join(", ")} saved for ${code}.`);
     } catch (error) {
       const status = (error as ApiFailure).response?.status;
@@ -474,10 +474,10 @@ export const AcademicManager: React.FC = () => {
       if (!status) refresh();
     } finally { setSavingAssignment(false); }
   };
-  const deleteAssignment = async (row: AssignmentRecord) => {
-    if (!await swalConfirm('Remove this teaching role?', `${row.lecturer_name} will no longer be the ${row.role.toLowerCase()} for ${row.course_code}. Past classes and attendance are kept.`, 'Remove role', true)) return;
+  const deleteAssignment = async (row: AssignmentRecord, assignment: AssignmentRecord['roles'][number]) => {
+    if (!await swalConfirm('Remove this teaching role?', `${row.lecturer_name} will no longer be the ${assignment.role.toLowerCase()} for ${row.course_code}. Past classes and attendance are kept.`, 'Remove role', true)) return;
     try {
-      await apiService.adminDeleteAssignment(row.id);
+      await apiService.adminDeleteAssignment(assignment.id);
       refresh();
       void swalSuccess('Role removed', `${row.lecturer_name} · ${row.course_code}`);
     } catch (error) { void swalError('Role not removed', detailOf(error, 'Please try again.')); }
@@ -671,10 +671,9 @@ export const AcademicManager: React.FC = () => {
           <div className={`${ROW(lit)} flex items-center justify-between gap-3`}>
             <div className="min-w-0 space-y-1">
               <p className="flex flex-wrap items-center gap-2"><span className="text-sm font-bold text-slate-800 dark:text-slate-100">{row.lecturer_name}</span><span className="font-mono text-xs text-slate-500">{row.staff_id}</span>
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${row.role === 'Lecturer' ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300' : row.role === 'Tutor' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'}`}>{row.role}</span></p>
+                {row.roles.map(role => <button key={role.id} type="button" aria-label={`Remove ${role.role} role of ${row.lecturer_name} for ${row.course_code}`} onClick={() => void deleteAssignment(row, role)} className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${role.role === 'Lecturer' ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300' : role.role === 'Tutor' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'}`}>{role.role}<X aria-hidden="true" className="ml-1 inline size-3" /></button>)}</p>
               <p className="break-words text-xs text-slate-600 dark:text-slate-300"><span className="font-mono font-bold text-brand-blue">{row.course_code}</span> {row.course_name}</p>
             </div>
-            <RowDelete label={`Remove ${row.role} role of ${row.lecturer_name} for ${row.course_code}`} onClick={() => void deleteAssignment(row)} />
           </div>
         )}
       </RecordsPanel>
@@ -763,9 +762,10 @@ export const AcademicManager: React.FC = () => {
         <fieldset className="space-y-1.5" aria-describedby="assign-role-note">
           <legend className="text-xs font-semibold text-slate-700 dark:text-slate-200">Teaching role</legend>
           <div className="flex flex-wrap gap-4">
-            {ROLES.map(role => <label key={role} className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={heldRoles.includes(role) || selectedRoles.includes(role)} disabled={!rolesReady || heldRoles.includes(role)}
+            {ROLES.map(role => <label key={role} className="relative flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 has-checked:border-brand-blue has-checked:bg-blue-50 has-checked:text-brand-blue has-focus-visible:ring-2 has-focus-visible:ring-brand-blue has-disabled:cursor-default dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:has-checked:bg-blue-950">
+              <input className="peer sr-only" type="checkbox" checked={heldRoles.includes(role) || selectedRoles.includes(role)} disabled={!rolesReady || heldRoles.includes(role)}
                 onChange={event => setSelectedRoles(previous => event.target.checked ? [...previous, role] : previous.filter(item => item !== role))} />
+              <span aria-hidden="true" className="grid size-4 place-items-center rounded-[5px] border border-slate-300 bg-white text-transparent peer-checked:border-brand-blue peer-checked:bg-brand-blue peer-checked:text-white dark:border-slate-600 dark:bg-slate-900"><Check className="size-3" /></span>
               {role}{heldRoles.includes(role) && ' (assigned)'}
             </label>)}
           </div>
