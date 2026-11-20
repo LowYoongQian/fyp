@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.14
+
+- When a check-in is refused, the dialog shows the server's exact reason, including the IP address it saw.
+- "Unable to verify your network" and "outside the approved campus network" are shown as network results, not as a lost connection.
+- Includes the v0.1.13 changes; v0.1.13 was tagged but never published.
+
 ## Client IP detection on Azure — 2026-11-20 00:03
 - The backend can now read the visitor's address from the Azure App Service front end (setting CLIENT_IP_SOURCE=azure_app_service), so Network Security detection and campus check-in work on the hosted server.
 - On the hosted server only the campus public IP counts; a saved local Wi-Fi range, the server's own address or anything the phone reports can never approve a check-in.
