@@ -104,8 +104,15 @@ def sessions(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db),
     current = decode_token(token).get('sid')
     rows = db.query(AuthSession).filter(AuthSession.user_id == actor.id, AuthSession.revoked_at.is_(None),
         AuthSession.expires_at > utcnow(), AuthSession.auth_version == actor.auth_version).order_by(AuthSession.created_at.desc()).limit(50).all()
+    # One entry per device: browser tabs share a device key and each keeps its own session, so they are listed once (the current one if
+    # it is among them, else the newest). Sessions from before device keys were recorded stand alone.
+    devices = {}
+    for row in rows:
+        devices.setdefault(row.device_key or str(row.id), []).append(row)
+    shown = [next((row for row in group if str(row.id) == current), group[0]) for group in devices.values()]
     return [{'id': row.id, 'device_label': row.device_label, 'created_at': iso_utc(row.created_at),
-             'expires_at': iso_utc(row.expires_at), 'current': str(row.id) == current} for row in rows]
+             'expires_at': iso_utc(row.expires_at), 'current': str(row.id) == current, 'ip_address': row.ip_address,
+             'kind': 'app' if (row.device_key or '').startswith('app:') or row.device_label == 'Mobile device' else 'web'} for row in shown]
 
 
 @router.post('/logout')

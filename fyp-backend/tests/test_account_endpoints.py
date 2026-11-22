@@ -38,7 +38,7 @@ def test_session_list_never_exposes_other_users_or_dead_sessions(context):
     rows = response.json()
     assert {r['id'] for r in rows} == {str(current.id), str(second.id)}
     assert {r['id'] for r in rows if r['current']} == {str(current.id)}
-    assert all(set(r) <= {'id', 'device_label', 'created_at', 'expires_at', 'current'} for r in rows)
+    assert all(set(r) <= {'id', 'device_label', 'created_at', 'expires_at', 'current', 'ip_address', 'kind'} for r in rows)
     other_rows = client.get('/auth/sessions', headers=headers(other, other_session)).json()
     assert {r['id'] for r in other_rows} == {str(other_session.id)}
 

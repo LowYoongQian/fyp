@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Shield, KeyRound, Monitor, Copy, X } from 'lucide-react';
+import { Shield, KeyRound, Monitor, Smartphone, Copy, X } from 'lucide-react';
+import { attendanceDateTime } from '../utils/attendanceTime';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { ModalLayer } from './ModalLayer';
@@ -8,7 +9,8 @@ import { ShimmerText } from './Shimmer';
 import { OtpInput } from './OtpInput';
 
 type Setup = { secret: string; qr_data_url: string };
-type Session = { id: string; device_label: string; created_at: string; current: boolean };
+type Session = { id: string; device_label: string; created_at: string; current: boolean; ip_address?: string | null; kind?: 'app' | 'web' };
+const signedIn = (value: string) => attendanceDateTime(value).replace(/:\d\d (?=[ap]m)/i, ' ');
 const button = 'uipro-button uipro-button-primary';
 const secondaryButton = 'uipro-button uipro-button-secondary';
 const input = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm';
@@ -59,8 +61,14 @@ export function AccountSecurityPanel({ enabled: initialEnabled }: { enabled: boo
       <button type="button" className={button} onClick={() => open('recovery-codes')}>Replace recovery codes</button>
       <button type="button" className={secondaryButton} onClick={() => open('disable')}>Disable 2FA</button></>}</div>
     <div className="border-t border-slate-200 pt-4 space-y-3"><h5 className="text-xs font-bold flex gap-2"><Monitor size={16} />Signed-in devices</h5>
-      {sessionError ? <p role="alert" className="text-xs text-red-600">{sessionError}</p> : sessions === null ? <div role="status" aria-label="Checking your devices" aria-busy="true" className="space-y-2"><ShimmerText height="h-8" /><ShimmerText height="h-8" /></div> : sessions.map(session => <div key={session.id} className="flex justify-between gap-3 rounded-xl border bg-white p-3 text-xs">
-        <span>{session.device_label}<span className="block mt-1 text-slate-500">{new Date(session.created_at).toLocaleString()}</span></span>{session.current && <span className="text-blue-600">This device</span>}</div>)}
+      {sessionError ? <p role="alert" className="text-xs text-red-600">{sessionError}</p> : sessions === null ? <div role="status" aria-label="Checking your devices" aria-busy="true" className="space-y-2"><ShimmerText height="h-8" /><ShimmerText height="h-8" /></div> : sessions.map(session => { const Icon = session.kind === 'app' || /iPhone|iPad|Android/.test(session.device_label) ? Smartphone : Monitor;
+        return <div key={session.id} className="flex items-start gap-3 rounded-xl border bg-white p-3 text-xs">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-brand-blue"><Icon size={18} /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-semibold text-slate-800">{session.device_label}{session.kind === 'app' && <span className="ml-1.5 font-normal text-slate-500">· App</span>}</span>
+            <span className="mt-1 block text-slate-500">Signed in {signedIn(session.created_at)}{session.ip_address && <> · IP <span className="font-mono">{session.ip_address}</span></>}</span>
+          </span>
+          {session.current && <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 font-semibold text-blue-600">This device</span>}</div>; })}
       <button type="button" className={secondaryButton} onClick={() => open('logout-all')}>Sign out all devices</button></div>
     {!action && error && <p role="alert" className="text-xs text-red-600">{error}</p>}
     {action && <ModalLayer className="fixed inset-0 flex items-center justify-center bg-slate-900/50 p-4">

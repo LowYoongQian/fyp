@@ -83,18 +83,20 @@ html.dark .sign-out-overlay { background: linear-gradient(180deg, #0f172a, #0b12
   .sign-out-overlay-fade, .sign-out-overlay-leave { animation-duration: 1ms; }
   .sign-out-bar > span { animation: none; width: 100%; opacity: .5; }
 }
-/* CHAT-MOTION-18: the text shimmer and the thinking bar's short sweeping line, shown only while an answer is pending. */
+/* Class attendance dialog: its status pills and Mark buttons keep their meaning in dark mode (the generic dark table rules grey every button). */
+html.dark .attendance-pill-amber { background-color: rgb(120 53 15 / .35) !important; border-color: #92400e !important; color: #fcd34d !important; }
+html.dark .attendance-pill-rose { background-color: rgb(136 19 55 / .35) !important; border-color: #9f1239 !important; color: #fda4af !important; }
+html.dark table button.attendance-mark-present, html.dark table button.attendance-mark-present:hover { background-color: #059669 !important; border-color: #047857 !important; color: #fff !important; }
+html.dark table button.attendance-mark-absent, html.dark table button.attendance-mark-absent:hover { color: #fda4af !important; border-color: #9f1239 !important; }
+/* CHAT-MOTION-18: the "Thinking" text shimmer, shown only while an answer is pending. The sweep below is the sign-out bar's. */
 .text-shimmer {
   display: inline-block; background-size: 200% auto; background-clip: text; -webkit-background-clip: text; color: transparent;
   animation: text-shimmer 2.4s linear infinite;
 }
 @keyframes text-shimmer { 0% { background-position: 200% center; } 100% { background-position: -200% center; } }
-.thinking-bar-track { position: relative; display: block; width: 2.5rem; height: 3px; overflow: hidden; border-radius: 99px; background: rgb(37 99 235 / .14); }
-.thinking-bar-track > span { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: #2563eb; animation: thinking-bar-sweep 1.3s ease-in-out infinite; }
 @keyframes thinking-bar-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
 @media (prefers-reduced-motion: reduce) {
   .text-shimmer { animation: none; background: none; color: var(--theme-text-secondary); }
-  .thinking-bar-track > span { animation: none; transform: translateX(75%); }
 }
 /* PET-BUBBLE-17: the caret that follows the pet's line as it is typed. */
 .pet-bubble-cursor { position: relative; display: inline-block; width: 0; height: 1em; vertical-align: -0.15em; }
@@ -1767,6 +1769,190 @@ html.dark .recovery-reminder-status { color: #94a3b8; }
   border-color: #94a3b8 !important;
   background: #f1f5f9 !important;
 }
+
+/* Recovery email, steps 1 and 2: progress dots, the code box, link buttons and a compact error in place of SweetAlert's grey box. */
+.recovery-email-popup .swal2-progress-steps {
+  margin: 0 auto 1rem !important;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.recovery-email-popup .swal2-progress-steps .swal2-progress-step {
+  width: 1.6rem;
+  height: 1.6rem;
+  line-height: 1.6rem;
+  background: #2563eb !important;
+  color: #fff !important;
+}
+.recovery-email-popup .swal2-progress-steps .swal2-progress-step-line {
+  width: 2.75rem;
+  height: 0.2rem;
+  margin: 0 -1px;
+  background: #2563eb !important;
+}
+.recovery-email-popup .swal2-progress-steps .swal2-active-progress-step ~ .swal2-progress-step,
+.recovery-email-popup .swal2-progress-steps .swal2-active-progress-step ~ .swal2-progress-step-line {
+  background: #e2e8f0 !important;
+  color: #64748b !important;
+}
+.recovery-email-popup .swal2-validation-message {
+  justify-content: flex-start;
+  gap: 0.55rem;
+  margin: 1rem 0 0 !important;
+  padding: 0.7rem 0.85rem !important;
+  border: 1px solid #fecaca;
+  border-radius: 0.85rem;
+  background: #fef2f2 !important;
+  color: #b91c1c !important;
+  font-size: 0.72rem !important;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: left;
+}
+.recovery-email-popup .swal2-validation-message::before {
+  flex: 0 0 auto;
+  width: 1.15rem;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  margin: 0 !important;
+  background-color: #ef4444;
+  font-size: 0.75rem;
+  line-height: 1.15rem;
+}
+.recovery-code-sent {
+  display: grid;
+  justify-items: center;
+  gap: 0.6rem;
+}
+.recovery-code-icon {
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 1rem;
+  background: #eff6ff;
+}
+.recovery-code-icon svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.recovery-code-address {
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+.recovery-code-label {
+  display: block;
+  margin-top: 1.25rem;
+  text-align: left;
+}
+.recovery-code-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 3.6rem;
+  margin-top: 0.45rem;
+  padding: 0 0 0 0.55em;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.95rem;
+  background: #f8fafc;
+  color: #0f172a;
+  font: 700 1.65rem/1 ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  letter-spacing: 0.55em;
+  text-align: center;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+.recovery-code-input::placeholder {
+  color: #cbd5e1;
+}
+.recovery-code-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+.recovery-code-input.is-invalid {
+  border-color: #ef4444;
+  background: #fff7f7;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.1);
+}
+.recovery-code-help {
+  margin: 0.75rem 0 0;
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  text-align: center;
+}
+.recovery-code-status {
+  text-align: center;
+  color: #047857;
+  font-weight: 600;
+}
+.recovery-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #2563eb;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.recovery-link:disabled {
+  color: #94a3b8;
+  text-decoration: none;
+  cursor: default;
+}
+.recovery-link:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+.recovery-done-popup .swal2-icon.swal2-success {
+  margin: 0.25rem auto 1rem;
+  border-color: #10b981 !important;
+  color: #10b981 !important;
+}
+.recovery-done-popup .swal2-success [class^='swal2-success-line'] { background-color: #10b981 !important; }
+.recovery-done-popup .swal2-success .swal2-success-ring { border-color: rgba(16, 185, 129, 0.3) !important; }
+html.dark .recovery-done-popup .swal2-success .swal2-success-ring { border-color: rgba(52, 211, 153, 0.45) !important; }
+.recovery-done-popup .recovery-email-benefit {
+  margin-top: 1.1rem;
+}
+.recovery-done-actions {
+  width: 100%;
+}
+.recovery-done-actions button {
+  flex: 1;
+  min-height: 2.75rem;
+  margin: 0 !important;
+}
+html.dark .recovery-email-popup .swal2-progress-steps .swal2-active-progress-step ~ .swal2-progress-step,
+html.dark .recovery-email-popup .swal2-progress-steps .swal2-active-progress-step ~ .swal2-progress-step-line {
+  background: #334155 !important;
+  color: #cbd5e1 !important;
+}
+html.dark .recovery-email-popup .swal2-validation-message {
+  border-color: #7f1d1d;
+  background: rgba(127, 29, 29, 0.22) !important;
+  color: #fecaca !important;
+}
+html.dark .recovery-code-icon { border-color: #1e40af; background: rgba(30, 58, 138, 0.25); }
+html.dark .recovery-code-icon svg { stroke: #60a5fa; }
+html.dark .recovery-code-address { color: #f8fafc; }
+html.dark .recovery-code-input { border-color: #334155; background: #0f172a; color: #f8fafc; }
+html.dark .recovery-code-input::placeholder { color: #475569; }
+html.dark .recovery-code-input:focus { border-color: #60a5fa; background: #111827; }
+html.dark .recovery-code-input.is-invalid { border-color: #f87171; background: rgba(127, 29, 29, 0.16); }
+html.dark .recovery-code-help { color: #94a3b8; }
+html.dark .recovery-code-status { color: #6ee7b7; }
+html.dark .recovery-link { color: #60a5fa; }
+html.dark .recovery-link:disabled { color: #64748b; }
 
 html.dark .password-reset-intro,
 html.dark .password-reset-help {

@@ -13,7 +13,7 @@ from domain.class_lifecycle import class_listed
 from domain.session_sync import materialize_upcoming, source_meeting_id, sync_class_sessions
 from domain.scheduler import calculate_schedule, get_course_group_slots, session_window_utc
 from utils.timeutil import local_offset
-from db.models import User, Student, Course, Enrolment, ClassMeeting, ClassSession, AttendanceRecord, Lecturer
+from db.models import User, Student, Course, CourseStaffAssignment, Enrolment, ClassMeeting, ClassSession, AttendanceRecord, Lecturer
 from utils.security import require_admin
 from domain.attendance import require_session_enrolment
 from domain.attendance_audit import attendance_snapshot, audit_attendance_edit
@@ -76,13 +76,29 @@ def get_sessions(programme_id: UUID = Query(...), course_id: UUID = Query(...), 
             teacher = teachers[key]
         if not teacher and meeting and meeting.lecturer_id:
             teacher = db.get(Lecturer, meeting.lecturer_id)
-        return teacher, meeting.role if meeting else None
+        held = held_roles(teacher)
+        role = meeting.role if meeting else None
+        # A class whose timetable slot was later deleted (its role was removed or re-assigned) keeps no link to it. Its role is still
+        # certain when the class was for the whole course (a Lecture) or its teacher holds only one role here; otherwise it stays unknown.
+        if not role and teacher:
+            role = "Lecture" if s.class_group == "All" else ({"Lecturer": "Lecture"}.get(held[0], held[0]) if len(held) == 1 else None)
+        return teacher, role, held
+
+    roles_held = {}
+
+    def held_roles(teacher):
+        """Every teaching role this staff member holds in this course, in the usual order (one person can be Lecturer, Tutor and Practical)."""
+        if not teacher:
+            return []
+        if teacher.id not in roles_held:
+            rows = {role for (role,) in db.query(CourseStaffAssignment.role).filter_by(course_id=course.id, lecturer_id=teacher.id)}
+            roles_held[teacher.id] = sorted(rows, key=lambda role: ("Lecturer", "Tutor", "Practical").index(role) if role in ("Lecturer", "Tutor", "Practical") else 9)
+        return roles_held[teacher.id]
 
     for s in sessions:
         if not class_listed(s, now_utc):
             continue   # an upcoming class shows from one hour before it starts; showing it never opens check-in
-        course = s.course
-        teacher, class_role = teaching(s)
+        teacher, class_role, staff_roles = teaching(s)
 
         is_open = s.is_open
         closed_at = s.closed_at
@@ -111,6 +127,7 @@ def get_sessions(programme_id: UUID = Query(...), course_id: UUID = Query(...), 
             "course_name": course.course_name if course else "Unknown",
             "lecturer_name": teacher.name if teacher else "Unassigned",
             "lecturer_role": class_role,
+            "lecturer_roles": staff_roles,
             "class_group": s.class_group,
             "scheduled_start": iso_utc(s.scheduled_start),
             "scheduled_end": iso_utc(s.scheduled_end),

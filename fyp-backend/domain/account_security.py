@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import secrets
 from datetime import timedelta
 from uuid import UUID
@@ -65,11 +66,45 @@ def validate_session(db, claims):
     return user
 
 
-def new_session(db, user, device_label):
-    # Preserve the web's one-hour limit and the previous mobile token's 24-hour limit.
+def device_key(app: bool, raw_id) -> str | None:
+    """'app:' or 'web:' + a hash of the install or browser id the client keeps; the raw id is never stored."""
+    raw = str(raw_id or '').strip()[:200]
+    return f"{'app' if app else 'web'}:{hashlib.sha256(raw.encode()).hexdigest()}" if raw else None
+
+
+_BROWSERS = (('Edg/', 'Edge'), ('OPR/', 'Opera'), ('SamsungBrowser/', 'Samsung Internet'), ('FxiOS/', 'Firefox'), ('Firefox/', 'Firefox'),
+             ('CriOS/', 'Chrome'), ('Chrome/', 'Chrome'), ('Safari/', 'Safari'))
+_SYSTEMS = (('iPhone', 'iPhone'), ('iPad', 'iPad'), ('Android', 'Android'), ('Windows', 'Windows'), ('Mac OS X', 'macOS'), ('CrOS', 'ChromeOS'), ('Linux', 'Linux'))
+_ANDROID_MODEL = re.compile(r'Android [\d.]+; ([^;)]+)\)')
+
+
+def device_label(name, user_agent, app: bool) -> str:
+    """The client's own description ("Samsung SM-S918B", "Chrome on Android · Pixel 8") when it sent one, else read from the User-Agent."""
+    clean = ' '.join(re.sub(r'[\x00-\x1f\x7f]', ' ', str(name or '')).replace('<', '').replace('>', '').split())[:80]
+    if clean:
+        return clean
+    agent = user_agent or ''
+    system = next((label for token, label in _SYSTEMS if token in agent), None)
+    if app:
+        return f'Mobile app on {system}' if system else 'Mobile app'
+    browser = next((label for token, label in _BROWSERS if token in agent), None)
+    model = _ANDROID_MODEL.search(agent)
+    model = model.group(1).strip() if model and model.group(1).strip() not in ('K', '') else None   # "K" is Chrome's reduced (hidden) model
+    if browser and system:
+        return f'{browser} on {system}' + (f' · {model}' if model else '')
+    return 'Web browser'
+
+
+def new_session(db, user, device_label, *, device_key=None, ip_address=None):
+    # Preserve the web's one-hour limit and the mobile app's 24-hour limit.
     now = utcnow()
+    app = (device_key or '').startswith('app:') or device_label == 'Mobile device'
+    if device_key and device_key.startswith('app:'):
+        # The app keeps one token per install, so signing in again on the same phone replaces its earlier session instead of adding one.
+        db.query(AuthSession).filter_by(user_id=user.id, device_key=device_key, revoked_at=None).update({'revoked_at': now})
     session = AuthSession(user_id=user.id, auth_version=user.auth_version,
-        created_at=now, expires_at=now + timedelta(hours=24 if device_label == 'Mobile device' else 1), device_label=device_label[:120])
+        created_at=now, expires_at=now + timedelta(hours=24 if app else 1), device_label=device_label[:120],
+        device_key=device_key, ip_address=(ip_address or None) and str(ip_address)[:64])
     db.add(session); db.flush()
     user.last_login_at = now
     return session

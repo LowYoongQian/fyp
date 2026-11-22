@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, or_
 
 from db.models import AttendanceRecord, ClassSession, Course, Enrolment, Student
@@ -17,8 +17,13 @@ Intent = Literal[
     "student_sessions", "student_status", "student_risk", "risk_list",
     "course_average", "course_attendance", "course_students", "enrolment_list",
     "present_count", "absent_count", "session_list", "session_attendance",
-    "group_attendance", "timetable", "memory", "system_help",
+    "group_attendance", "timetable", "memory", "system_help", "my_courses",
+    # The planner's way to say "this is not a request to read attendance data": answered with the scope reply, never with data.
+    "unsupported",
 ]
+# Only windows the server can compute in campus time; anything else the planner says is dropped rather than guessed.
+DATE_SCOPES = ("today", "yesterday", "tomorrow", "this week", "last week", "next week")
+_DATE = re.compile(r"\b(today|yesterday|tomorrow|this\s+week|last\s+week|next\s+week)\b", re.I)
 
 
 class AIPlan(BaseModel):
@@ -35,6 +40,17 @@ class AIPlan(BaseModel):
     session_hint: str | None = Field(default=None, max_length=100)
     scope: Literal["assigned", "course", "student"] = "assigned"
     needs_context: bool = False
+
+    @field_validator("date_scope", mode="before")
+    @classmethod
+    def _known_date_scope(cls, value):
+        text = " ".join(str(value or "").casefold().split())
+        return text if text in DATE_SCOPES else None
+
+
+def date_scope_of(question: str) -> str | None:
+    match = _DATE.search(question)
+    return " ".join(match.group(1).casefold().split()) if match else None
 
 
 @dataclass(frozen=True)
@@ -55,7 +71,8 @@ _GENERIC_STUDENT = {
 _NOT_NAME = re.compile(
     r"\b(how|many|who|which|what|when|where|why|does|do|is|are|was|were|the|and|or"
     r"|in|on|at|of|all|every|present|absent|group|lecturer|total|count|number"
-    r"|below|above|average)\b",
+    r"|below|above|average|my|i|me|we|our|you|your|overall|current|latest|recent|class|classes|course"
+    r"|today|yesterday|tomorrow|this|that|last|next|weekly|daily|monthly)\b",
     re.I,
 )
 
@@ -90,12 +107,18 @@ def extract_student_hint(question: str) -> str | None:
     return None
 
 
+_ABSENT = re.compile(r"\b(absent|absentees?|absences?|missed|skipped|did(?:n't| not) (?:attend|come|show up))\b", re.I)
+_PRESENT = re.compile(r"\b(present|attended|showed up|checked in)\b", re.I)
+_MY_COURSES = re.compile(r"\b(?:my|i)\b.*\b(?:courses?|subjects?)\b|\b(?:courses?|subjects?)\b.*\b(?:i|me)\b", re.I)
+
+
 def deterministic_plan(question: str) -> AIPlan | None:
     """Classify unambiguous requests without an external model call."""
     group_match = re.search(r"\b(g\d+)\b", question, re.I)
     group = group_match.group(1).upper() if group_match else None
     student_hint = extract_student_hint(question)
     course_code = (re.search(r"\b[A-Z]{2,6}\d{3,5}\b", question, re.I) or [None])[0]
+    date_scope = date_scope_of(question)
     if re.search(r"\b(her|his|him|that student|the student)\b", question, re.I):
         if re.search(r"\bsessions?|classes\b", question, re.I):
             return AIPlan(intent="student_sessions", group=group, needs_context=True, scope="student")
@@ -118,7 +141,7 @@ def deterministic_plan(question: str) -> AIPlan | None:
             intent = "student_status"
         elif re.search(r"\brisk\b", question, re.I):
             intent = "student_risk"
-        return AIPlan(intent=intent, student_hint=student_hint, course_code=course_code, group=group, scope="student")
+        return AIPlan(intent=intent, student_hint=student_hint, course_code=course_code, group=group, scope="student", date_scope=date_scope)
     if re.search(r"\bstudents?\b", question, re.I) and re.search(r"\benroll?(?:ed|ment|ments)?\b", question, re.I):
         course_match = re.search(r"\b(?:in|for)\s+(.+?)(?:[?.!]|$)", question, re.I)
         return AIPlan(intent="enrolment_list", course_hint=course_match.group(1).strip() if course_match else None, course_code=course_code, group=group)
@@ -131,14 +154,20 @@ def deterministic_plan(question: str) -> AIPlan | None:
         r"\b(all|every)\s+(?:students?\s+|student\s+)?attendance\b", question, re.I
     ):
         return AIPlan(intent="course_attendance", course_code=course_code, group=group)
-    if re.search(r"\bhow many\b.*\bpresent\b", question, re.I):
-        return AIPlan(intent="present_count", course_code=course_code, group=group)
-    if group and re.search(r"\bpresent\b.*\bstudents?\b", question, re.I):
-        return AIPlan(intent="present_count", course_code=course_code, group=group)
-    if re.search(r"\bhow many\b.*\babsent\b", question, re.I):
-        return AIPlan(intent="absent_count", course_code=course_code, group=group)
-    if re.search(r"\btimetable|schedule\b", question, re.I):
-        return AIPlan(intent="timetable", course_code=course_code, group=group)
+    if re.search(r"\b(lowest|worst|poorest|weakest)\b", question, re.I) and re.search(r"\battend", question, re.I):
+        return AIPlan(intent="course_attendance", course_code=course_code, group=group)  # listed lowest first
+    if _ABSENT.search(question):
+        return AIPlan(intent="absent_count", course_code=course_code, group=group, date_scope=date_scope)
+    if _PRESENT.search(question) and re.search(r"\b(who|which|how many|list|show|students?)\b", question, re.I):
+        return AIPlan(intent="present_count", course_code=course_code, group=group, date_scope=date_scope)
+    if re.search(r"\b(recent|past|previous|latest|last|completed|finished)\s+(?:\w+\s+)?(classes|sessions|lessons)\b", question, re.I):
+        return AIPlan(intent="session_list", course_code=course_code, group=group, date_scope=date_scope)
+    if re.search(r"\b(timetable|schedule|upcoming|next class(?:es)?)\b", question, re.I) or (
+        date_scope and re.search(r"\b(class(?:es)?|lessons?|lectures?|sessions?)\b", question, re.I)
+    ):
+        return AIPlan(intent="timetable", course_code=course_code, group=group, date_scope=date_scope)
+    if _MY_COURSES.search(question):
+        return AIPlan(intent="my_courses")
     return None
 
 

@@ -43,6 +43,7 @@ from routers import (
     llm,
     medical_leave,
     live_updates,
+    programme_groups,
     sessions,
     student_self,
     students,
@@ -131,13 +132,15 @@ class ETagMiddleware(BaseHTTPMiddleware):
                     return JSONResponse({'detail': error.detail}, status_code=error.status_code)
                 except DBAPIError:
                     return JSONResponse({'detail': 'Account verification is temporarily unavailable.'}, status_code=503)
-                _, body, status_code, headers, media_type = cached
-                _server_response_cache.move_to_end(cache_key)
-                if request.headers.get("if-none-match") == headers.get("ETag"):
-                    return Response(status_code=304, headers={"ETag": headers["ETag"], "Cache-Control": headers["Cache-Control"]})
-                return Response(content=body, status_code=status_code, headers=headers, media_type=media_type)
-            if cached:
-                del _server_response_cache[cache_key]
+                # A write that finished while the session was checked cleared the cache, so this copy may be stale: answer fresh instead.
+                if _server_response_cache.get(cache_key) is cached:
+                    _, body, status_code, headers, media_type = cached
+                    _server_response_cache.move_to_end(cache_key)
+                    if request.headers.get("if-none-match") == headers.get("ETag"):
+                        return Response(status_code=304, headers={"ETag": headers["ETag"], "Cache-Control": headers["Cache-Control"]})
+                    return Response(content=body, status_code=status_code, headers=headers, media_type=media_type)
+            else:
+                _server_response_cache.pop(cache_key, None)
 
         response = await call_next(request)
 
@@ -354,6 +357,9 @@ def _check_feedback_severity_schema():
 async def lifespan(app: FastAPI):
     trusted_proxy_ranges()  # Fail startup on unsafe proxy wildcard configuration.
     client_ip_source()  # Fail startup on an unknown CLIENT_IP_SOURCE instead of guessing how to read the address.
+    # Password reset emails link to WEB_APP_URL; on Azure (WEBSITE_SITE_NAME is set there) a missing or localhost value would mail dead links.
+    if os.getenv("WEBSITE_SITE_NAME") and "localhost" in (os.getenv("WEB_APP_URL") or "localhost"):
+        logger.warning("WEB_APP_URL is not set to the public web address; password reset links will not open for students")
     await asyncio.to_thread(_check_face_enrolment_schema)
     await asyncio.to_thread(_check_face_photo_schema)
     await asyncio.to_thread(_check_alert_delivery_schema)
@@ -428,6 +434,7 @@ app.include_router(admin_academic.router)
 app.include_router(admin_lookup.router)
 app.include_router(admin_records.router)
 app.include_router(academic_calendar.router)
+app.include_router(programme_groups.router)
 app.include_router(admin_attendance.router)
 app.include_router(admin_config.router)
 app.include_router(student_self.router)

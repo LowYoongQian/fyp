@@ -1,5 +1,6 @@
 import { TextInput } from '../../components/LimitedTextField';
 import { SemestersPanel } from '../../components/SemestersPanel';
+import { changeCourseGroup } from '../../utils/groupChanges';
 import { DialogShell } from '../../components/DialogShell';
 import { InfoTip } from '../../components/InfoTip';
 import { AnimatePresence } from 'motion/react';
@@ -7,11 +8,11 @@ import { FloatingPanel } from '../../components/FloatingPanel';
 import { RecordPagination } from '../../components/RecordPagination';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
-import type { Programme, Course, LookupKind, LookupStudent, LookupStaff, LookupProgramme, LookupCourse, ProgrammeRecord, CourseRecord, AssignmentRecord, StudentRecord, AllocationCheck } from '../../services/api';
+import type { Programme, Course, LookupKind, LookupStudent, LookupStaff, LookupProgramme, LookupCourse, ProgrammeRecord, CourseRecord, AssignmentRecord, StudentRecord, AllocationCheck, RoleImpact } from '../../services/api';
 import { useLookup } from '../../hooks/useLookup';
 import { useRecordPage } from '../../hooks/useRecordPage';
 import { swalSuccess, swalError, swalConfirm } from '../../utils/swal';
-import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays } from 'lucide-react';
+import { Layers, BookOpen, UserCheck, GraduationCap, Plus, Trash2, Pencil, ChevronDown, Check, RefreshCw, FolderOpen, Briefcase, Search, X, AlertCircle, CalendarDays, ArrowRightLeft } from 'lucide-react';
 import { LoadingRegion, ShimmerAcademics, ShimmerText } from '../../components/Shimmer';
 
 /** A bespoke picker's open list in the CustomDropdown look: pale selected and hover rows, rounded and padded, the scrollbar inside the rounded shell. */
@@ -150,6 +151,89 @@ const StatusPill: React.FC<{ status: string }> = ({ status }) => {
   const [text, look] = STATUS_LOOK[status] ?? STATUS_LOOK.undated;
   return <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${look}`}>{text}</span>;
 };
+
+// Each teaching role keeps one look in light and dark, and a letter mark, so the three never depend on colour alone.
+const ROLE_LOOK: Record<string, string> = {
+  Lecturer: 'bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:ring-blue-500/40',
+  Tutor: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:ring-emerald-500/40',
+  Practical: 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/40',
+};
+const RoleMark: React.FC<{ role: string }> = ({ role }) => (
+  <span aria-hidden="true" className="mr-1 inline-grid size-4 place-items-center rounded-full bg-white/80 text-[9px] font-black dark:bg-slate-900/60">{role[0]}</span>
+);
+
+/** What removing teaching roles would change, in words, for the confirmation (completed classes and attendance are always kept). */
+const impactText = (impact: RoleImpact) => [
+  impact.slots_removed.length
+    ? `${impact.slots_removed.length} timetable slot${impact.slots_removed.length === 1 ? '' : 's'} will be removed: ${impact.slots_removed.map(slot => `${slot.role}${slot.class_group ? ` ${groupLabel(slot.class_group)}` : ''} ${slot.day} ${slot.start}-${slot.end}`).join('; ')}.`
+    : 'No timetable slot is removed.',
+  impact.lectures_left_without_lecturer ? 'The lecture stays on the timetable without a lecturer.' : '',
+  `Kept: ${impact.completed_classes_kept} completed class${impact.completed_classes_kept === 1 ? '' : 'es'} and ${impact.attendance_records_kept} attendance record${impact.attendance_records_kept === 1 ? '' : 's'}. Other staff keep their roles.`,
+].filter(Boolean).join(' ');
+
+/**
+ * Change which roles one staff member holds in one course. The current roles start selected; a removal shows what it changes first, and the
+ * save is one request, so if an added role conflicts nothing changes.
+ */
+function EditRolesDialog({ row, onClose, onSaved }: { row: AssignmentRecord; onClose: () => void; onSaved: () => void }) {
+  const current = row.roles.map(item => item.role);
+  const [chosen, setChosen] = useState<string[]>(current);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const removed = current.filter(role => !chosen.includes(role));
+  const unchanged = removed.length === 0 && chosen.every(role => current.includes(role));
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (saving || unchanged) return;
+    setFailure(null);
+    setSaving(true);
+    try {
+      if (removed.length) {
+        const impact = await apiService.adminAssignmentImpact(row.course_id, row.lecturer_id, removed);
+        if (impact.blocked) { setFailure(`A class in ${removed.join(' or ')} is in progress. Try again after it ends.`); return; }
+        if (!chosen.length && !await swalConfirm(`Remove ${row.lecturer_name} from ${row.course_code}?`, impactText(impact), 'Remove assignment', true)) return;
+        if (chosen.length && !await swalConfirm(`Remove ${removed.join(', ')}?`, impactText(impact), 'Save roles', true)) return;
+      }
+      await apiService.adminSetAssignmentRoles({ course_id: row.course_id, lecturer_id: row.lecturer_id, roles: chosen });
+      onSaved();
+    } catch (error) {
+      const status = (error as ApiFailure).response?.status;
+      setFailure(status ? `${detailOf(error, 'The roles were not saved.')} The previous roles are unchanged.` : 'The connection failed, so the change may not have been saved. Close and check the list before trying again.');
+    } finally { setSaving(false); }
+  };
+  return (
+    <DialogShell labelledBy="edit-roles-title" onClose={() => { if (!saving) onClose(); }}>
+      <form noValidate onSubmit={save} className="flex min-h-0 flex-1 flex-col">
+        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
+          <div className="min-w-0">
+            <h3 id="edit-roles-title" className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white"><Pencil className="h-4 w-4 text-brand-blue" />Edit roles</h3>
+            <p className="mt-0.5 break-words text-xs text-slate-500">{row.lecturer_name} ({row.staff_id}) · {row.course_code} {row.course_name}</p>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">Applies in {row.semester ? row.semester.name : 'no semester yet'}<StatusPill status={row.semester?.status ?? 'undated'} /></p>
+          </div>
+          <button type="button" aria-label="Close" disabled={saving} onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40 dark:hover:bg-slate-800"><X className="h-5 w-5" /></button>
+        </header>
+        <fieldset disabled={saving} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
+          {failure && <p role="alert" className="flex gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs text-rose-600 dark:text-rose-400"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{failure}</p>}
+          <div role="group" aria-labelledby="edit-roles-legend" className="space-y-2">
+            <p id="edit-roles-legend" className="text-xs font-semibold text-slate-700 dark:text-slate-200">Teaching roles in this course</p>
+            <div className="flex flex-wrap gap-3">
+              {ROLES.map(role => <label key={role} className={`flex cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold ring-1 ${chosen.includes(role) ? ROLE_LOOK[role] : 'bg-slate-50 text-slate-500 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700'}`}>
+                <input type="checkbox" className="size-4 accent-brand-blue" checked={chosen.includes(role)}
+                  onChange={event => setChosen(previous => event.target.checked ? [...previous, role] : previous.filter(item => item !== role))} />
+                <RoleMark role={role} />{role}{current.includes(role) && !chosen.includes(role) && <span className="font-normal"> (will be removed)</span>}
+              </label>)}
+            </div>
+            <p className="text-xs text-slate-500">{chosen.length ? 'Untick a role to remove it, tick one to add it.' : 'No role selected: saving removes this assignment.'}</p>
+          </div>
+        </fieldset>
+        <footer className="flex justify-end gap-2 border-t border-slate-200 px-6 py-4 dark:border-slate-800">
+          <button type="button" disabled={saving} onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
+          <button type="submit" disabled={saving || unchanged} className="rounded-xl bg-brand-blue px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save roles'}</button>
+        </footer>
+      </form>
+    </DialogShell>
+  );
+}
 
 /** A row's edit button, the same size as its delete button. */
 const RowEdit: React.FC<{ label: string; onClick: () => void }> = ({ label, onClick }) => (
@@ -474,14 +558,22 @@ export const AcademicManager: React.FC = () => {
       if (!status) refresh();
     } finally { setSavingAssignment(false); }
   };
-  const deleteAssignment = async (row: AssignmentRecord, assignment: AssignmentRecord['roles'][number]) => {
-    if (!await swalConfirm('Remove this teaching role?', `${row.lecturer_name} will no longer be the ${assignment.role.toLowerCase()} for ${row.course_code}. Past classes and attendance are kept.`, 'Remove role', true)) return;
+  const [editingRoles, setEditingRoles] = useState<AssignmentRecord | null>(null);
+  // Removing one role or the whole assignment: the confirmation names the person, the course and the roles, and says what changes.
+  const removeRoles = async (row: AssignmentRecord, roles: string[]) => {
     try {
-      await apiService.adminDeleteAssignment(assignment.id);
+      const impact = await apiService.adminAssignmentImpact(row.course_id, row.lecturer_id, roles);
+      if (impact.blocked) { void swalError('Not removed yet', `A ${roles.join(' or ').toLowerCase()} class is in progress. Try again after it ends.`); return; }
+      const whole = roles.length === row.roles.length;
+      if (!await swalConfirm(whole ? `Remove ${row.lecturer_name} from ${row.course_code}?` : `Remove the ${roles[0].toLowerCase()} role?`,
+        `${row.lecturer_name} (${row.staff_id}) will no longer teach ${roles.join(', ')} for ${row.course_code} ${row.course_name}. ${impactText(impact)}`,
+        whole ? 'Remove assignment' : 'Remove role', true)) return;
+      await apiService.adminSetAssignmentRoles({ course_id: row.course_id, lecturer_id: row.lecturer_id, roles: row.roles.map(item => item.role).filter(role => !roles.includes(role)) });
       refresh();
-      void swalSuccess('Role removed', `${row.lecturer_name} · ${row.course_code}`);
-    } catch (error) { void swalError('Role not removed', detailOf(error, 'Please try again.')); }
+      void swalSuccess(whole ? 'Assignment removed' : 'Role removed', `${row.lecturer_name} · ${row.course_code}`);
+    } catch (error) { void swalError(roles.length === row.roles.length ? 'Assignment not removed' : 'Role not removed', detailOf(error, 'Please try again.')); }
   };
+  const deleteAssignment = (row: AssignmentRecord, assignment: AssignmentRecord['roles'][number]) => removeRoles(row, [assignment.role]);
 
   // ---------------- Student allocation: one student, their programme, a valid course, its real semester and a group ----------------
   const [student, setStudent] = useState<LookupStudent | null>(null);
@@ -494,20 +586,25 @@ export const AcademicManager: React.FC = () => {
   const [allocErrors, setAllocErrors] = useState<Errors>({});
   const [savingAllocation, setSavingAllocation] = useState(false);
   const savingAllocationRef = useRef(false);
+  // Opened from a student's card ("Add another course"): their current enrolments are shown and the student stays chosen after each save.
+  const [existing, setExisting] = useState<{ studentId: string; items: StudentRecord['enrolments'] } | null>(null);
+  const continuing = !!student && existing?.studentId === student.id;
   const programmeFixed = !!student?.programme_id;
   const pickerOpen = (name: typeof openPicker) => (open: boolean) => setOpenPicker(open ? name : '');
 
   const manualGroups = (courseId: string): string[] => { try { return JSON.parse(localStorage.getItem(`sas_manual_groups_${courseId}`) || '[]'); } catch { return []; } };
 
   // A course was picked: fetch its real groups; choose the first group with room.
-  const checkKey = course?.id ?? '';
+  const checkKey = course ? `${course.id}|${student?.id ?? ''}` : '';
   useEffect(() => {
     if (!checkKey) return;
-    const courseId = checkKey;
+    const [courseId, studentId] = checkKey.split('|');
     const controller = new AbortController();
-    apiService.adminAllocationCheck(courseId, controller.signal).then(result => {
+    apiService.adminAllocationCheck(courseId, controller.signal, studentId || undefined).then(result => {
       setCheckAnswer({ key: checkKey, data: result });
-      setGroup(current => current || result.groups.find(item => !item.full)?.group || '');
+      // The student's programme group for that semester when it has a seat, otherwise the first group with room.
+      const preferred = result.groups.find(item => item.group === result.programme_group && !item.full)?.group;
+      setGroup(current => current || preferred || result.groups.find(item => !item.full)?.group || '');
     }, () => { if (!controller.signal.aborted) setCheckAnswer({ key: checkKey, failed: true }); });
     return () => controller.abort();
   }, [checkKey]);
@@ -524,6 +621,7 @@ export const AcademicManager: React.FC = () => {
     setOpenPicker('');
     if (student?.id === next.id) return;
     setStudent(next);
+    if (existing?.studentId !== next.id) setExisting(null);
     // Only what depends on the student is cleared: their programme (fixed when assigned), the course list and the group.
     setProgramme(next.programme_id ? { id: String(next.programme_id), label: next.programme_code || 'Assigned programme' } : programmeFixed ? null : programme);
     setCourse(null); setGroup(''); setAllocErrors({});
@@ -547,7 +645,15 @@ export const AcademicManager: React.FC = () => {
     try { localStorage.setItem(`sas_manual_groups_${course.id}`, JSON.stringify([...new Set([...manualGroups(course.id), next])])); } catch { /* the choice still applies to this save */ }
     setGroup(next); setOpenPicker('');
   };
-  const resetAllocation = () => { setStudent(null); setProgramme(null); setCourse(null); setGroup(''); setAllocErrors({}); setOpenPicker(''); };
+  const resetAllocation = () => { setStudent(null); setProgramme(null); setCourse(null); setGroup(''); setAllocErrors({}); setOpenPicker(''); setExisting(null); };
+  const addAnotherCourse = (row: StudentRecord) => {
+    setStudent({ id: row.id, name: row.name, student_code: row.student_code, email: '', programme_id: row.programme_id, programme_code: row.programme_code, current_enrolled: row.enrolments.length > 0 });
+    setProgramme({ id: String(row.programme_id), label: `${row.programme_code} - ${row.programme_name}` });
+    setCourse(null); setGroup(''); setAllocErrors({});
+    setExisting({ studentId: row.id, items: row.enrolments });
+    setOpenPicker('course');
+    focusById('alloc-course');
+  };
 
   // A semester is named and dated only in the Semesters tab; a course outside every semester has to be put in one there first.
   const semesterName = check?.semester?.name || course?.semester?.name || '';
@@ -576,12 +682,18 @@ export const AcademicManager: React.FC = () => {
         if ((error as ApiFailure).response && (error as ApiFailure).response!.status < 500) throw error;   // the system answered: that is the real reason
         saved = await apiService.adminSaveStudentAllocation(allocation);   // lost answer: repeating is safe, it says "already saved" if the first try went through
       }
-      const code = student!.student_code, id = student!.id;
-      resetAllocation();
+      const code = student!.student_code, id = student!.id, name = student!.name, added = course!;
+      if (continuing) {
+        // Same student, next course: keep them chosen and list the course just added.
+        setExisting(current => current && ({ ...current, items: current.items.some(item => item.course_id === added.id) ? current.items : [...current.items,
+          { id: `new-${added.id}`, course_id: added.id, course_code: added.course_code, course_name: added.course_name, class_group: group, semester_name: semesterName || null, status: added.semester?.status ?? 'undated' }] }));
+        setCourse(null); setGroup(''); setAllocErrors({});
+      } else resetAllocation();
       showSaved('students', code, id);
-      notice = () => saved.programme_changed || saved.enrolled
-        ? swalSuccess('Student enrolled', 'The programme and course enrolment were saved.')
-        : swalSuccess('Already saved', 'This enrolment was already saved. Nothing changed.');
+      notice = () => !(saved.programme_changed || saved.enrolled)
+        ? swalSuccess('Already saved', 'This enrolment was already saved. Nothing changed.')
+        : continuing ? swalSuccess('Course added', `${added.course_code} was added for ${name}. Choose another course, or press Reset when done.`)
+        : swalSuccess('Student enrolled', 'The programme and course enrolment were saved.');
     } catch (error) {
       const answer = (error as ApiFailure).response;
       if (!answer || answer.status >= 500) refresh();
@@ -663,21 +775,37 @@ export const AcademicManager: React.FC = () => {
       <AnimatePresence>
         {editingCourse && <EditCourseDialog key={editingCourse.id} row={editingCourse} onClose={() => setEditingCourse(null)} onSaved={courseSaved} />}
       </AnimatePresence>
-    </>) : tab === 'staff' ? (
+    </>) : tab === 'staff' ? (<>
       <RecordsPanel<AssignmentRecord> tab="staff" key="staff" title="Teaching roles" placeholder="Search staff, course or role" empty="No teaching roles yet. Assign staff with the form."
         search={search.staff} onSearch={searchFor('staff')} page={page.staff} onPage={pageFor('staff')} version={version} onSettled={listSettled}
         highlight={highlight?.tab === 'staff' ? highlight.id : undefined}>
         {(row, lit) => (
-          <div className={`${ROW(lit)} flex items-center justify-between gap-3`}>
-            <div className="min-w-0 space-y-1">
-              <p className="flex flex-wrap items-center gap-2"><span className="text-sm font-bold text-slate-800 dark:text-slate-100">{row.lecturer_name}</span><span className="font-mono text-xs text-slate-500">{row.staff_id}</span>
-                {row.roles.map(role => <button key={role.id} type="button" aria-label={`Remove ${role.role} role of ${row.lecturer_name} for ${row.course_code}`} onClick={() => void deleteAssignment(row, role)} className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${role.role === 'Lecturer' ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300' : role.role === 'Tutor' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'}`}>{role.role}<X aria-hidden="true" className="ml-1 inline size-3" /></button>)}</p>
+          <div className={`${ROW(lit)} flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between`}>
+            <div className="min-w-0 space-y-1.5">
+              <p className="flex flex-wrap items-center gap-2"><span className="text-sm font-bold text-slate-800 dark:text-slate-100">{row.lecturer_name}</span><span className="font-mono text-xs text-slate-500">{row.staff_id}</span></p>
               <p className="break-words text-xs text-slate-600 dark:text-slate-300"><span className="font-mono font-bold text-brand-blue">{row.course_code}</span> {row.course_name}</p>
+              <p className="flex flex-wrap items-center gap-1.5" aria-label="Teaching roles">
+                {row.roles.map(role => <button key={role.id} type="button" aria-label={`Remove ${role.role} role of ${row.lecturer_name} for ${row.course_code}`} onClick={() => void deleteAssignment(row, role)}
+                  className={`inline-flex items-center rounded-full py-0.5 pl-0.5 pr-2 text-[11px] font-semibold ring-1 ${ROLE_LOOK[role.role] ?? ROLE_LOOK.Lecturer}`}><RoleMark role={role.role} />{role.role}<X aria-hidden="true" className="ml-1 inline size-3" /></button>)}
+              </p>
+              <p className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400" data-assignment-semester>
+                Applies in {row.semester ? <>{row.semester.name} ({row.semester.start_date} – {row.semester.end_date})</> : 'no semester yet'}<StatusPill status={row.semester?.status ?? 'undated'} />
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button type="button" onClick={() => setEditingRoles(row)} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-brand-blue transition-colors hover:bg-blue-50 dark:border-slate-700 dark:hover:bg-blue-500/10">
+                <Pencil className="h-3.5 w-3.5" />Edit roles</button>
+              <button type="button" onClick={() => void removeRoles(row, row.roles.map(item => item.role))} className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950/40">
+                <Trash2 className="h-3.5 w-3.5" />Remove assignment</button>
             </div>
           </div>
         )}
       </RecordsPanel>
-    ) : (
+      <AnimatePresence>
+        {editingRoles && <EditRolesDialog key={editingRoles.id} row={editingRoles} onClose={() => setEditingRoles(null)}
+          onSaved={() => { const done = editingRoles; setEditingRoles(null); refresh(); void swalSuccess('Roles saved', `${done.lecturer_name} · ${done.course_code}`); }} />}
+      </AnimatePresence>
+    </>) : (
       <RecordsPanel<StudentRecord> tab="students" key="students" title="Student enrolments" placeholder="Search student, ID, programme or course" empty="No students yet."
         search={search.students} onSearch={searchFor('students')} page={page.students} onPage={pageFor('students')} version={version} onSettled={listSettled}
         highlight={highlight?.tab === 'students' ? highlight.id : undefined}>
@@ -695,13 +823,21 @@ export const AcademicManager: React.FC = () => {
                     <p className="flex flex-wrap items-center gap-2"><span className="font-mono font-bold text-brand-blue">{item.course_code}</span><span className="break-words font-medium text-slate-700 dark:text-slate-200">{item.course_name}</span></p>
                     <p className="mt-0.5 flex flex-wrap items-center gap-2 text-slate-500 dark:text-slate-400">{groupLabel(item.class_group)}{item.semester_name ? ` · ${item.semester_name}` : ''}<StatusPill status={item.status} /></p>
                   </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                  {item.status !== 'ended' && <button type="button" aria-label={`Change ${item.course_code} group for ${row.name}`} title="Change group in this course only"
+                    onClick={async () => { if (await changeCourseGroup(item, row.name)) refresh(); }}
+                    className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-brand-blue dark:hover:bg-blue-500/10"><ArrowRightLeft className="h-4 w-4" /></button>}
                   <RowDelete label={`Drop ${item.course_code} for ${row.name}`} onClick={async () => {
                     if (!await swalConfirm(`Drop ${item.course_code}?`, `${row.name} will no longer be enrolled in ${item.course_code}. Their past attendance is kept.`, 'Drop course', true)) return;
                     try { await apiService.adminDeleteEnrolment(item.id); refresh(); void swalSuccess('Course dropped', `${item.course_code} · ${row.name}`); }
                     catch (error) { void swalError('Course not dropped', detailOf(error, 'Please try again.')); }
                   }} />
+                  </div>
                 </li>
               ))}</ul>}
+            {row.programme_id && <button type="button" onClick={() => addAnotherCourse(row)} aria-label={`Add another course for ${row.name}`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-brand-blue transition-colors hover:bg-blue-50 dark:border-slate-700 dark:hover:bg-blue-500/10">
+              <Plus className="h-3.5 w-3.5" />Add another course</button>}
           </div>
         )}
       </RecordsPanel>
@@ -793,6 +929,13 @@ export const AcademicManager: React.FC = () => {
                 <LookupMenu<LookupProgramme> kind="programmes" placeholder="Search programme code or name" option={p => ({ primary: p.code, secondary: p.name })} selectedId={programme?.id ?? ''} onSelect={chooseProgramme} />
               </Picker>}
         </Field>
+        {continuing && <div data-existing-enrolments className="space-y-1 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+          <p className="font-semibold text-slate-700 dark:text-slate-200">Already enrolled</p>
+          {existing!.items.length
+            ? <ul className="space-y-0.5">{existing!.items.map(item => <li key={item.id} className="text-slate-600 dark:text-slate-300"><span className="font-mono font-bold text-brand-blue">{item.course_code}</span> {item.course_name} · {groupLabel(item.class_group)}{item.semester_name ? ` · ${item.semester_name}` : ''}</li>)}</ul>
+            : <p className="text-slate-500">No courses yet.</p>}
+          <p className="text-slate-500">Courses they already take and ended semesters are not offered.</p>
+        </div>}
         <Field label="Course" htmlFor="alloc-course" error={allocErrors.course} hint={!student ? 'Choose the student first.' : !programme ? 'Choose the programme first.' : 'Only courses from this programme are offered.'}>
           <Picker id="alloc-course" name="course" value={course ? `${course.course_code} - ${course.course_name}` : ''} placeholder="Choose a course" open={openPicker === 'course'} setOpen={pickerOpen('course')} disabled={!student || !programme} invalid={!!allocErrors.course}>
             <LookupMenu<LookupCourse> kind="courses" placeholder="Search course code or name" params={{ programme_id: programme?.id, student_id: student?.id }}

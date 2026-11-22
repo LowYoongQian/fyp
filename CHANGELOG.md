@@ -1,5 +1,43 @@
 # Changelog
 
+## Signed-in devices and full Bahasa Malaysia — 2026-11-22 09:09
+- Signed-in devices now show the real device (for example "Samsung SM-S918B (Android 14)" or "Chrome on Windows") with its IP address, and signing in again on the same phone no longer adds a duplicate entry. The phone model needs the next mobile app build.
+- The whole website can now be shown in Bahasa Malaysia, including settings, menus, messages and pop-ups. The other languages keep their current translations and are being completed next.
+- Password reset links were already real, single-use links; the server now warns if its public web address is not configured. ChatGPT review pending.
+
+
+## Admin attendance: roles, date filter and a simpler class view — 2026-11-22 07:49
+- The Role column now shows every role a staff member holds in the course (for example Lecturer, Tutor and Practical), with the role for that class highlighted; classes whose timetable slot was removed no longer show "—" when their role is certain.
+- Admin Attendance has an always-visible search and From/Until date and time filters (Malaysia time), and the programme and course lists can be searched.
+- The class attendance window uses plain words, one short note, and buttons and labels of the same size. ChatGPT review pending.
+
+
+## AI Assistant accuracy and thinking steps — 2026-11-22 06:57
+- The assistant now answers what was asked: "who was absent yesterday" lists yesterday's absentees, "below 80%" uses the same live attendance as the dashboard, "my timetable" shows upcoming classes, and times are in Malaysia time. It can also list your courses and recent classes.
+- Stricter rules: questions that are not about attendance data (poems, code, weather and the like), attempts to change its instructions, requests for secrets and requests to change data are refused before anything is looked up.
+- The loading bar is gone. "Thinking ›" can be opened while the assistant works to see each step it takes; afterwards it reads "Thought for …" and still shows the steps. ChatGPT review pending.
+
+
+## Audit log table design — 2026-11-22 05:34
+- The audit log table is easier to read: the date sits over the time, actions stay on one line, and attendance edits show the student, class and what changed (for example "Status: absent → present") instead of raw data.
+- The client IP now sits under the person's name; a missing IP says "IP unavailable" instead of showing a placeholder address. The details window shows the full record neatly indented. ChatGPT review pending.
+
+
+## Recovery email dialog and email design — 2026-11-21 20:04
+- Fixed an occasional "500" on the student dashboard when a page refreshed at the same moment something was saved.
+- Adding a recovery email is now two clear steps: the second has one large code box that checks itself when all 6 digits are in, a countdown to "send a new code", a link to fix a mistyped address, and a confirmation screen once it is verified.
+- Emails (verification code, password reset, attendance warnings) now share a branded design with the code or button clearly shown. ChatGPT review pending.
+
+
+## Recovery email, programme timetable, teaching roles, groups and more courses — 2026-11-21 04:38
+- Recovery email: a new address is only used after its code is entered, so password resets keep reaching the verified one until then. A failed send no longer wipes a working address or a newer code, and each failure says what to do. University addresses such as student.tarc.edu.my are accepted. Sending needs RESEND_API_KEY and a RESEND_FROM_EMAIL on a domain verified in Resend.
+- Timetable: choose a programme to see all its courses' classes together for a semester, or narrow it to one course. A course with no classes is listed as "No classes scheduled".
+- Teaching roles: each staff row has Edit roles and Remove assignment, showing what would change first. A conflicting edit changes nothing, and completed classes and attendance are always kept.
+- Groups: preview and confirm carrying groups into the next semester (returning classmates together, new students filling the first group with space, 25 seats). Add, move or remove students per semester, or change one course's group only. Nobody is enrolled in a course by this.
+- Student Allocation: Add another course on each student's card, with their programme and group already chosen.
+- Credit limits no longer exist (removed earlier). ChatGPT review pending.
+
+
 ## v0.1.14
 
 - When a check-in is refused, the dialog shows the server's exact reason, including the IP address it saw.

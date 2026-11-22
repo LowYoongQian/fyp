@@ -30,8 +30,8 @@ export function CustomDropdown<T extends string | number>({
   ariaLabel?: string;
   fullWidth?: boolean;
   disabled?: boolean;
-  /** Adds a search box to the open list once it is long enough to need one (more than 8 options). */
-  searchable?: boolean;
+  /** Adds a search box to the open list once it is long enough to need one (more than 8 options); 'always' shows it for any length. */
+  searchable?: boolean | 'always';
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -57,7 +57,7 @@ export function CustomDropdown<T extends string | number>({
   );
 
   const selectedOption = normalizedOptions.find(o => o.value === value) || normalizedOptions[0];
-  const showSearch = searchable && normalizedOptions.length > 8;
+  const showSearch = searchable === 'always' || (searchable && normalizedOptions.length > 8);
   const shown = showSearch && query.trim() ? normalizedOptions.filter(option => option.label.toLowerCase().includes(query.trim().toLowerCase())) : normalizedOptions;
   const close = () => { setIsOpen(false); setQuery(''); };
 

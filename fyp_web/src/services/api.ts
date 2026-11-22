@@ -1,9 +1,13 @@
 import axios from 'axios';
+import { browserId, deviceName } from '../utils/deviceIdentity';
 
 // Base URL is injected at build time via Vite env (VITE_API_BASE_URL).
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8003';
 export type RecordPage<T> = { items: T[]; total: number; page: number; per_page: number; stats: Record<string, number>; focus?: { id: string; found: boolean } };
 export type RecordPageQuery = { page: number; per_page: number; search?: string; status?: string; category?: string; submitted_from?: string; submitted_to?: string; focus_id?: string };
+/** One assistant reply. steps: what the server did for it (shown under "Thinking"); never stored with the chat. */
+export type NaturalAnswer = { answer: string; success: boolean; row_count: number; session_id?: string | null;
+  context_state?: Record<string, string | null>; suggestions?: string[]; steps?: string[] };
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -178,10 +182,32 @@ export type LookupKind = 'students' | 'staff' | 'programmes' | 'courses';
 export type RecordKind = 'programmes' | 'courses' | 'assignments' | 'students';
 export type ProgrammeRecord = { id: string; code: string; name: string; student_count: number; course_count: number };
 export type CourseRecord = { id: string; course_code: string; course_name: string; lecturer_id: string | null; programme_id: string | null; programme_code: string | null; programme_name: string | null; semester: AcademicSemester | null; enrolment_count: number; session_count: number };
-export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; roles: { id: string; role: string }[] };
+export type AssignmentRecord = { id: string; lecturer_id: string; lecturer_name: string; staff_id: string; course_id: string; course_code: string; course_name: string; roles: { id: string; role: string }[];
+  /** When the assignment applies: its course's semester and whether it is running (null when the course has no semester yet). */
+  semester?: { name: string; status: string; start_date: string; end_date: string } | null };
+/** What removing teaching roles would change, read before anything is deleted. */
+export type RoleImpact = { roles: string[]; slots_removed: { role: string; class_group: string | null; day: string; start: string; end: string; room: string }[];
+  lectures_left_without_lecturer: number; completed_classes_kept: number; attendance_records_kept: number; classes_in_progress: number; blocked: boolean };
 export type StudentRecord = { id: string; name: string; student_code: string; programme_id: string | null; programme_code: string | null; programme_name: string | null;
   enrolments: { id: string; course_id: string; course_code: string; course_name: string; class_group: string; semester_name: string | null; status: 'active' | 'upcoming' | 'ended' | 'undated' }[] };
-export type AllocationCheck = { groups: { group: string; count: number; full: boolean }[]; semester: AcademicSemester | null };
+export type AllocationCheck = { groups: { group: string; count: number; full: boolean }[]; semester: AcademicSemester | null; programme_group?: string | null };
+/** Programme groups across semesters (GROUP-ROLLOVER-01). */
+export type GroupPerson = { student_id: string; student_code: string; name: string };
+export type GroupPreview = {
+  source: AcademicSemester; target: AcademicSemester; blocking: string[]; capacity: number; note: string;
+  groups: { group: string; already: number; returning: number; new: number; total: number }[];
+  proposals: (GroupPerson & { class_group: string; reason: 'returning' | 'new' })[];
+  already_placed: (GroupPerson & { class_group: string })[]; review: (GroupPerson & { reason: string })[];
+};
+export type GroupSaveResult = { saved: number; already: number; skipped: (Partial<GroupPerson> & { reason: string })[] };
+export type GroupRoster = {
+  semester: AcademicSemester; capacity: number; read_only: boolean; unplaced: GroupPerson[];
+  groups: { group: string; count: number; members: (GroupPerson & { recorded: boolean })[] }[]; review: (GroupPerson & { groups: string[] })[];
+};
+export type GroupChange = {
+  scope: 'programme' | 'course'; student: GroupPerson; from: string | null; to: string; saved: boolean;
+  courses_moving?: string[]; courses_unchanged?: string[]; course_code?: string; programme_group?: string | null;
+};
 export type LookupPage<T> = { items: T[]; has_more: boolean };
 export type LookupStudent = { id: string; name: string; student_code: string; email: string; programme_id: string | null; programme_code: string | null; current_enrolled: boolean };
 export type LookupStaff = { id: string; name: string; staff_id: string; email: string; role: string };
@@ -230,6 +256,8 @@ export type TimetableSemester = AcademicSemester & {
 };
 /** An admin's programme and course choice, sent with every admin timetable read so the server can check they belong together. */
 export type TimetableFilter = { programmeId: string; courseId: string };
+/** An admin's timetable choice: a programme, optionally narrowed to one of its courses (no course = every course in the programme). */
+export type TimetableScope = { programmeId: string; courseId?: string };
 export type AcademicCalendar = { server_time: string; timezone: string; courses: { course_id: string; course_code: string; semester: AcademicSemester | null; programme?: { code: string; name: string } | null }[] };
 
 export interface CourseStaffAssignment {
@@ -438,7 +466,10 @@ export interface AdminSession {
   course_code: string;
   course_name: string;
   lecturer_name: string;
+  /** This class's own role (Lecture, Tutor or Practical) when known. */
   lecturer_role?: string | null;
+  /** Every teaching role the staff member holds in this course (Lecturer, Tutor, Practical). */
+  lecturer_roles?: string[];
   class_group: string;
   opened_at: string | null;
   closed_at: string | null;
@@ -600,7 +631,8 @@ export const apiService = {
   // Real Backend Auth APIs
   // 9 s: inside the sign-in cover's 10 s limit, so a slow server normally ends as an error on the form.
   login: async (email: string, password: string, portal?: string, signal?: AbortSignal) => {
-    const response = await api.post('/auth/login', { email, password, portal }, { timeout: 9000, signal });
+    const response = await api.post('/auth/login', { email, password, portal, browser_id: browserId() || undefined, device_name: await deviceName() },
+      { timeout: 9000, signal });
     return response.data;
   },
   forgotPassword: async (schoolEmail: string) =>
@@ -679,16 +711,48 @@ export const apiService = {
     return response.data;
   },
 
+  /** With onStep, the server streams one JSON line per real step and then the answer; a server that only answers with JSON still works. */
   queryNatural: async (question: string, sessionId?: string, options?: {
     temporary?: boolean; messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
-    context_state?: Record<string, string | null>; signal?: AbortSignal;
-  }) => {
-    const response = await api.post(options?.temporary ? '/query/temporary' : '/query/natural', {
+    context_state?: Record<string, string | null>; signal?: AbortSignal; onStep?: (step: string) => void;
+  }): Promise<NaturalAnswer> => {
+    const path = options?.temporary ? '/query/temporary' : '/query/natural';
+    const body = {
       question,
       session_id: sessionId || null,
       ...(options?.temporary ? { temporary: true, messages: options.messages || [], context_state: options.context_state || {} } : {}),
-    }, { signal: options?.signal });
-    return response.data;
+    };
+    if (!options?.onStep) return (await api.post(path, body, { signal: options?.signal })).data;
+    let read = 0, final: NaturalAnswer | null = null, failure: { status?: number; detail?: string } | null = null;
+    const consume = (text: string, all: boolean) => {
+      const end = all ? text.length : text.lastIndexOf('\n') + 1;
+      for (const line of text.slice(read, end).split('\n')) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === 'step') options.onStep?.(String(event.text));
+        else if (event.type === 'answer') final = event;
+        else if (event.type === 'error') failure = event;
+      }
+      read = Math.max(read, end);
+    };
+    const response = await api.post(path, body, {
+      signal: options.signal, responseType: 'text',
+      // JSON bodies (an older server's answer, and every error, which the interceptors read) are parsed as usual; only the stream stays text.
+      transformResponse: [(data: string, headers) => {
+        if (!String(headers?.['content-type'] || '').includes('application/json')) return data;
+        try { return JSON.parse(data); } catch { return data; }
+      }],
+      headers: { Accept: 'application/x-ndjson, application/json' },
+      onDownloadProgress: (progress) => consume(((progress.event as ProgressEvent | undefined)?.target as XMLHttpRequest | null)?.responseText || '', false),
+    });
+    if (typeof response.data !== 'string') return response.data;
+    consume(response.data, true);
+    if (failure) {
+      const { status, detail } = failure as { status?: number; detail?: string };
+      throw Object.assign(new Error(detail || 'The AI Assistant is temporarily unavailable.'), { response: { status, data: { detail } } });
+    }
+    if (!final) throw new Error('The answer was cut off. Please try again.');
+    return final;
   },
 
   getNaturalSessions: async (before?: string): Promise<{
@@ -722,9 +786,9 @@ export const apiService = {
   getLecturerTimetable: async (semesterId: string, signal?: AbortSignal): Promise<Course[]> =>
     (await api.get('/lecturers/me/timetable', { params: { semester_id: semesterId }, signal })).data,
   // Students and staff send no filter; an admin must (the server refuses an admin read without them, and anyone else's forged one).
-  getTimetableSemesters: async (filter?: TimetableFilter, signal?: AbortSignal): Promise<TimetableSemester[]> =>
+  getTimetableSemesters: async (filter?: TimetableScope, signal?: AbortSignal): Promise<TimetableSemester[]> =>
     (await api.get('/timetable/semesters', { params: filter && { programme_id: filter.programmeId, course_id: filter.courseId }, signal, timeout: 10000 })).data,
-  getTimetableSemester: async (semesterId: string, filter?: TimetableFilter, signal?: AbortSignal): Promise<TimetableSemester> =>
+  getTimetableSemester: async (semesterId: string, filter?: TimetableScope, signal?: AbortSignal): Promise<TimetableSemester> =>
     (await api.get(`/timetable/semesters/${semesterId}`, { params: filter && { programme_id: filter.programmeId, course_id: filter.courseId }, signal, timeout: 10000 })).data,
   /** The admin timetable page's own option lists: uncached and abortable, so a slow answer can never replace a newer choice. */
   getTimetableProgrammes: async (signal?: AbortSignal): Promise<Programme[]> => (await api.get('/admin/programmes', { signal, timeout: 10000 })).data,
@@ -785,8 +849,34 @@ export const apiService = {
   adminRecords: async <T,>(kind: RecordKind, params: { search?: string; page: number; per_page: number }, signal?: AbortSignal): Promise<RecordPage<T>> =>
     (await api.get(`/admin/records/${kind}`, { params, signal, timeout: 15000 })).data,
   // The picked course's groups with seat counts.
-  adminAllocationCheck: async (courseId: string, signal?: AbortSignal): Promise<AllocationCheck> =>
-    (await api.get('/admin/lookup/allocation', { params: { course_id: courseId }, signal, timeout: 15000 })).data,
+  adminAllocationCheck: async (courseId: string, signal?: AbortSignal, studentId?: string): Promise<AllocationCheck> =>
+    (await api.get('/admin/lookup/allocation', { params: { course_id: courseId, student_id: studentId }, signal, timeout: 15000 })).data,
+  adminPreviewGroups: async (body: { source_semester_id: string; target_semester_id: string }, signal?: AbortSignal): Promise<GroupPreview> =>
+    (await api.post('/admin/semesters/group-preview', body, { signal })).data,
+  adminSaveGroups: async (semesterId: string, rows: { student_id: string; class_group: string }[]): Promise<GroupSaveResult> => {
+    const response = await api.post(`/admin/semesters/${semesterId}/groups`, { rows });
+    clearApiCache();
+    return response.data;
+  },
+  adminGroupRoster: async (semesterId: string, signal?: AbortSignal): Promise<GroupRoster> =>
+    (await api.get(`/admin/semesters/${semesterId}/groups`, { signal })).data,
+  /** Programme scope. dry_run answers what would change and saves nothing. */
+  adminPlaceInGroup: async (semesterId: string, studentId: string, classGroup: string, dryRun = false): Promise<GroupChange> => {
+    const response = await api.put(`/admin/semesters/${semesterId}/groups/${studentId}`, { class_group: classGroup, dry_run: dryRun });
+    if (!dryRun) clearApiCache();
+    return response.data;
+  },
+  adminRemoveFromGroup: async (semesterId: string, studentId: string): Promise<{ removed: boolean; class_group: string }> => {
+    const response = await api.delete(`/admin/semesters/${semesterId}/groups/${studentId}`);
+    clearApiCache();
+    return response.data;
+  },
+  /** Course scope: one enrolment to another group of that course. */
+  moveCourseGroup: async (enrolmentId: string, classGroup: string, dryRun = false): Promise<GroupChange> => {
+    const response = await api.put(`/enrolments/${enrolmentId}/group`, { class_group: classGroup, dry_run: dryRun });
+    if (!dryRun) clearApiCache();
+    return response.data;
+  },
 
   // Admin backend CRUD endpoints
   adminGetStudents: async (skip?: number, limit?: number, search?: string): Promise<{ items: AdminStudent[]; total: number }> => {
@@ -903,7 +993,7 @@ export const apiService = {
   adminGetAssignments: async (): Promise<CourseStaffAssignment[]> => {
     return cachedGet('/admin/assignments');
   },
-  adminGetTimetable: async (semesterId: string, filter: TimetableFilter, signal?: AbortSignal): Promise<Course[]> =>
+  adminGetTimetable: async (semesterId: string, filter: TimetableScope, signal?: AbortSignal): Promise<Course[]> =>
     (await api.get('/admin/timetable', { params: { semester_id: semesterId, programme_id: filter.programmeId, course_id: filter.courseId }, signal })).data,
   adminUpdateTimetableSlot: async (
     meetingId: number | string,
@@ -921,6 +1011,17 @@ export const apiService = {
   adminCreateAssignments: async (assignment: { course_id: string; lecturer_id: string; roles: string[] }): Promise<CourseStaffAssignment[]> => {
     const response = await api.post('/admin/assignments/batch', assignment);
     clearApiCache();   // the assignment list (cached) now has this role
+    return response.data;
+  },
+  adminAssignmentImpact: async (courseId: string, lecturerId: string, roles: string[]): Promise<RoleImpact> => {
+    const params = new URLSearchParams({ course_id: courseId, lecturer_id: lecturerId });
+    roles.forEach(role => params.append('roles', role));
+    return (await api.get(`/admin/assignments/impact?${params.toString()}`)).data;
+  },
+  /** Exactly these roles for one staff member in one course, saved together (any conflict changes nothing). [] removes the assignment. */
+  adminSetAssignmentRoles: async (body: { course_id: string; lecturer_id: string; roles: string[] }): Promise<CourseStaffAssignment[]> => {
+    const response = await api.put('/admin/assignments/roles', body);
+    clearApiCache();
     return response.data;
   },
   adminDeleteAssignment: async (assignmentId: number | string): Promise<any> => {

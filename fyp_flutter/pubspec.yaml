@@ -24,6 +24,7 @@ dependencies:
   image_cropper: 12.2.1
   firebase_core: ^4.15.0
   firebase_messaging: ^16.7.0
+  device_info_plus: ^12.4.0
 
 dev_dependencies:
   integration_test:

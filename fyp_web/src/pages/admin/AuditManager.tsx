@@ -20,8 +20,10 @@ import {
   Activity,
   AlertTriangle,
   RefreshCw,
+  Globe,
   X
 } from 'lucide-react';
+import { auditPayload, auditSummary } from '../../utils/auditSummary';
 
 type Applied = { search: string; from: string; until: string };
 const NO_FILTER: Applied = { search: '', from: '', until: '' };
@@ -150,6 +152,9 @@ export const AuditManager: React.FC = () => {
     if (act.includes('DELETE') || act.includes('REMOVE')) return 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border-rose-200/50';
     return 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200/50';
   };
+  const avatarTone = (role: string) => role === 'admin' ? 'from-indigo-500 to-violet-500' : role === 'lecturer' ? 'from-blue-500 to-sky-400' : 'from-slate-400 to-slate-500';
+  const headCell = 'bg-slate-50 py-3 px-3 dark:bg-slate-800/60';
+  const bodyCell = 'border-b border-slate-100 py-3.5 px-3 align-middle dark:border-slate-800/70';
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto font-sans">
@@ -255,55 +260,84 @@ export const AuditManager: React.FC = () => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            {/* Fixed columns so long names, actions and payloads truncate in place instead of widening the table. */}
+            <table className="w-full min-w-[760px] table-fixed border-separate border-spacing-0 text-left text-xs">
+              <colgroup>
+                <col className="w-[124px]" />
+                <col className="w-[232px]" />
+                <col className="w-[212px]" />
+                <col />
+                <col className="w-[60px]" />
+              </colgroup>
               <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
-                  <th className="py-3 px-4">Timestamp</th>
-                  <th className="py-3 px-4">User</th>
-                  <th className="py-3 px-4">Action</th>
-                  <th className="py-3 px-4">Operation Details</th>
-                  <th className="py-3 px-4">Client IP</th>
-                  <th className="py-3 px-4 text-right">Inspect</th>
+                <tr className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+                  <th className={`${headCell} rounded-l-xl pl-4`}>Time (MYT)</th>
+                  <th className={headCell}>User</th>
+                  <th className={headCell}>Action</th>
+                  <th className={headCell}>Details</th>
+                  <th className={`${headCell} rounded-r-xl pr-4`}><span className="sr-only">Inspect</span></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
-                {paginatedLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
-                    <td className="py-4 px-4 text-slate-500 dark:text-slate-400 font-mono text-[11px] whitespace-nowrap">
-                      {attendanceDateTime(log.created_at)}
-                    </td>
-                    <td className="py-4 px-4 font-medium text-slate-900 dark:text-white">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center font-bold text-xs shrink-0">
-                          {log.user_name.charAt(0).toUpperCase()}
+              <tbody>
+                {paginatedLogs.map((log) => {
+                  const [day, time] = attendanceDateTime(log.created_at).split(', ');
+                  const summary = auditSummary(log.details);
+                  return (
+                    <tr key={log.id} className="group transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40 [&:last-child>td]:border-b-0">
+                      <td className={`${bodyCell} pl-4 tabular-nums`}>
+                        <div className="font-semibold text-slate-700 dark:text-slate-200">{day}</div>
+                        {time && <div className="mt-0.5 text-[11px] text-slate-400">{time}</div>}
+                      </td>
+                      <td className={bodyCell}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div aria-hidden="true" className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-[11px] font-bold text-white shadow-sm ${avatarTone(log.user_role)}`}>
+                            {log.user_name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-slate-800 dark:text-slate-100" title={log.user_name}>{log.user_name}</div>
+                            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-slate-400">
+                              <span className="shrink-0 font-semibold uppercase tracking-wide">{log.user_role}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="flex min-w-0 items-center gap-1" title="Client IP">
+                                <Globe className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                <span className="sr-only">Client IP </span>
+                                <span className="truncate font-mono">{log.ip_address || 'IP unavailable'}</span>
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <div>{log.user_name}</div>
-                          <div className="text-[10px] text-slate-400 uppercase font-mono">{log.user_role}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <span className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold border ${getActionBadgeColor(log.action)}`}>
-                        {log.action}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-slate-600 dark:text-slate-300 max-w-sm truncate">
-                      {log.details || "No metadata details provided"}
-                    </td>
-                    <td className="py-4 px-4 font-mono text-slate-500 dark:text-slate-400 text-[11px]">
-                      {log.ip_address || "127.0.0.1"}
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      <button
-                        onClick={() => setSelectedLog(log)}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-semibold transition-all inline-flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Eye className="h-3.5 w-3.5" /> Details
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className={bodyCell}>
+                        <span title={log.action} className={`inline-flex max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold ${getActionBadgeColor(log.action)}`}>
+                          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+                          <span className="truncate">{log.action}</span>
+                        </span>
+                      </td>
+                      <td className={bodyCell}>
+                        <div className="truncate font-medium text-slate-700 dark:text-slate-200" title={summary.title}>{summary.title}</div>
+                        {summary.changes.length > 0 && (
+                          <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+                            {summary.changes.slice(0, 2).map(change => (
+                              <span key={change} title={change} className={`min-w-0 truncate rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium ${change.includes('→') ? 'border-blue-100 bg-blue-50 text-blue-700' : 'border-slate-200/80 bg-slate-100 text-slate-600 dark:text-slate-300'}`}>{change}</span>
+                            ))}
+                            {summary.changes.length > 2 && <span className="shrink-0 text-[10.5px] text-slate-400">+{summary.changes.length - 2} more</span>}
+                          </div>
+                        )}
+                      </td>
+                      <td className={`${bodyCell} pr-4 text-right`}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedLog(log)}
+                          aria-label="Details"
+                          title="View details"
+                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand-blue group-hover:text-brand-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -390,8 +424,8 @@ export const AuditManager: React.FC = () => {
 
               <div>
                 <label className="text-slate-400 font-medium block mb-1">Full Operation Payload / Details</label>
-                <div className="p-3.5 bg-slate-950 text-slate-200 rounded-xl font-mono text-xs leading-relaxed whitespace-pre-wrap">
-                  {selectedLog.details || "No additional metadata recorded."}
+                <div className="max-h-72 overflow-auto p-3.5 bg-slate-950 text-slate-200 rounded-xl font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
+                  {auditPayload(selectedLog.details) || "No additional metadata recorded."}
                 </div>
               </div>
             </div>

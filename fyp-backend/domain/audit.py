@@ -15,6 +15,11 @@ def reset_audit_client_ip(token) -> None:
     _request_client_ip.reset(token)
 
 
+def current_client_ip() -> Optional[str]:
+    """The caller's address as the client-IP middleware resolved it (proxy-aware); None outside a request."""
+    return _request_client_ip.get()
+
+
 def log_admin_action(db: Session, current_user: User, action: str, details: str, commit: bool = True) -> Optional[AuditLog]:
     """Record an admin action, deriving the actor fields from `current_user`.
 

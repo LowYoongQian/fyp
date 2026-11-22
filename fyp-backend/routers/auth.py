@@ -1,3 +1,4 @@
+import logging
 import hashlib
 import os
 import secrets
@@ -5,7 +6,7 @@ from datetime import timedelta
 from typing import Literal, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, StrictBool
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -15,9 +16,10 @@ from db.database import get_db
 from db.models import AuthAttempt, AuthLoginChallenge, Lecturer, Student, User
 from schemas import LoginRequest, TokenResponse, LoginChallengeResponse
 from domain.account_security import (active, token_hash, lock_user, factor_for, check_factor_limit,
-    verify_factor, new_session, revoke_all)
+    verify_factor, new_session, revoke_all, device_key, device_label)
+from domain.audit import current_client_ip
 from domain import personal_email
-from integrations import resend_mail
+from integrations import email_template, resend_mail
 from utils.security import (
     create_access_token,
     get_current_user,
@@ -26,6 +28,7 @@ from utils.security import (
 )
 from utils.timeutil import iso_utc, utcnow
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 # Accounts are created by an administrator from the approved student and staff records. A typed school-looking address is not proof of
@@ -36,7 +39,7 @@ def register():
 
 # User Login Endpoint
 @router.post("/login", response_model=TokenResponse | LoginChallengeResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     raw = (body.identifier or body.email or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="Email or ID is required")
@@ -109,7 +112,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, 'Password changed. Sign in again.')
     if attempt:
         attempt.failures, attempt.blocked_until, attempt.updated_at = 0, None, utcnow()
-    label = 'Mobile device' if body.device_id else 'Web browser'
+    app = bool(body.device_id)
+    label, key, ip = device_label(body.device_name, request.headers.get('user-agent'), app), device_key(app, body.device_id or body.browser_id), current_client_ip()
     if user.two_factor_enabled:
         factor = factor_for(db, user.id)
         check_factor_limit(factor)
@@ -117,24 +121,24 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
             raise HTTPException(409, 'Authenticator setup is incomplete. Contact the administrator.')
         challenge = secrets.token_urlsafe(32)
         db.add(AuthLoginChallenge(token_hash=token_hash(challenge), user_id=user.id,
-            auth_version=user.auth_version, expires_at=utcnow() + timedelta(minutes=5), device_label=label))
+            auth_version=user.auth_version, expires_at=utcnow() + timedelta(minutes=5), device_label=label, device_key=key, ip_address=ip))
         db.commit()
         return {'requires_two_factor': True, 'challenge_token': challenge, 'expires_in': 300}
-    return _login_response(db, user, label)
+    return _login_response(db, user, label, key, ip)
 
 
 def _approved_student(db, user) -> bool:
     return personal_email.is_student_identity(user.email) and db.query(Student.id).filter(Student.user_id == str(user.id)).first() is not None
 
 
-def _login_response(db, user, label):
+def _login_response(db, user, label, key=None, ip=None):
     student, lecturer = None, None
     if user.role == "student":
         student = db.query(Student).filter(Student.user_id == str(user.id)).first()
     elif user.role == "lecturer":
         lecturer = db.query(Lecturer).filter(Lecturer.user_id == str(user.id)).first()
 
-    session = new_session(db, user, label)
+    session = new_session(db, user, label, device_key=key, ip_address=ip)
     token = create_access_token({'user_id': str(user.id), 'role': user.role, 'sid': str(session.id)},
                                 expires_delta=session.expires_at - utcnow())
     db.commit()  # Never issue a usable token if persistence failed.
@@ -195,7 +199,7 @@ def verify_login(body: MFALogin, db: Session = Depends(get_db)):
         raise HTTPException(401, 'Login verification expired. Sign in again.')
     verify_factor(db, factor_for(db, user.id), body.code)
     challenge.consumed_at = utcnow()
-    return _login_response(db, user, challenge.device_label)
+    return _login_response(db, user, challenge.device_label, challenge.device_key, challenge.ip_address)
 
 @router.get("/server-time")
 def get_server_time():
@@ -267,12 +271,32 @@ def _token_hash(value: str) -> str:
 RECOVERY_CODE_MINUTES, RECOVERY_RESEND_SECONDS, RECOVERY_VERIFY_TRIES = 10, 60, 5
 
 
-def _mail(to: str, subject: str, text: str, idempotency_key: str):
-    """Send one account email; a provider failure is a short 503, never a claim that it was sent."""
+_SEND_FAILURES = {
+    # What the student can act on, per failure. The operator log below says which setting or provider answer it was.
+    "not_configured": (503, "Email sending is not set up on this server yet. Please contact the administrator."),
+    "rate_limited": (429, "Too many emails are being sent right now. Please try again in a minute."),
+    "rejected": (503, "The email service did not accept this message. Check the address, or contact the administrator if it keeps happening."),
+}
+
+
+def _mail(to: str, subject: str, text: str, idempotency_key: str, purpose: str = "account", html: str | None = None):
+    """Send one account email; a provider failure is a short error, never a claim that it was sent.
+
+    The log line names the failure, Resend's error name and any missing setting by name, and the recipient's domain only:
+    never a key, a code or a full address."""
     try:
-        resend_mail.send(to, subject, text, idempotency_key)
-    except resend_mail.EmailError:
-        raise HTTPException(status_code=503, detail="The email could not be sent. Please try again.")
+        resend_mail.send(to, subject, text, idempotency_key, html=html)
+    except resend_mail.EmailError as error:
+        logger.warning("Email not sent purpose=%s reason=%s http=%s provider=%s missing=%s recipient_domain=%s",
+                       purpose, error.code, error.status, error.provider or "-",
+                       ",".join(resend_mail.missing_settings()) or "-", to.rpartition("@")[2] or "-")
+        status, detail = _SEND_FAILURES.get(error.code, (503, "The email could not be sent. Please try again."))
+        raise HTTPException(status_code=status, detail=detail)
+
+
+def _locked_account(db: Session, user: User) -> User:
+    """This account's row, locked for the rest of the transaction, so two requests for it (a double click, a second tab) take turns."""
+    return db.query(User).filter(User.id == user.id).with_for_update().populate_existing().first() or user
 
 
 @router.post("/recovery-email/request")
@@ -280,53 +304,80 @@ def request_recovery_email(body: RecoveryEmailRequest, user: User = Depends(get_
     if user.role != "student":
         raise HTTPException(status_code=403, detail="Student account required")
     address = personal_email.require_linkable(db, user, body.recovery_email)
-    if user.recovery_email_verified and personal_email.normalized(user.recovery_email) == address:
+    account = _locked_account(db, user)
+    if account.recovery_email_verified and personal_email.normalized(account.recovery_email) == address:
+        # Keeping the current address: a replacement code still waiting can no longer switch it.
+        account.recovery_email_pending = account.recovery_code_hash = account.recovery_code_expires_at = None
+        db.commit()
         return {"message": "Already verified"}
-    issued = user.recovery_code_expires_at - timedelta(minutes=RECOVERY_CODE_MINUTES) if user.recovery_code_expires_at else None
+    issued = account.recovery_code_expires_at - timedelta(minutes=RECOVERY_CODE_MINUTES) if account.recovery_code_expires_at else None
     if issued and (utcnow() - issued).total_seconds() < RECOVERY_RESEND_SECONDS:
+        db.rollback()
         raise HTTPException(status_code=429, detail="Please wait a minute before asking for another code.")
     code = f"{secrets.randbelow(1000000):06d}"
-    # The address stays PENDING (not verified) until its owner enters the code; a pending or replaced address is never a destination.
-    user.recovery_email = address
-    user.recovery_email_verified = False
-    user.recovery_code_hash = _token_hash(code)
-    user.recovery_code_expires_at = utcnow() + timedelta(minutes=RECOVERY_CODE_MINUTES)
+    digest = _token_hash(code)
+    # The new address waits in recovery_email_pending. A verified address in recovery_email stays the destination until the new
+    # code is entered, so a failed or abandoned replacement never leaves the student without a working recovery email.
+    account.recovery_email_pending = address
+    account.recovery_code_hash = digest
+    account.recovery_code_expires_at = utcnow() + timedelta(minutes=RECOVERY_CODE_MINUTES)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="That email cannot be used.")
     try:
-        _mail(address, "Verify your recovery email", f"Your verification code is {code}.\n\nIt expires in {RECOVERY_CODE_MINUTES} minutes.", f"recovery-{user.id}-{code}")
+        _mail(address, "Verify your recovery email", f"Your verification code is {code}.\n\nIt expires in {RECOVERY_CODE_MINUTES} minutes.",
+              f"recovery-{user.id}-{code}", purpose="recovery-code", html=email_template.render(
+                  "Verify your recovery email", "Enter this code in Smart Attendance to confirm this address as the recovery email for your "
+                  "school account.", eyebrow="Account security", code=code, preheader=f"Your code is {code}. It expires in {RECOVERY_CODE_MINUTES} minutes.",
+                  note=f"The code expires in {RECOVERY_CODE_MINUTES} minutes and works once. Didn't ask for it? Ignore this email; nothing "
+                       "changes on your account."))
     except HTTPException:
-        user.recovery_code_hash = user.recovery_code_expires_at = None   # nothing was sent: no code to guess, and an immediate retry is allowed
+        # Nothing was sent: withdraw THIS code only, so an immediate retry is allowed. A newer request may have issued its own code
+        # since, and that one must stay valid; the verified address is never touched here.
+        current = _locked_account(db, user)
+        if current.recovery_code_hash == digest:
+            current.recovery_email_pending = current.recovery_code_hash = current.recovery_code_expires_at = None
         db.commit()
         raise
     return {"message": "Code sent"}
 
+
 @router.post("/recovery-email/verify")
 def verify_recovery_email(body: RecoveryEmailVerify, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    account = _locked_account(db, user)
     key = _token_hash(f"recovery-verify:{user.id}")
     tries = db.query(AuthAttempt).filter_by(key=key).first()
     if tries and tries.blocked_until and tries.blocked_until > utcnow():
+        db.rollback()
         raise HTTPException(status_code=429, detail="Too many wrong codes. Ask for a new code later.")
-    valid = user.recovery_code_hash and secrets.compare_digest(user.recovery_code_hash, _token_hash(body.code.strip()))
-    if not valid or not user.recovery_code_expires_at or user.recovery_code_expires_at < utcnow():
+    valid = account.recovery_code_hash and secrets.compare_digest(account.recovery_code_hash, _token_hash(body.code.strip()))
+    if not valid or not account.recovery_code_expires_at or account.recovery_code_expires_at < utcnow():
         # A six-digit code must not be guessable: after a few wrong tries it is destroyed.
         tries = tries or AuthAttempt(key=key, failures=0, updated_at=utcnow())
         db.add(tries)
         tries.failures, tries.updated_at = (tries.failures or 0) + 1, utcnow()
         if tries.failures >= RECOVERY_VERIFY_TRIES:
             tries.failures, tries.blocked_until = 0, utcnow() + timedelta(minutes=15)
-            user.recovery_code_hash = user.recovery_code_expires_at = None
+            account.recovery_email_pending = account.recovery_code_hash = account.recovery_code_expires_at = None
         db.commit()
         raise HTTPException(status_code=400, detail="Code is invalid or expired")
+    if account.recovery_email_pending:
+        # Linked only now, and only if it is still free: another account may have linked it while this code waited.
+        account.recovery_email = personal_email.require_linkable(db, account, account.recovery_email_pending)
+        account.recovery_email_pending = None
+    # (No pending address: a code issued before this change, whose address was already written to recovery_email.)
     if tries:
         db.delete(tries)
-    user.recovery_email_verified = True
-    user.recovery_code_hash = None
-    user.recovery_code_expires_at = None
-    db.commit()
+    account.recovery_email_verified = True
+    account.recovery_code_hash = None
+    account.recovery_code_expires_at = None
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That email cannot be used.")
     return {"message": "Recovery email verified"}
 
 RESET_LINK_MINUTES, RESET_RESEND_SECONDS = 20, 60
@@ -355,7 +406,11 @@ def forgot_password(body: ForgotPasswordRequest, background: BackgroundTasks, db
 def _send_reset_link(db: Session, user_id, token_digest: str, address: str, link: str, idempotency_key: str):
     try:
         text = f"Open this link to set a new password for your school account:\n\n{link}\n\nThis link works once and expires in {RESET_LINK_MINUTES} minutes."
-        resend_mail.send(address, "Reset your password", text, idempotency_key)
+        resend_mail.send(address, "Reset your password", text, idempotency_key, html=email_template.render(
+            "Reset your password", "We received a request to set a new password for your school account.", eyebrow="Account security",
+            button=("Set a new password", link), preheader=f"Your password reset link expires in {RESET_LINK_MINUTES} minutes.",
+            note=f"This link works once and expires in {RESET_LINK_MINUTES} minutes. Didn't ask for a new password? Ignore this email; "
+                 "your password stays the same."))
     except resend_mail.EmailError:
         # Nothing was delivered: drop that unusable link (not a newer one) so the student can ask again at once.
         try:
@@ -438,6 +493,7 @@ def get_current_user_profile(user: User = Depends(get_current_user), db: Session
         "in_app_notifications": user.in_app_notifications,
         "recovery_email": user.recovery_email,
         "recovery_email_verified": user.recovery_email_verified,
+        "recovery_email_pending": user.recovery_email_pending,
         "recovery_prompt_dismissed": bool(user.recovery_prompt_dismissed),
         # Raw so the client can tell "never chosen" (null) from an explicit choice when carrying over an old browser-only setting.
         "pet_visible": user.pet_visible,

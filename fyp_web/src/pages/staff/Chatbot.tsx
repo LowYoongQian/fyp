@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { apiService } from '../../services/api';
 import { BookOpen, MessageSquareCode, Send, Sparkles, UserRound, UsersRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ThinkingBar } from '../../components/loading-ui/thinking-bar';
+import { ThinkingTrace } from '../../components/loading-ui/thinking-trace';
 import { InfinityLoop } from '../../components/loading-ui/infinity';
 import { ChatWorkspace, type ChatTab } from '../../components/ChatWorkspace';
 import { CHAT_STARTERS, rankChatSuggestions } from '../../utils/chatSuggestions';
@@ -15,6 +15,9 @@ interface ChatMessage {
   sender: 'user' | 'system';
   text: string;
   success?: boolean;
+  /** What the server did for this answer and how long it took; only for answers received in this visit (never stored). */
+  steps?: string[];
+  seconds?: number;
 }
 
 interface ChatRequestError {
@@ -155,7 +158,10 @@ const AssistantMessageContent: React.FC<{ text: string; presentation: AssistantP
   );
 };
 
-const WELCOME_TEXT = "Hello! I can help with attendance, students, courses, sessions, timetables, analytics, and at-risk students.";
+/** The "Thought for" clock. Read only when a question is sent and when its answer arrives, never while rendering. */
+const clockSeconds = () => performance.now() / 1000;
+
+const WELCOME_TEXT ="Hello! I can help with attendance, students, courses, sessions, timetables, analytics, and at-risk students.";
 const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /** Short "assistant is typing" cue shown before a brand-new chat's greeting; a static status when motion is reduced. */
@@ -189,6 +195,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
   const finishGreeting = useCallback(() => setGreeting('done'), []);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<string[]>([]);
   const [sessionId, setSessionId] = useState<string>(tab.sessionId || '');
   const [historyLoading, setHistoryLoading] = useState(restoring);
   const [historyError, setHistoryError] = useState(false);
@@ -359,7 +366,9 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
     if (!messages.some(message => message.sender === 'user')) titleRef.current = questionText.trim();
     update(titleRef.current, sessionId || undefined);
     setSending(true);
-    
+    setLiveSteps([]);
+    const startedAt = clockSeconds();
+
     // Add user message
     messageIdRef.current += 1;
     const userMsg: ChatMessage = {
@@ -376,6 +385,7 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
         messages: messages.filter(message => message.id !== 'welcome').slice(-16).map(message => ({
           role: message.sender === 'user' ? 'user' : 'assistant', content: message.text.slice(0, 2000),
         })),
+        onStep: (step) => { if (mountedRef.current && !controller.signal.aborted) setLiveSteps(current => [...current, step]); },
       });
       if (!mountedRef.current || controller.signal.aborted) return;
       if (response.session_id) { setSessionId(response.session_id); update(titleRef.current, response.session_id); }
@@ -386,7 +396,9 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
         id: `message-${messageIdRef.current}`,
         sender: 'system',
         text: response.answer,
-        success: response.success
+        success: response.success,
+        steps: response.steps,
+        seconds: clockSeconds() - startedAt,
       };
       setMessages(prev => [...prev, systemMsg]);
     } catch (err: unknown) {
@@ -467,7 +479,8 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
               </div>
 
               {/* Chat Bubble */}
-              <div className="space-y-2.5">
+              <div className="space-y-1.5">
+                {isSystem && !!msg.steps?.length && <div className="pt-1"><ThinkingTrace steps={msg.steps} seconds={msg.seconds} /></div>}
                 <div className={`p-4 text-xs leading-relaxed border shadow-sm ${presentation ? 'w-full' : ''} ${
                   isSystem
                     ? 'bg-white border-slate-100 text-slate-700 font-sans rounded-2xl rounded-tl-none'
@@ -483,13 +496,11 @@ const ChatThread: React.FC<{ tab: ChatTab; active: boolean;
         })}
         {greeting === 'typing' && !historyLoading && <TypingIndicator />}
         {sending && (
-          <div className="flex items-center gap-3 mr-auto text-left max-w-[80%]">
+          <div className="flex items-start gap-3 mr-auto text-left max-w-[80%]">
             <div className="h-8 w-8 rounded-full shrink-0 flex items-center justify-center border border-brand-blue/10 bg-brand-blue-light text-brand-blue font-sans font-bold text-[10px] shadow-sm">
               AI
             </div>
-            <div className="rounded-2xl rounded-tl-none border border-slate-100 bg-white px-4 py-3 shadow-sm">
-              <ThinkingBar />
-            </div>
+            <div className="min-w-0 pt-1"><ThinkingTrace active steps={liveSteps} /></div>
           </div>
         )}
       </div>

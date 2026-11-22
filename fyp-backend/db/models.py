@@ -56,6 +56,8 @@ class User(Base):
     # Where the pet was last dropped, as the distance from the top-left of the allowed area; NULL = default corner. Saved with the account so it follows the user to every browser and to the live site.
     pet_offset_x          = Column(Integer, nullable=True)
     pet_offset_y          = Column(Integer, nullable=True)
+    # A replacement address waiting for its code; recovery_email stays the verified destination until that code is entered.
+    recovery_email_pending = Column(String, nullable=True)
     recovery_code_hash    = Column(String, nullable=True)
     recovery_code_expires_at = Column(DateTime, nullable=True)
     password_reset_hash   = Column(String, nullable=True, index=True)
@@ -75,6 +77,9 @@ class AuthSession(Base):
     expires_at = Column(DateTime, nullable=False, index=True)
     revoked_at = Column(DateTime)
     device_label = Column(String(120), nullable=False, default="Unknown device")
+    # "app:" or "web:" + a hash of the install/browser id, so one device is listed once; NULL for sessions from before it was recorded.
+    device_key = Column(String(80), index=True)
+    ip_address = Column(String(64))
 
 
 class AuthFactor(Base):
@@ -97,6 +102,8 @@ class AuthLoginChallenge(Base):
     expires_at = Column(DateTime, nullable=False, index=True)
     consumed_at = Column(DateTime)
     device_label = Column(String(120), nullable=False)
+    device_key = Column(String(80))
+    ip_address = Column(String(64))
 
 
 class AuthAttempt(Base):
@@ -260,6 +267,24 @@ class ClassMeeting(Base):
 
     course        = relationship("Course")
     lecturer      = relationship("Lecturer")
+
+# A student's tutorial group for one programme semester (rollover carries it forward; new course enrolments default to it).
+# Course enrolments keep their own class_group, so one course can differ from the programme group without losing either.
+class SemesterGroupMember(Base):
+    __tablename__ = "semester_group_members"
+    __table_args__ = (
+        UniqueConstraint("semester_id", "student_id", name="uq_semester_group_student"),
+        CheckConstraint("source IN ('manual', 'rollover')", name="ck_semester_group_source"),
+        Index("ix_semester_group_members_group", "semester_id", "class_group"),
+        Index("ix_semester_group_members_student", "student_id"),
+    )
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    semester_id = Column(UUID(as_uuid=False), ForeignKey("academic_semesters.id", ondelete="CASCADE"), nullable=False)
+    student_id  = Column(UUID(as_uuid=False), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    class_group = Column(String(16), nullable=False)
+    source      = Column(String(16), nullable=False, default="manual", server_default="manual")
+    updated_at  = Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow, server_default=func.now())
+
 
 # Course enrolment table
 class Enrolment(Base):

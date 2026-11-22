@@ -83,6 +83,11 @@ def assignment_records(search: str = SEARCH, page: int = PAGE, per_page: int = P
         roles = db.query(assignment).filter(tuple_(assignment.lecturer_id, assignment.course_id).in_(list(groups)))
         for role in roles.order_by(assignment.role):
             groups[role.lecturer_id, role.course_id]["roles"].append({"id": role.id, "role": role.role})
+        # When the assignment applies (its course's semester and whether that is running), shown apart from what the person teaches.
+        terms = dict(db.query(Course.id, AcademicSemester).join(AcademicSemester, AcademicSemester.id == Course.semester_id)
+                     .filter(Course.id.in_({course for _, course in groups})))
+        for (_, course), group in groups.items():
+            group["semester"] = semester_dict(terms[course]) if course in terms else None
     return {"items": list(groups.values()),
             "total": total, "page": page, "per_page": per_page, "stats": {}}
 

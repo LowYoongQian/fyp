@@ -77,17 +77,19 @@ def list_timetable_semesters(programme_id: Optional[UUID] = Query(None), course_
                              db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """The caller's own upcoming, current and previous semesters, each with whether its timetable may be opened and why not.
 
-    An admin must choose a programme and one of its courses first and gets only that course's semester; students and staff send no filter."""
-    return timetable_access.list_semesters(db, current_user, timetable_access.scope_course(db, current_user, programme_id, course_id))
+    An admin chooses a programme first and gets its semesters; with one of its courses as well, only that course's semester. Students and
+    staff send no filter."""
+    programme, course = timetable_access.scope_timetable(db, current_user, programme_id, course_id)
+    return timetable_access.list_semesters(db, current_user, course, programme)
 
 
 @router.get("/timetable/semesters/{semester_id}")
 def open_timetable_semester(semester_id: UUID, programme_id: Optional[UUID] = Query(None), course_id: Optional[UUID] = Query(None),
                             db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Re-validates one semester: 404 outside the caller's scope (or, for an admin, not the chosen course's), 403 with the reason unless it is current."""
-    course = timetable_access.scope_course(db, current_user, programme_id, course_id)
-    semester = timetable_access.require_viewable_semester(db, current_user, str(semester_id), course)
-    return timetable_access.semester_summary(db, current_user, semester, course)
+    programme, course = timetable_access.scope_timetable(db, current_user, programme_id, course_id)
+    semester = timetable_access.require_viewable_semester(db, current_user, str(semester_id), course, programme)
+    return timetable_access.semester_summary(db, current_user, semester, course, programme)
 
 
 @router.get("/timetable/meetings/{meeting_id}/semester")

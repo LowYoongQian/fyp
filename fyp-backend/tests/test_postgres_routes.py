@@ -550,7 +550,7 @@ def test_password_reset_is_single_use_revokes_sessions_and_hides_account_existen
     old_headers={'Authorization':'Bearer '+login['access_token']}
     user=pg[0].get(User,student.user_id);user.recovery_email='synthetic-recovery@example.org';user.recovery_email_verified=True;pg[0].commit()
     deliveries=[]
-    monkeypatch.setattr(auth.resend_mail,'send',lambda address,subject,text,key:deliveries.append((address,text)))
+    monkeypatch.setattr(auth.resend_mail,'send',lambda address,subject,text,key,html=None:deliveries.append((address,text)))
     known=call(pg,'POST','/auth/forgot-password',dict(school_email=body['email']),role='anonymous')
     unknown=call(pg,'POST','/auth/forgot-password',dict(school_email='missing@student.school.edu'),role='anonymous')
     assert known==unknown and len(deliveries)==1

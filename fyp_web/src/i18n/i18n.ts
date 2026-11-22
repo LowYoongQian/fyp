@@ -84,6 +84,7 @@ export const fetchSystemLanguages = async (): Promise<void> => {
     if (data && data.supportedLanguages && Array.isArray(data.supportedLanguages)) {
       activeLanguagesList = data.supportedLanguages;
       activeTranslationsDict = data.translations || FALLBACK_TRANSLATIONS;
+      replacementCache = null;
       localStorage.setItem('cached_system_languages', JSON.stringify(data));
       applyPageTranslations();
     }
@@ -124,84 +125,141 @@ const flattenTranslations = (dictionary: Record<string, any>, prefix = ''): Reco
   return flattened;
 };
 
-const getTextReplacementMap = (): Map<string, string> => {
-  if (activeLanguage === 'en') return new Map();
-  const english = flattenTranslations(activeTranslationsDict.en || FALLBACK_TRANSLATIONS.en);
-  const selected = flattenTranslations(activeTranslationsDict[activeLanguage] || {});
-  const replacements = new Map<string, string>();
-  for (const [key, source] of Object.entries(english)) {
-    const translated = selected[key];
-    if (translated && translated !== source) replacements.set(source, translated);
+// Phrase books: the English UI text itself -> its translation, one JSON file per language (src/i18n/phrases/<code>.json, kept complete with
+// scripts/i18n-extract.mjs). A phrase with {0}, {1}… stands for text built with values ("Found {0} matching sessions").
+const phraseLoaders = import.meta.glob<Record<string, string>>('./phrases/[a-z][a-z].json', { import: 'default' });
+const phraseBooks: Record<string, Record<string, string>> = {};
+type PhrasePattern = { regex: RegExp; template: string; slots: number[] };
+type Replacements = { language: string; exact: Map<string, string>; patterns: PhrasePattern[]; memo: Map<string, string> };
+let replacementCache: Replacements | null = null;
+
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const buildReplacements = (): Replacements => {
+  const exact = new Map<string, string>();
+  const patterns: PhrasePattern[] = [];
+  if (activeLanguage !== 'en') {
+    for (const [source, translated] of Object.entries(phraseBooks[activeLanguage] || {})) {
+      if (!translated || translated === source) continue;
+      if (!/\{\d+\}/.test(source)) { exact.set(source, translated); continue; }
+      const slots: number[] = [];
+      const body = source.split(/(\{\d+\})/).map(part => {
+        const slot = part.match(/^\{(\d+)\}$/);
+        if (!slot) return escapeRegex(part);
+        slots.push(Number(slot[1]));
+        return '(.+?)';
+      }).join('');
+      patterns.push({ regex: new RegExp(`^${body}$`, 's'), template: translated, slots });
+    }
+    // The keyed catalogue from languages.json (used through t()) also translates its English wording where it appears as plain text.
+    const english = flattenTranslations(activeTranslationsDict.en || FALLBACK_TRANSLATIONS.en);
+    const selected = flattenTranslations(activeTranslationsDict[activeLanguage] || {});
+    for (const [key, source] of Object.entries(english)) {
+      const translated = selected[key];
+      if (translated && translated !== source) exact.set(source, translated);
+    }
+    patterns.sort((a, b) => b.regex.source.length - a.regex.source.length);   // the most specific wording wins
   }
-  return replacements;
+  return { language: activeLanguage, exact, patterns, memo: new Map() };
 };
 
-const translateValue = (value: string, replacements: Map<string, string>): string => {
-  const source = value.trim();
-  const translated = replacements.get(source);
-  return translated ? value.replace(source, translated) : value;
+const replacements = (): Replacements =>
+  replacementCache?.language === activeLanguage ? replacementCache : (replacementCache = buildReplacements());
+
+/** The text in the active language: a known phrase or pattern is replaced; names, codes, numbers and server data stay as they are. */
+export const translateText = (value: string): string => {
+  if (activeLanguage === 'en') return value;
+  const source = value.replace(/\s+/g, ' ').trim();
+  if (!source || !/\p{L}/u.test(source)) return value;
+  const table = replacements();
+  let translated = table.exact.get(source) ?? table.memo.get(source);
+  if (translated === undefined) {
+    translated = source;
+    for (const pattern of table.patterns) {
+      const match = pattern.regex.exec(source);
+      if (!match) continue;
+      translated = pattern.template.replace(/\{(\d+)\}/g, (slot, number) => {
+        const index = pattern.slots.indexOf(Number(number));
+        return index >= 0 ? translateText(match[index + 1]) : slot;
+      });
+      break;
+    }
+    if (table.memo.size > 5000) table.memo.clear();
+    table.memo.set(source, translated);
+  }
+  return translated === source ? value : value.replace(value.trim(), translated);
+};
+
+const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE', 'PRE', 'TEXTAREA']);
+const ATTRIBUTES = ['placeholder', 'title', 'aria-label', 'alt'];
+
+const translateTextNode = (textNode: Text) => {
+  const parent = textNode.parentElement;
+  if (!parent || SKIP_TAGS.has(parent.tagName) || parent.closest('[data-no-translate]')) return;
+  const current = textNode.nodeValue ?? '';
+  // React may reuse a text node for new data (file names, status, counts).
+  // Only restore an old source when the node still contains our translation.
+  const source = current === renderedText.get(textNode) ? originalText.get(textNode) ?? current : current;
+  originalText.set(textNode, source);
+  const translated = translateText(source);
+  renderedText.set(textNode, translated);
+  if (textNode.nodeValue !== translated) textNode.nodeValue = translated;
+};
+
+const translateAttributes = (element: Element) => {
+  if (element.closest('[data-no-translate]')) return;
+  let attributes = originalAttributes.get(element);
+  let lastAppliedAttributes = appliedAttributes.get(element);
+  if (!attributes) { attributes = new Map(); originalAttributes.set(element, attributes); }
+  if (!lastAppliedAttributes) { lastAppliedAttributes = new Map(); appliedAttributes.set(element, lastAppliedAttributes); }
+  for (const attribute of ATTRIBUTES) {
+    const current = element.getAttribute(attribute);
+    if (current === null) continue;
+    const lastApplied = lastAppliedAttributes.get(attribute);
+    if (!attributes.has(attribute) || (lastApplied !== undefined && current !== lastApplied)) attributes.set(attribute, current);
+    const source = attributes.get(attribute) ?? current;
+    const translated = translateText(source);
+    if (current !== translated) element.setAttribute(attribute, translated);
+    lastAppliedAttributes.set(attribute, translated);
+  }
+};
+
+const translateTree = (root: Node) => {
+  if (root.nodeType === Node.TEXT_NODE) { translateTextNode(root as Text); return; }
+  if (!(root instanceof Element)) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) translateTextNode(node as Text);
+  translateAttributes(root);
+  root.querySelectorAll(ATTRIBUTES.map(name => `[${name}]`).join(',')).forEach(translateAttributes);
 };
 
 /**
- * Applies the catalogue to rendered labels as well as JSX labels that opt in
- * through `t()`. Keeping the original English text lets a user switch language
- * repeatedly without needing a page reload.
+ * Applies the active language to everything on the page (text and the placeholder, title, aria-label and alt attributes).
+ * Keeping the original English text lets a user switch language repeatedly without needing a page reload.
  */
 export const applyPageTranslations = (): void => {
-  if (typeof document === 'undefined') return;
-  const replacements = getTextReplacementMap();
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let node: Node | null;
-  while ((node = walker.nextNode())) textNodes.push(node as Text);
-
-  for (const textNode of textNodes) {
-    const parent = textNode.parentElement;
-    if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE'].includes(parent.tagName)) continue;
-    const current = textNode.nodeValue ?? '';
-    // React may reuse a text node for new data (file names, status, counts).
-    // Only restore an old source when the node still contains our translation.
-    const source = current === renderedText.get(textNode)
-      ? originalText.get(textNode) ?? current
-      : current;
-    originalText.set(textNode, source);
-    const translated = translateValue(source, replacements);
-    renderedText.set(textNode, translated);
-    if (textNode.nodeValue !== translated) textNode.nodeValue = translated;
-  }
-
-  for (const element of document.querySelectorAll<HTMLElement>('[placeholder], [title], [aria-label]')) {
-    let attributes = originalAttributes.get(element);
-    let lastAppliedAttributes = appliedAttributes.get(element);
-    if (!attributes) {
-      attributes = new Map();
-      originalAttributes.set(element, attributes);
-    }
-    if (!lastAppliedAttributes) {
-      lastAppliedAttributes = new Map();
-      appliedAttributes.set(element, lastAppliedAttributes);
-    }
-    for (const attribute of ['placeholder', 'title', 'aria-label']) {
-      const current = element.getAttribute(attribute);
-      if (current === null) continue;
-      const lastApplied = lastAppliedAttributes.get(attribute);
-      if (!attributes.has(attribute) || (lastApplied !== undefined && current !== lastApplied)) {
-        attributes.set(attribute, current);
-      }
-      const source = attributes.get(attribute) ?? current;
-      const translated = translateValue(source, replacements);
-      if (current !== translated) element.setAttribute(attribute, translated);
-      lastAppliedAttributes.set(attribute, translated);
-    }
-  }
+  if (typeof document === 'undefined' || !document.body) return;
+  translateTree(document.body);
 };
 
-const schedulePageTranslation = () => {
+// Only what changed is translated again: new nodes, edited text and edited attributes, batched once per microtask.
+const changedTrees = new Set<Node>(), changedTexts = new Set<Text>(), changedAttributes = new Set<Element>();
+const onPageMutations = (records: MutationRecord[]) => {
+  for (const record of records) {
+    if (record.type === 'childList') record.addedNodes.forEach(node => changedTrees.add(node));
+    else if (record.type === 'characterData') changedTexts.add(record.target as Text);
+    else if (record.target instanceof Element) changedAttributes.add(record.target);
+  }
   if (pendingPageTranslation) return;
   pendingPageTranslation = true;
   queueMicrotask(() => {
     pendingPageTranslation = false;
-    applyPageTranslations();
+    const trees = [...changedTrees], texts = [...changedTexts], elements = [...changedAttributes];
+    changedTrees.clear(); changedTexts.clear(); changedAttributes.clear();
+    trees.forEach(node => { if (node.isConnected) translateTree(node); });
+    texts.forEach(node => { if (node.isConnected) translateTextNode(node); });
+    elements.forEach(element => { if (element.isConnected) translateAttributes(element); });
   });
 };
 
@@ -209,13 +267,22 @@ export const setActiveLanguage = (languageCode?: string): void => {
   const normalizedCode = languageCode === 'zh_CN' || languageCode === 'zh_TW' ? 'zh' : languageCode;
   const language = getLanguageByCode(normalizedCode || 'en');
   activeLanguage = language.code;
+  replacementCache = null;
   if (typeof document !== 'undefined') {
     document.documentElement.lang = activeLanguage;
     document.documentElement.dir = language.rtl ? 'rtl' : 'ltr';
     applyPageTranslations();
     if (!pageObserver && document.body) {
-      pageObserver = new MutationObserver(schedulePageTranslation);
-      pageObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+      pageObserver = new MutationObserver(onPageMutations);
+      pageObserver.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRIBUTES });
+    }
+    // Each language's phrase book is its own file, loaded the first time that language is chosen.
+    const code = activeLanguage, load = phraseLoaders[`./phrases/${code}.json`];
+    if (code !== 'en' && !phraseBooks[code] && load) {
+      load().then(book => {
+        phraseBooks[code] = book;
+        if (activeLanguage === code) { replacementCache = null; applyPageTranslations(); languageListeners.forEach(listener => listener()); }
+      }).catch(error => console.warn(`The ${code} phrase book could not be loaded`, error));
     }
   }
   languageListeners.forEach(listener => listener());

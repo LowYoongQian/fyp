@@ -429,7 +429,9 @@ class _AccountSecurityCardState extends State<AccountSecurityCard> {
                 child: Row(
                   children: [
                     Icon(
-                      session['device_label']?.toString().toLowerCase().contains('mobile') == true ? Icons.smartphone_rounded : Icons.laptop_mac_rounded,
+                      session['kind'] == 'app' || RegExp(r'mobile|iphone|ipad|android', caseSensitive: false).hasMatch('${session['device_label']}')
+                          ? Icons.smartphone_rounded
+                          : Icons.laptop_mac_rounded,
                       size: 20,
                       color: secondary,
                     ),
@@ -440,6 +442,8 @@ class _AccountSecurityCardState extends State<AccountSecurityCard> {
                         children: [
                           Text('${session['device_label'] ?? 'Device'}', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700, color: primary)),
                           Text(tr(_deviceTime(session['created_at'])), style: theme.textTheme.bodySmall?.copyWith(color: secondary)),
+                          if ((session['ip_address'] ?? '').toString().isNotEmpty)
+                            Text('IP ${session['ip_address']}', style: theme.textTheme.bodySmall?.copyWith(color: secondary)),
                         ],
                       ),
                     ),

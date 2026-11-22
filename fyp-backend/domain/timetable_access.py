@@ -112,6 +112,26 @@ def scope_course(db: Session, user, programme_id, course_id):
     return course
 
 
+def scope_timetable(db: Session, user, programme_id, course_id):
+    """An admin's timetable choice: a programme, optionally narrowed to one of its courses, as (programme, course or None).
+
+    The programme is required (no unfiltered all-programmes read); a course outside it is 404 and never widens the scope. Students and
+    staff send no filter and get (None, None); a forged filter from them is refused, as in scope_course."""
+    if user.role != "admin":
+        if programme_id is not None or course_id is not None:
+            raise HTTPException(403, "Only an administrator can filter by programme and course.")
+        return None, None
+    if programme_id is None:
+        raise HTTPException(422, "Choose a programme.")
+    if course_id is not None:
+        course = scope_course(db, user, programme_id, course_id)
+        return course.programme, course
+    programme = db.get(Programme, str(programme_id))
+    if programme is None:
+        raise HTTPException(404, "Programme not found.")
+    return programme, None
+
+
 def _course_rows(db: Session, course) -> list[dict]:
     """The one semester a course belongs to (a course has at most one), with counts for THAT course only. None when it has no semester yet."""
     semester = course.semester if course.semester_id else None
@@ -122,21 +142,27 @@ def _course_rows(db: Session, course) -> list[dict]:
     return [{**_row(semester, db.get(Programme, semester.programme_id), 1, classes), "course_id": str(course.id), "course_code": course.course_code, "course_name": course.course_name}]
 
 
-def list_semesters(db: Session, user, course=None) -> list[dict]:
+def list_semesters(db: Session, user, course=None, programme=None) -> list[dict]:
     """Authorised semesters from the semester records themselves, so one with no courses is still listed. Current first, then upcoming, then previous.
 
-    With `course` (admin only, from scope_course) it is just that course's semester, counted for that course."""
-    if course is not None:
+    With `course` (admin only, from scope_course) it is just that course's semester, counted for that course. With only `programme`
+    (admin only) it is that programme's semesters, each counted over all of the programme's courses in it."""
+    if course is not None or programme is not None:
         if user.role != "admin":
             raise HTTPException(403, "Only an administrator can filter by programme and course.")
+    if course is not None:
         return _course_rows(db, course)
     query, ids = _authorized_query(db, user)
+    if programme is not None:
+        query = query.filter(AcademicSemester.programme_id == programme.id)
     semesters = query.all()
     if not semesters:
         return []
     course_query = db.query(Course.id, Course.semester_id).filter(Course.semester_id.in_([s.id for s in semesters]))
     if ids is not None:
         course_query = course_query.filter(Course.id.in_(ids))
+    if programme is not None:
+        course_query = course_query.filter(Course.programme_id == programme.id)
     course_semester = dict(course_query.all())
     classes = dict(db.query(ClassMeeting.course_id, func.count(ClassMeeting.id)).filter(
         ClassMeeting.course_id.in_(list(course_semester))).group_by(ClassMeeting.course_id).all()) if course_semester else {}
@@ -151,13 +177,16 @@ def list_semesters(db: Session, user, course=None) -> list[dict]:
     return by_state["current"] + by_state["upcoming"] + by_state["ended"][::-1]  # Previous semesters newest first.
 
 
-def require_viewable_semester(db: Session, user, semester_id: str, course=None) -> AcademicSemester:
+def require_viewable_semester(db: Session, user, semester_id: str, course=None, programme=None) -> AcademicSemester:
     """The semester, only if it is in the caller's scope AND current. 404 hides semesters outside the scope; 403 carries the reason.
 
-    With `course` (an admin's chosen course) the semester must be that course's own, so a stale or mismatched id is 404."""
+    With `course` (an admin's chosen course) the semester must be that course's own, and with `programme` it must be one of the
+    programme's semesters, so a stale or mismatched id is 404."""
     query, _ = _authorized_query(db, user)
     semester = query.filter(AcademicSemester.id == str(semester_id)).first()
     if semester is not None and course is not None and str(course.semester_id) != str(semester.id):
+        semester = None
+    if semester is not None and programme is not None and str(semester.programme_id) != str(programme.id):
         semester = None
     if semester is None:
         raise HTTPException(404, "Semester not found")
@@ -167,8 +196,8 @@ def require_viewable_semester(db: Session, user, semester_id: str, course=None) 
     return semester
 
 
-def semester_summary(db: Session, user, semester: AcademicSemester, course=None) -> dict:
-    return next(row for row in list_semesters(db, user, course) if row["id"] == semester.id)
+def semester_summary(db: Session, user, semester: AcademicSemester, course=None, programme=None) -> dict:
+    return next(row for row in list_semesters(db, user, course, None if course is not None else programme) if row["id"] == semester.id)
 
 
 def meeting_semester(db: Session, user, meeting_id: str):

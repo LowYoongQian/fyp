@@ -41,7 +41,9 @@ class LoginRequest(BaseModel):
     email: Optional[str] = None
     identifier: Optional[str] = None
     password: str
-    device_id: Optional[str] = None
+    device_id: Optional[str] = Field(default=None, max_length=200)   # the mobile app's install id (it marks an app sign-in)
+    browser_id: Optional[str] = Field(default=None, max_length=200)  # the website's per-browser id, kept in that browser's storage
+    device_name: Optional[str] = Field(default=None, max_length=120)  # the client's description, e.g. "Samsung SM-S918B" or "Chrome on Windows"
     portal: Optional[str] = None
 
 class RegisterRequest(BaseModel):
@@ -140,6 +142,8 @@ class QueryResponse(BaseModel):
     session_id: Optional[str] = None
     context_state: dict = Field(default_factory=dict)
     suggestions: list[str] = Field(default_factory=list)
+    # What the server actually did for this answer (checks, plan, data read), shown under "Thinking"; never stored.
+    steps: list[str] = Field(default_factory=list)
 
 # Generic Response
 class MessageResponse(BaseModel):
@@ -384,6 +388,13 @@ class AssignmentBatchCreate(BaseModel):
     course_id: UUID
     lecturer_id: UUID
     roles: list[StaffRole] = Field(min_length=1, max_length=3)
+
+
+class AssignmentRolesUpdate(BaseModel):
+    """The full set of teaching roles one staff member should hold in one course. An empty list removes the assignment."""
+    course_id: UUID
+    lecturer_id: UUID
+    roles: list[StaffRole] = Field(default_factory=list, max_length=3)
 
 
 class AssignmentResponse(BaseModel):

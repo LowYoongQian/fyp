@@ -56,6 +56,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
   const [recoveryStep, setRecoveryStep] = useState<'email' | 'code'>('email');
   const [recoveryLoading, setRecoveryLoading] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  // Replacing a verified address: the current one keeps receiving resets until the new one is verified.
+  const [changingRecovery, setChangingRecovery] = useState(false);
 
   // Change Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -182,7 +184,7 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
     queueMicrotask(() => {
     if (profile && active) {
       const res = profile;
-      setRecoveryEmail(res.recovery_email || '');
+      setRecoveryEmail(res.recovery_email_pending || (res.recovery_email_verified ? '' : res.recovery_email) || '');
       setRecoveryStep('email');
       setRecoveryCode('');
       setRecoveryError(null);
@@ -242,9 +244,11 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
       await apiService.verifyRecoveryEmail(recoveryCode.trim());
       setProfile((current: any) => ({
         ...current,
-        recovery_email: recoveryEmail.trim(),
+        recovery_email: recoveryEmail.trim().toLowerCase(),
         recovery_email_verified: true,
+        recovery_email_pending: null,
       }));
+      setChangingRecovery(false);
       window.dispatchEvent(new CustomEvent('recovery-email-verified'));
       await swalSuccess('Email verified', 'Recovery email is ready.');
     } catch (err: any) {
@@ -717,13 +721,17 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                   </div>
                 </div>
 
-                {profile?.recovery_email_verified ? (
+                {profile?.recovery_email_verified && (
                   <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-700">
                     <CheckCircle className="h-4 w-4 shrink-0" />
-                    <span className="truncate font-bold">{profile.recovery_email}</span>
+                    <span className="min-w-0 flex-1 truncate font-bold">{profile.recovery_email}</span>
+                    {!changingRecovery && <button type="button" onClick={() => { setChangingRecovery(true); setRecoveryStep('email'); setRecoveryEmail(''); setRecoveryCode(''); setRecoveryError(null); }}
+                      className="shrink-0 text-[10px] font-bold text-emerald-800 underline underline-offset-2">Change email</button>}
                   </div>
-                ) : (
+                )}
+                {(!profile?.recovery_email_verified || changingRecovery) && (
                   <form onSubmit={recoveryStep === 'email' ? requestRecoveryCode : confirmRecoveryCode} className="mt-4 space-y-3">
+                    {changingRecovery && <p role="note" className="text-[10px] leading-relaxed text-slate-500">Your current recovery email stays active until the new one is verified.</p>}
                     <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
                       <span className="rounded-full bg-brand-blue px-2 py-1 text-white">1</span>
                       <span>Add email</span>
@@ -771,6 +779,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                       {recoveryLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                       {recoveryStep === 'email' ? 'Send Code' : 'Verify Email'}
                     </button>
+                    {changingRecovery && <button type="button" disabled={recoveryLoading} onClick={() => { setChangingRecovery(false); setRecoveryStep('email'); setRecoveryError(null); }}
+                      className="w-full text-[10px] font-bold text-slate-500 disabled:opacity-50">Keep current email</button>}
                   </form>
                 )}
               </section>}

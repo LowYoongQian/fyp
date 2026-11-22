@@ -22,7 +22,7 @@ from schemas import (
     MessageResponse,
     ProgrammeCreate, ProgrammeResponse,
     CourseCreate, CourseResponse,
-    AssignmentCreate, AssignmentBatchCreate, AssignmentResponse
+    AssignmentCreate, AssignmentBatchCreate, AssignmentResponse, AssignmentRolesUpdate, StaffRole
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin Academic"])
@@ -301,87 +301,163 @@ def create_assignments(body: AssignmentBatchCreate, db: Session = Depends(get_db
     return save_assignment_roles(db, current_user, str(body.course_id), str(body.lecturer_id), [role.value for role in body.roles])
 
 
+def _lock_course_and_lecturer(db, course_id, lecturer_id):
+    course = db.query(Course).filter_by(id=str(course_id)).with_for_update().first()
+    if not course:
+        raise HTTPException(400, "Selected course does not exist")
+    lecturer = db.query(Lecturer).filter_by(id=str(lecturer_id)).with_for_update().first()
+    if not lecturer:
+        raise HTTPException(404, "Lecturer not found")
+    return course, lecturer
+
+
+def _add_role(db, user, course, lecturer, role, single=False):
+    """Give one staff member one teaching role in one course, inside the caller's transaction (never commits). A role already held
+    is returned unchanged, so a retry adds nothing."""
+    course_id, lecturer_id = course.id, lecturer.id
+    row = db.query(CourseStaffAssignment).filter_by(course_id=course_id, lecturer_id=lecturer_id, role=role).first()
+    if row and single:
+        raise HTTPException(400, "Staff already assigned to this course in this role")
+    if role == "Lecturer":
+        if course.lecturer_id and course.lecturer_id != lecturer_id:
+            raise HTTPException(409, "The Lecture already has a different lecturer. Remove that allocation first.")
+        for lecture in db.query(ClassMeeting).filter_by(course_id=course_id, role="Lecture").all():
+            if lecture.lecturer_id != lecturer_id:
+                conflict = lecturer_slot_conflict(db, lecture, lecturer_id)
+                if conflict:
+                    raise HTTPException(409, f"This lecturer already teaches another class on {conflict.day} during {conflict.start}-{conflict.end}.")
+                lecture.lecturer_id = lecturer_id
+        course.lecturer_id = lecturer_id
+    if row is None:
+        if role == "Tutor" and db.query(CourseStaffAssignment.id).filter_by(course_id=course_id, role=role).first():
+            raise HTTPException(409, f"Another staff member already teaches {role} for this course's groups.")
+        row = CourseStaffAssignment(course_id=course_id, lecturer_id=lecturer_id, role=role)
+        db.add(row)
+        db.flush()
+        if role in ("Tutor", "Practical"):
+            try:
+                add_missing_meetings(db, course_id, [row], groups_for_course(db, course_id))
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
+        log_admin_action(db, user, "CREATE_ASSIGNMENT", f"Assigned {lecturer.name} as {role} for {course.course_code}", commit=False)
+    return row
+
+
+def _role_meetings(db, assignment):
+    """The timetable slots that leave with this role: a Tutor's or Practical's own group meetings (the database deletes them with the
+    assignment). A Lecturer's lecture is never deleted; it stays on the timetable without a lecturer."""
+    if assignment.role == "Lecturer":
+        return []
+    return db.query(ClassMeeting).filter(ClassMeeting.assignment_id == assignment.id).order_by(ClassMeeting.class_group).all()
+
+
+def role_impact(db, assignments) -> dict:
+    """What removing these roles would change, read before anything is deleted."""
+    meetings = [m for a in assignments for m in _role_meetings(db, a)]
+    meeting_ids = [m.id for m in meetings]
+    sessions = db.query(ClassSession).filter(ClassSession.meeting_id.in_(meeting_ids)).all() if meeting_ids else []
+    completed = [s.id for s in sessions if s.status == "completed"]
+    records = db.query(func.count(AttendanceRecord.id)).filter(AttendanceRecord.session_id.in_(completed)).scalar() if completed else 0
+    open_now = sum(1 for s in sessions if s.status == "open")
+    lectures_kept = sum(1 for a in assignments if a.role == "Lecturer"
+                        and db.query(ClassMeeting.id).filter_by(course_id=a.course_id, role="Lecture", lecturer_id=a.lecturer_id).first())
+    return {
+        "roles": [a.role for a in assignments],
+        "slots_removed": [{"role": m.role, "class_group": m.class_group, "day": m.day, "start": m.start, "end": m.end, "room": m.room} for m in meetings],
+        "lectures_left_without_lecturer": lectures_kept,
+        "completed_classes_kept": len(completed),
+        "attendance_records_kept": records,
+        "classes_in_progress": open_now,
+        "blocked": open_now > 0,
+    }
+
+
+def _remove_role(db, user, assignment):
+    """Remove one teaching role inside the caller's transaction. Completed classes and attendance are kept (their sessions only lose the
+    link to the deleted slot); other staff members' roles are never touched. Refused while one of its classes is in progress."""
+    if role_impact(db, [assignment])["blocked"]:
+        raise HTTPException(409, f"A {assignment.role.lower()} class is in progress. Remove this role after it ends.")
+    course = assignment.course
+    if assignment.role == "Lecturer" and course.lecturer_id == assignment.lecturer_id:
+        course.lecturer_id = None
+        db.query(ClassMeeting).filter_by(course_id=assignment.course_id, role="Lecture",
+                                         lecturer_id=assignment.lecturer_id).update({"lecturer_id": None})
+    description = (f"{assignment.lecturer.name if assignment.lecturer else assignment.lecturer_id} as {assignment.role} for "
+                   f"{course.course_code if course else assignment.course_id}")
+    db.delete(assignment)
+    log_admin_action(db, user, "DELETE_ASSIGNMENT", f"Unassigned {description}", commit=False)
+
+
 def save_assignment_roles(db, user, course_id, lecturer_id, roles, single=False):
     def work():
-        course = db.query(Course).filter_by(id=course_id).with_for_update().first()
-        if not course:
-            raise HTTPException(400, "Selected course does not exist")
-        lecturer = db.query(Lecturer).filter_by(id=lecturer_id).with_for_update().first()
-        if not lecturer:
-            raise HTTPException(404, "Lecturer not found")
-        saved = []
-        for role in dict.fromkeys(roles):
-            row = db.query(CourseStaffAssignment).filter_by(course_id=course_id, lecturer_id=lecturer_id, role=role).first()
-            if row and single:
-                raise HTTPException(400, "Staff already assigned to this course in this role")
-            if role == "Lecturer":
-                if course.lecturer_id and course.lecturer_id != lecturer_id:
-                    raise HTTPException(409, "The Lecture already has a different lecturer. Remove that allocation first.")
-                for lecture in db.query(ClassMeeting).filter_by(course_id=course_id, role="Lecture").all():
-                    if lecture.lecturer_id != lecturer_id:
-                        conflict = lecturer_slot_conflict(db, lecture, lecturer_id)
-                        if conflict:
-                            raise HTTPException(409, f"This lecturer already teaches another class on {conflict.day} during {conflict.start}-{conflict.end}.")
-                        lecture.lecturer_id = lecturer_id
-                course.lecturer_id = lecturer_id
-            if row is None:
-                if role == "Tutor" and db.query(CourseStaffAssignment.id).filter_by(course_id=course_id, role=role).first():
-                    raise HTTPException(409, f"Another staff member already teaches {role} for this course's groups.")
-                row = CourseStaffAssignment(course_id=course_id, lecturer_id=lecturer_id, role=role)
-                db.add(row)
-                db.flush()
-                if role in ("Tutor", "Practical"):
-                    try:
-                        add_missing_meetings(db, course_id, [row], groups_for_course(db, course_id))
-                    except ValueError as error:
-                        raise HTTPException(400, str(error)) from error
-                log_admin_action(db, user, "CREATE_ASSIGNMENT",
-                                 f"Assigned {lecturer.name} as {role} for {course.course_code}", commit=False)
-            saved.append(row)
-        return saved
+        course, lecturer = _lock_course_and_lecturer(db, course_id, lecturer_id)
+        return [_add_role(db, user, course, lecturer, role, single) for role in dict.fromkeys(roles)]
+    return run_transaction(db, work)
+
+
+@router.get("/assignments/impact")
+def assignment_impact(course_id: UUID, lecturer_id: UUID, roles: List[StaffRole] = Query(..., max_length=3),
+                      db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """Read-only: what removing these roles of one staff member in one course would change, for the confirmation."""
+    wanted = [role.value for role in roles]
+    rows = db.query(CourseStaffAssignment).filter(CourseStaffAssignment.course_id == str(course_id), CourseStaffAssignment.lecturer_id == str(lecturer_id),
+                                                  CourseStaffAssignment.role.in_(wanted)).all()
+    if not rows:
+        raise HTTPException(404, "That teaching role was not found.")
+    return role_impact(db, rows)
+
+
+@router.put("/assignments/roles", response_model=list[AssignmentResponse])
+def update_assignment_roles(body: AssignmentRolesUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    """Set exactly which roles one staff member holds in one course, in one transaction: if any added role conflicts, nothing changes.
+    An empty list removes the assignment."""
+    wanted = list(dict.fromkeys(role.value for role in body.roles))
+
+    def work():
+        course, lecturer = _lock_course_and_lecturer(db, body.course_id, body.lecturer_id)
+        held = db.query(CourseStaffAssignment).filter_by(course_id=course.id, lecturer_id=lecturer.id).all()
+        if not held and not wanted:
+            raise HTTPException(404, "That assignment was not found.")
+        for assignment in held:
+            if assignment.role not in wanted:
+                _remove_role(db, current_user, assignment)
+        db.flush()
+        return [_add_role(db, current_user, course, lecturer, role) for role in wanted]
     return run_transaction(db, work)
 
 
 @router.delete("/assignments/{assignment_id}", response_model=MessageResponse)
 def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    assignment = get_or_404(db, CourseStaffAssignment, assignment_id, "Assignment")
-
-    # Read before the delete makes the relationships unavailable.
-    deleted_desc = (
-        f"{assignment.lecturer.name if assignment.lecturer else assignment.lecturer_id} as "
-        f"{assignment.role} for "
-        f"{assignment.course.course_code if assignment.course else assignment.course_id}"
-    )
-
-    if assignment.role == "Lecturer" and assignment.course.lecturer_id == assignment.lecturer_id:
-        assignment.course.lecturer_id = None
-        db.query(ClassMeeting).filter_by(course_id=assignment.course_id, role="Lecture",
-                                         lecturer_id=assignment.lecturer_id).update({"lecturer_id": None})
-    db.delete(assignment)
-    db.commit()
-
-    log_admin_action(db, current_user, "DELETE_ASSIGNMENT", f"Unassigned {deleted_desc}")
-
+    def work():
+        assignment = db.query(CourseStaffAssignment).filter_by(id=assignment_id).with_for_update().first()
+        if assignment is None:
+            raise HTTPException(404, "Assignment not found")
+        _remove_role(db, current_user, assignment)
+    run_transaction(db, work)
     return {"message": "Assignment deleted successfully"}
 
 
 @router.get("/timetable", response_model=List[dict])
-def get_global_timetable(semester_id: UUID = Query(...), programme_id: UUID = Query(...), course_id: UUID = Query(...),
+def get_global_timetable(semester_id: UUID = Query(...), programme_id: UUID = Query(...), course_id: Optional[UUID] = Query(None),
                          db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    # Read the class_meetings table (source of truth). meeting_id lets the admin
-    # UI edit a specific slot. One chosen course in one semester, and only the current one: the programme, course and semester must
-    # belong together, so no id can widen the read to the rest of the semester.
-    course = timetable_access.scope_course(db, current_user, programme_id, course_id)
-    semester = timetable_access.require_viewable_semester(db, current_user, str(semester_id), course)
-    meetings = db.query(ClassMeeting).filter(ClassMeeting.course_id == course.id).options(
+    # Read the class_meetings table (source of truth). meeting_id lets the admin UI edit a specific slot. One programme's courses in one
+    # semester (or just one of them), and only the current semester: programme, course and semester must belong together, so no id can
+    # widen the read beyond the chosen programme. Each course stays its own record; a course with no meetings simply has no rows here.
+    programme, course = timetable_access.scope_timetable(db, current_user, programme_id, course_id)
+    semester = timetable_access.require_viewable_semester(db, current_user, str(semester_id), course, programme)
+    course_ids = [course.id] if course is not None else [
+        cid for (cid,) in db.query(Course.id).filter(Course.programme_id == programme.id, Course.semester_id == semester.id)]
+    meetings = db.query(ClassMeeting).filter(ClassMeeting.course_id.in_(course_ids)).options(
         joinedload(ClassMeeting.course), joinedload(ClassMeeting.lecturer)
-    ).all()
+    ).all() if course_ids else []
     result = []
     for m in meetings:
         c = m.course
         result.append({
             "meeting_id": m.id,
             "id": m.id,
+            "course_id": m.course_id,
+            "semester_id": semester.id,
             "course_code": c.course_code if c else "Unknown",
             "course_name": c.course_name if c else "Unknown",
             "schedule_day": m.day,

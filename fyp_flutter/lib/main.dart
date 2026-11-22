@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/network_info_service.dart';
 import 'services/local_cache_service.dart';
+import 'services/device_name_service.dart';
 import 'services/attendance_parity.dart';
 import 'widgets/check_in_success_dialog.dart';
 import 'widgets/saving_indicator.dart';
@@ -906,8 +907,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     try {
       final String rawInput = emailOrId.trim();
 
-      // Fetch stable device fingerprint for multi-device session binding.
+      // Fetch stable device fingerprint for multi-device session binding, and the phone model for the signed-in devices list.
       final deviceId = await LocalCacheService.getOrCreateDeviceId();
+      final deviceName = await DeviceNameService.name();
 
       // Authenticate via backend. Students sign in with their school email only; staff may use their staff ID.
       // The server returns the full profile, so the app never touches the DB directly.
@@ -922,6 +924,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                 'identifier': rawInput,
                 'password': password,
                 'device_id': deviceId,
+                'device_name': ?deviceName,
                 'portal': portalType,
               }),
             )

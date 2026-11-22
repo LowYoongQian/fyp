@@ -7,7 +7,7 @@ import { ChevronLeft, ChevronRight, Printer, AlertTriangle, Loader2, ChevronDown
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/api';
 import { swalConfirmDelete, swalError, swalSuccess } from '../../utils/swal';
-import type { Course, CourseStaffAssignment, TimetableFilter, TimetableSemester } from '../../services/api';
+import type { Course, CourseStaffAssignment, TimetableScope, TimetableSemester } from '../../services/api';
 import { formatDate, getMalaysiaDate, setCampusClock, semesterWeek, semesterWeeks, weekMonday } from '../../utils/campusCalendar';
 import { StudentCourseAttendance } from '../student/StudentCourseAttendance';
 import { useNotificationListRecord } from '../../hooks/useNotificationRecord';
@@ -17,6 +17,7 @@ import { AdminTimetableList } from '../../components/AdminTimetableList';
 import { useMalaysiaToday } from '../../hooks/useMalaysiaToday';
 import { useNotificationTarget } from '../../context/NotificationTargetContext';
 import { openSemester, openSemesterList, openTimetableAt, useTimetableRoute } from '../../utils/semesterRoute';
+import { CustomDropdown } from '../../components/CustomDropdown';
 
 const AttendancePieChart: React.FC<{ percentage: number }> = ({ percentage }) => {
   let strokeColor = 'stroke-emerald-500';
@@ -186,7 +187,7 @@ const getRequestError = (error: unknown, fallback: string) => {
 const clampToTerm = (day: string, term: { start_date: string; end_date: string }) => day < term.start_date ? term.start_date : day > term.end_date ? term.end_date : day;
 
 /** One current semester's timetable. It never loads, shows or links to any other semester. */
-const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableFilter; onBack: () => void; onRefused: (status: number, reason: string) => void; noticeReady: boolean }> = ({ semester, filter, onBack, onRefused, noticeReady }) => {
+const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableScope; onBack: () => void; onRefused: (status: number, reason: string) => void; noticeReady: boolean }> = ({ semester, filter, onBack, onRefused, noticeReady }) => {
   const { user } = useAuth();
   const [selectedDateStr, setSelectedDateStr] = useState<string>(() => clampToTerm(formatDate(getMalaysiaDate()), semester));
   const [loadError, setLoadError] = useState(false);
@@ -197,6 +198,17 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableF
   const [events, setEvents] = useState<TimetableEvent[]>([]);
   const [studentCourses, setStudentCourses] = useState<Course[]>([]);
   const [assignments, setAssignments] = useState<CourseStaffAssignment[]>([]);   // admin only: which tutorials/practicals are assigned
+  // Admin only: every course of the chosen programme in this semester, so a course with no class yet still appears (never as an invented slot).
+  const [semesterCourses, setSemesterCourses] = useState<Course[] | null>(null);
+  useEffect(() => {
+    if (user?.role !== 'admin' || !filter?.programmeId) return;
+    const controller = new AbortController();
+    apiService.getTimetableCourses(filter.programmeId, controller.signal)
+      .then(rows => { if (!controller.signal.aborted) setSemesterCourses(rows.filter(row => String(row.semester_id) === String(semester.id))); },
+        () => { if (!controller.signal.aborted) setSemesterCourses(null); });
+    return () => controller.abort();
+  }, [user?.role, filter?.programmeId, semester.id]);
+  const coursesInView = (semesterCourses ?? []).filter(row => !filter?.courseId || String(row.id) === String(filter.courseId));
   const [selectedAttendanceCourse, setSelectedAttendanceCourse] = useState<{ courseCode: string; courseName: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<TimetableEvent | null>(null);
@@ -400,7 +412,7 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableF
       let mappedEvents: TimetableEvent[] = [];
       if (user?.role === 'admin') {
         // The assignments only explain what is NOT scheduled, so a failure to read them never blocks the timetable itself.
-        const [adminTimetable, assigned] = await Promise.all([apiService.adminGetTimetable(semester.id, filter as TimetableFilter, signal), apiService.adminGetAssignments().catch(() => [] as CourseStaffAssignment[])]);
+        const [adminTimetable, assigned] = await Promise.all([apiService.adminGetTimetable(semester.id, filter as TimetableScope, signal), apiService.adminGetAssignments().catch(() => [] as CourseStaffAssignment[])]);
         if (signal.aborted) return;
         setAssignments(assigned);
         mappedEvents = adminTimetable.map((slot: any) => ({
@@ -1074,10 +1086,13 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableF
   // Say so (only for classes of this semester) instead of leaving the admin to wonder where it went; nothing is invented to fill the gap.
   const unscheduled = React.useMemo(() => {
     // The page shows one chosen course, so only that course's assignments can be missing a class (even when it has no class yet).
-    const courses = new Set([...events.map(event => event.courseCode), ...(semester.course_code ? [semester.course_code] : [])]), scheduled = new Set(events.map(event => `${event.courseCode}|${event.group}`));
+    const courses = new Set([...events.map(event => event.courseCode), ...(semester.course_code ? [semester.course_code] : []), ...coursesInView.map(row => row.course_code)]);
+    const scheduled = new Set(events.map(event => `${event.courseCode}|${event.group}`));
     return [...new Set(assignments.filter(a => (a.role === 'Tutor' || a.role === 'Practical') && courses.has(a.course_code) && (!semester.course_code || a.course_code === semester.course_code) && !scheduled.has(`${a.course_code}|${a.role}`))
       .map(a => `${a.course_code} ${a.role === 'Tutor' ? 'tutorial' : 'practical'}`))];
-  }, [assignments, events, semester.course_code]);
+  }, [assignments, events, semester.course_code, coursesInView]);
+  // Courses of this programme and semester with no class at all: listed by name so they stay discoverable, never drawn as slots.
+  const coursesWithoutClasses = coursesInView.filter(row => !events.some(event => event.courseCode === row.course_code));
   // Save progress is shown beside the drag guidance, or alone once that is dismissed, so dismissing it never hides a save in flight.
   const savingStatus = dragSavingIds.size > 0 && (
     <span role="status" className="flex shrink-0 items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-bold text-brand-blue shadow-sm dark:bg-slate-900 dark:text-blue-300">
@@ -1344,6 +1359,17 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableF
           </div>
         </div>
 
+        {/* The course filter comes first so the drag guidance stays directly above the grid it describes. */}
+        {user?.role === 'admin' && filter?.programmeId && (
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Courses</span>
+            <CustomDropdown searchable ariaLabel="Course filter" className="min-w-56" value={filter.courseId ?? ''}
+              options={[{ value: '', label: 'All courses' }, ...(semesterCourses ?? []).map(row => ({ value: String(row.id), label: `${row.course_code} · ${row.course_name}` }))]}
+              onChange={value => openTimetableAt({ programme: filter.programmeId, course: value, semester: String(semester.id) })} />
+            {semesterCourses && <span className="text-xs text-slate-500 dark:text-slate-400">{filter.courseId ? 'One course' : `${semesterCourses.length} course${semesterCourses.length === 1 ? '' : 's'} together`}</span>}
+          </div>
+        )}
+
         {user?.role === 'admin' && (dragHintDismissed ? (savingStatus && <div className="mb-4 flex justify-end text-xs">{savingStatus}</div>) : (
           <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50/70 py-2 pl-4 pr-2 text-xs dark:border-blue-900/60 dark:bg-blue-950/30">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -1358,6 +1384,15 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableF
             <div className="flex shrink-0 items-center gap-2">{savingStatus}<DismissButton label="Dismiss drag to reschedule guidance" onClick={() => dismiss(setDragHintDismissed)} /></div>
           </div>
         ))}
+
+        {user?.role === 'admin' && !loading && !loadError && coursesWithoutClasses.length > 0 && (
+          <div role="status" data-no-classes className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+            <p className="font-bold text-slate-700 dark:text-slate-200">No classes scheduled</p>
+            <ul className="mt-1 space-y-0.5 text-slate-600 dark:text-slate-300">
+              {coursesWithoutClasses.map(row => <li key={row.id}><span className="font-mono font-bold text-brand-blue">{row.course_code}</span> {row.course_name}</li>)}
+            </ul>
+          </div>
+        )}
 
         {user?.role === 'admin' && !loading && !loadError && unscheduled.length > 0 && (
           <p role="status" data-unscheduled className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium leading-relaxed text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
@@ -2159,7 +2194,7 @@ type Gate = { kind: 'checking' } | { kind: 'open'; semester: TimetableSemester }
  * The detail screen for one semester. The server is asked again on open, on reload, at every Malaysia date change and whenever it refuses
  * data, so a semester that has ended (or was never the caller's) stops showing its timetable and offers the way back instead.
  */
-const SemesterTimetable: React.FC<{ semesterId: string; filter?: TimetableFilter; today: string; noticeReady: boolean }> = ({ semesterId, filter, today, noticeReady }) => {
+const SemesterTimetable: React.FC<{ semesterId: string; filter?: TimetableScope; today: string; noticeReady: boolean }> = ({ semesterId, filter, today, noticeReady }) => {
   const [gate, setGate] = useState<Gate>({ kind: 'checking' });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -2212,10 +2247,10 @@ const TimetableRoute: React.FC = () => {
   const [listFailed, setListFailed] = useState(false);
   const [listAttempt, setListAttempt] = useState(0);
   const [verified, setVerified] = useState<{ nonce: number; semesterId: string } | null>(null);
-  // Only an admin has a programme and course. Without both, an admin's address cannot hold a semester (that would mean "every class"),
-  // and for anyone else the two are stray: both are dropped from the address.
-  const chosen = isAdmin && !!route.programme && !!route.course;
-  const filter: TimetableFilter | undefined = chosen ? { programmeId: route.programme, courseId: route.course } : undefined;
+  // Only an admin has a programme (and optionally one of its courses). Without a programme an admin's address cannot hold a semester (that
+  // would mean "every class in the system"), and for anyone else the two are stray: both are dropped from the address.
+  const chosen = isAdmin && !!route.programme;
+  const filter: TimetableScope | undefined = chosen ? { programmeId: route.programme, courseId: route.course || undefined } : undefined;
   useEffect(() => {
     if (!user) return;
     if (isAdmin && route.semester && !chosen) openSemesterList(true);

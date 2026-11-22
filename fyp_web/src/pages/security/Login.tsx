@@ -2,9 +2,9 @@ import { TextInput } from '../../components/LimitedTextField';
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, type SessionData } from '../../context/AuthContext';
 import { Shield, Key, Mail, AlertCircle, Sparkles, GraduationCap, CheckCircle2, Check, X, Eye, EyeOff } from 'lucide-react';
-import { swalSuccess } from '../../utils/swal';
 import { apiService } from '../../services/api';
 import { apiErrorMessage } from '../../utils/apiError';
+import { personalEmailError } from '../../utils/personalEmail';
 import Swal from 'sweetalert2';
 import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
 import sasLogoLocal from '../../assets/emblem.webp';
@@ -23,6 +23,8 @@ const viewFromPath = (): SignInView => window.location.pathname.startsWith('/log
 // A reply without a usable lifetime gets the server's own five minutes (a NaN deadline would expire the step at once).
 const expiryAfter = (seconds: number) => Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 300) * 1000;
 /** The second step exists only with its in-memory challenge, so a refresh or a typed /login/verify starts again at the sign-in form. */
+/** For an address shown inside dialog markup: what the student typed is text, never HTML. */
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
 const VERIFY_ENDED = 'Your verification step has ended. Sign in again to get a new one.';
 const resetTokenFromPath = () => (viewFromPath() === 'reset' ? new URLSearchParams(window.location.search).get('token') : null) || null;
 
@@ -719,8 +721,8 @@ export const Login: React.FC = () => {
     }
   };
 
-  const setupRecoveryEmail = async (userId: string | number) => {
-    let emailDraft = '';
+  const setupRecoveryEmail = async (userId: string | number, draft = ''): Promise<void> => {
+    let emailDraft = draft;
     let recoveryEmail: string | undefined;
     let dismissed = recoveryReminderPreference(userId).dismissed;
     let preferenceVersion = 0;
@@ -750,6 +752,8 @@ export const Login: React.FC = () => {
     while (!recoveryEmail) {
       const result = await Swal.fire({
         title: 'Add a recovery email',
+        progressSteps: ['1', '2'],
+        currentProgressStep: 0,
         html: `<p class="recovery-email-intro">Keep your account safe and regain access if you forget your password.</p>
           <div class="recovery-email-benefit">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
@@ -797,12 +801,12 @@ export const Login: React.FC = () => {
         preConfirm: () => {
           const input = document.getElementById('recovery-email-input') as HTMLInputElement;
           const value = input?.value.trim().toLowerCase();
-          const isSchool = /@(student\.|staff\.)?school\.edu$/i.test(value);
-          const isValid = emailRegex.test(value) && !isSchool;
-          document.getElementById('recovery-email-field')?.classList.toggle('is-invalid', !isValid);
-          if (!isValid) {
+          // The server's own rule (also used by the profile page and the app), so the dialog never accepts or refuses differently.
+          const problem = personalEmailError(value);
+          document.getElementById('recovery-email-field')?.classList.toggle('is-invalid', !!problem);
+          if (problem) {
             input?.focus();
-            Swal.showValidationMessage(isSchool ? 'Use a personal email, not a school address.' : 'Enter a valid personal email address.');
+            Swal.showValidationMessage(problem === 'Enter a valid email address.' ? 'Enter a valid personal email address.' : problem);
             return false;
           }
           // Sent from inside the dialog, so a refusal (address in use, wait a minute, mail outage) shows here and can be fixed or retried.
@@ -846,50 +850,120 @@ export const Login: React.FC = () => {
 
     if (!recoveryEmail) return;
     const sentTo = recoveryEmail;
-    // A wrong or expired code keeps the dialog open with the reason; "Send a new code" asks again; "Later" leaves it for the Profile page.
-    const verified = await Swal.fire({
+    const shown = escapeHtml(sentTo);
+    const dialogClass = {
+      popup: 'password-reset-popup recovery-email-popup !rounded-2xl !shadow-2xl !border border-slate-200 dark:border-slate-800 !font-sans uipro-card',
+      title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-xl',
+      htmlContainer: 'password-reset-content !text-slate-600 dark:!text-slate-300 !text-xs',
+    };
+    // Step 2: one large code box (digits only, paste-friendly, checks itself at the 6th digit). A wrong or expired code keeps the dialog open
+    // with the reason. "Send a new code" waits out the server's one-minute pause on screen; "Change it" goes back to step 1 with the address.
+    let resendTimer = 0;
+    const step = await Swal.fire({
       title: 'Check your email',
-      text: `Enter the 6-digit code we sent to ${sentTo}.`,
-      input: 'text',
-      inputPlaceholder: '000000',
-      inputAttributes: { inputmode: 'numeric', maxlength: '6', autocomplete: 'one-time-code' },
+      progressSteps: ['1', '2'],
+      currentProgressStep: 1,
+      html: `<div class="recovery-code-sent">
+          <span class="recovery-code-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7 8.5 6 8.5-6"/></svg></span>
+          <p class="recovery-email-intro">We sent a 6-digit code to <strong class="recovery-code-address">${shown}</strong>. It expires in 10 minutes.</p>
+          <button type="button" id="recovery-change" class="recovery-link">Wrong address? Change it</button>
+        </div>
+        <label for="recovery-code-input" class="password-reset-label recovery-code-label">Verification code</label>
+        <input id="recovery-code-input" class="recovery-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-describedby="recovery-code-help">
+        <p id="recovery-code-help" class="recovery-code-help">Didn't get it? Check Spam or Promotions, or <button type="button" id="recovery-resend" class="recovery-link">send a new code</button>.</p>
+        <p id="recovery-code-status" class="recovery-reminder-status recovery-code-status" role="status" aria-live="polite"></p>`,
+      showCancelButton: true,
+      confirmButtonText: 'Verify email',
+      cancelButtonText: 'Later',
+      reverseButtons: true,
+      showLoaderOnConfirm: true,
       allowOutsideClick: false,
       allowEscapeKey: false,
-      showDenyButton: true,
-      showCancelButton: true,
-      confirmButtonText: 'Verify Email',
-      denyButtonText: 'Send a new code',
-      cancelButtonText: 'Later',
-      showLoaderOnConfirm: true,
-      showLoaderOnDeny: true,
-      preConfirm: async value => {
-        const code = String(value || '').trim();
-        if (!/^\d{6}$/.test(code)) return Swal.showValidationMessage('Enter the 6-digit code.');
+      buttonsStyling: false,
+      focusConfirm: false,
+      customClass: {
+        ...dialogClass,
+        actions: 'password-reset-actions recovery-email-actions',
+        confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
+        cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
+      },
+      didOpen: () => {
+        const input = document.getElementById('recovery-code-input') as HTMLInputElement;
+        const resend = document.getElementById('recovery-resend') as HTMLButtonElement;
+        const status = document.getElementById('recovery-code-status')!;
+        let waitUntil = Date.now() + 60_000;
+        let sending = false;
+        const tick = () => {
+          const left = Math.ceil((waitUntil - Date.now()) / 1000);
+          resend.disabled = sending || left > 0;
+          resend.textContent = sending ? 'sending…' : left > 0 ? `send a new code in ${left}s` : 'send a new code';
+        };
+        tick();
+        resendTimer = window.setInterval(tick, 1000);
+        input.addEventListener('input', () => {
+          const digits = input.value.replace(/\D/g, '').slice(0, 6);
+          if (input.value !== digits) input.value = digits;
+          input.classList.remove('is-invalid');
+          Swal.resetValidationMessage();
+          if (digits.length === 6) Swal.clickConfirm();
+        });
+        resend.addEventListener('click', async () => {
+          sending = true; tick();
+          try {
+            await apiService.requestRecoveryEmail(sentTo);
+            waitUntil = Date.now() + 60_000;
+            status.textContent = `A new code is on its way to ${sentTo}. The previous code no longer works.`;
+            input.value = '';
+            input.focus();
+            Swal.resetValidationMessage();
+          } catch (error) {
+            Swal.showValidationMessage(apiErrorMessage(error, 'The code could not be sent. Please try again.'));
+          }
+          sending = false; tick();
+        });
+        document.getElementById('recovery-change')!.addEventListener('click', () => Swal.close({ isConfirmed: false, isDenied: true, isDismissed: false }));
+        input.focus();
+      },
+      willClose: () => window.clearInterval(resendTimer),
+      preConfirm: async () => {
+        const input = document.getElementById('recovery-code-input') as HTMLInputElement;
+        const code = input.value.replace(/\D/g, '');
+        if (code.length !== 6) {
+          input.classList.add('is-invalid'); input.focus();
+          Swal.showValidationMessage('Enter the 6-digit code from the email.');
+          return false;
+        }
         try {
           await apiService.verifyRecoveryEmail(code);
           return true;
         } catch (error) {
+          input.classList.add('is-invalid'); input.select();
           Swal.showValidationMessage(apiErrorMessage(error, 'That code did not work. Please try again.'));
           return false;
         }
       },
-      preDeny: async () => {
-        try {
-          await apiService.requestRecoveryEmail(sentTo);
-          Swal.resetValidationMessage();
-          const text = Swal.getHtmlContainer();
-          if (text) text.textContent = `A new code was sent to ${sentTo}. Enter it below.`;
-        } catch (error) {
-          Swal.showValidationMessage(apiErrorMessage(error, 'The code could not be sent. Please try again.'));
-        }
-        return false;
+    });
+    if (step.isDenied) return setupRecoveryEmail(userId, sentTo);
+    if (!step.isConfirmed) return;
+    // The dashboard and its next-step card are already open behind this dialog; tell them the task is done.
+    window.dispatchEvent(new CustomEvent('recovery-email-verified'));
+    await Swal.fire({
+      icon: 'success',
+      title: 'Recovery email verified',
+      html: `<p class="recovery-email-intro">Password reset links and account notices will now go to <strong class="recovery-code-address">${shown}</strong>.</p>
+        <div class="recovery-email-benefit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span>You can change it any time in Profile. The current address keeps working until a new one is verified.</span>
+        </div>`,
+      confirmButtonText: 'Done',
+      buttonsStyling: false,
+      customClass: {
+        ...dialogClass,
+        popup: `${dialogClass.popup} recovery-done-popup`,
+        actions: 'password-reset-actions recovery-done-actions',
+        confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
       },
     });
-    if (verified.isConfirmed) {
-      // The dashboard and its next-step card are already open behind this dialog; tell them the task is done.
-      window.dispatchEvent(new CustomEvent('recovery-email-verified'));
-      await swalSuccess('Recovery email ready', 'You can now reset your password safely.');
-    }
   };
 
   return (

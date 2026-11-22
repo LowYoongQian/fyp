@@ -4,10 +4,11 @@ import { apiService } from '../services/api';
 import type { AcademicSemester, Programme, RolloverPreview } from '../services/api';
 import { CustomDropdown } from './CustomDropdown';
 import { LoadingRegion, ShimmerText } from './Shimmer';
+import { SemesterGroupCarry } from './SemesterGroups';
 
 type Props = { terms: AcademicSemester[]; programmes: Programme[] };
 
-/** Read-only look at carrying one semester's courses into another. It never saves anything and has no apply button. */
+/** Read-only look at carrying one semester's courses into another (never saved), and below it the groups, saved only when confirmed. */
 export function SemesterRolloverPreview({ terms, programmes }: Props) {
   const [source, setSource] = useState('');
   const [target, setTarget] = useState('');
@@ -71,5 +72,6 @@ export function SemesterRolloverPreview({ terms, programmes }: Props) {
       {plan.not_included.length > 0 && <ul className="space-y-1 text-xs text-slate-500">{plan.not_included.map(item => <li key={item.course_id}>{item.course_code ?? 'Unknown course'}: {item.reason}</li>)}</ul>}
       {picked && <button type="button" disabled={busy} onClick={() => void preview(picked)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-brand-blue dark:border-slate-700">Update preview for the chosen courses</button>}
     </div>}
+    <SemesterGroupCarry key={`${source}|${target}`} source={source} target={target} />
   </section>;
 }

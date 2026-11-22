@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models import AcademicSemester, ClassMeeting, Course, Enrolment, Lecturer, Programme, Student, User
+from domain.programme_groups import memberships
 from domain.semesters import semester_dict
 from utils.security import require_admin
 from utils.timeutil import campus_now
@@ -118,9 +119,9 @@ def lookup_courses(search: str = SEARCH, skip: int = SKIP, limit: int = LIMIT, p
 
 
 @router.get("/allocation")
-def allocation_check(course_id: UUID, db: Session = Depends(get_db),
+def allocation_check(course_id: UUID, student_id: Optional[UUID] = None, db: Session = Depends(get_db),
                      current_user: User = Depends(require_admin)):
-    """Return group seat counts and semester dates for the selected course."""
+    """Return group seat counts and semester dates for the selected course, and with student_id that student's programme group there."""
     course = db.get(Course, str(course_id))
     if not course:
         raise HTTPException(404, "Course not found")
@@ -128,5 +129,8 @@ def allocation_check(course_id: UUID, db: Session = Depends(get_db),
     groups = sorted({*counts, *(g for (g,) in db.query(ClassMeeting.class_group).filter(ClassMeeting.course_id == course.id, ClassMeeting.class_group.isnot(None))), "G1"},
                     key=lambda g: (int(g[1:]) if g[1:].isdigit() else 999, g))
     term = db.get(AcademicSemester, course.semester_id) if course.semester_id else None
+    programme_group = memberships(db, term)[0].get(str(student_id)) if term and student_id else None
+    if programme_group and programme_group not in groups:
+        groups = sorted([*groups, programme_group], key=lambda g: (int(g[1:]) if g[1:].isdigit() else 999, g))
     return {"groups": [{"group": g, "count": counts.get(g, 0), "full": counts.get(g, 0) >= 25} for g in groups],
-            "semester": semester_dict(term) if term else None}
+            "semester": semester_dict(term) if term else None, "programme_group": programme_group}

@@ -159,6 +159,16 @@ export const swalConfirm = async (title: string, text: string, confirmText: stri
   return result.isConfirmed;
 };
 
+/** One choice from a short list; null when cancelled. */
+export const swalChoose = async (title: string, text: string, options: Record<string, string>, confirmText = 'Continue'): Promise<string | null> => {
+  const result = await baseModal.fire({
+    title, text, input: 'select', inputOptions: options, inputPlaceholder: 'Choose…', showCancelButton: true,
+    confirmButtonColor: '#2563eb', cancelButtonColor: '#64748b', confirmButtonText: confirmText, cancelButtonText: 'Cancel',
+    inputValidator: value => (value ? null : 'Choose one.'),
+  });
+  return result.isConfirmed ? String(result.value) : null;
+};
+
 export const swalConfirmDelete = async (itemName: string, detailText?: string): Promise<boolean> => {
   const result = await baseModal.fire({
     title: `Delete ${itemName}?`,

@@ -14,7 +14,8 @@ import {
   X,
   Wifi,
   User,
-  ShieldAlert,
+  CalendarDays,
+  Info,
   Loader2,
   CheckCircle,
   XCircle,
@@ -31,6 +32,69 @@ import { InfinityLoop } from '../../components/loading-ui/infinity';
 import { ProgrammeCoursePicker } from '../../components/ProgrammeCoursePicker';
 import { cancelled, useProgrammeCourse } from '../../hooks/useProgrammeCourse';
 import type { Loaded } from '../../hooks/useProgrammeCourse';
+import { SubmissionDateTimePicker } from '../../components/SubmissionDateTimePicker';
+import { auditRangeParams, type AuditRange } from '../../utils/auditRange';
+import { getMalaysiaDate } from '../../utils/campusCalendar';
+import { localMinute } from '../../utils/submissionTime';
+
+const NO_RANGE: AuditRange = { from: '', until: '' };
+// The class's own role uses the timetable's word (Lecture); the staff member's roles use the assignment words (Lecturer).
+const ROLE_NAME: Record<string, string> = { Lecture: 'Lecturer' };
+
+/** Every teaching role the staff member holds in this course; this class's own role, when known, is first and highlighted. */
+const RoleChips: React.FC<{ session: AdminSession }> = ({ session }) => {
+  const own = session.lecturer_role ? ROLE_NAME[session.lecturer_role] || session.lecturer_role : null;
+  const held = session.lecturer_roles || [];
+  const roles = own ? [own, ...held.filter(role => role !== own)] : held;
+  if (!roles.length) return <span className="text-slate-400" title="No teaching role on record">—</span>;
+  return (
+    <div className="flex min-w-[8.5rem] max-w-[11rem] flex-wrap gap-1">
+      {roles.map(role => (
+        <span key={role} title={role === own ? 'Role in this class' : 'Also teaches this course as'}
+          className={`inline-flex h-6 items-center rounded-full border px-2 text-[10px] font-bold ${role === own ? 'border-blue-200 bg-blue-50 text-brand-blue' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+          {role}
+        </span>
+      ))}
+    </div>
+  );
+};
+
+const groupName = (group: string) => group.startsWith('G') ? `Group ${group.slice(1)}` : group === 'All' ? 'Whole course' : group;
+const shortTime = (value?: string | null) => attendanceDateTime(value).replace(/:\d\d (?=[ap]m)/i, ' ');
+/** "20 Nov 2026, 04:00 pm – 06:00 pm" (the end's date only when it is another day). */
+const classTime = (session: AdminSession) => {
+  const start = shortTime(session.scheduled_start || session.opened_at), end = shortTime(session.scheduled_end);
+  const [startDay, startAt] = start.split(', '), [endDay, endAt] = end.split(', ');
+  if (!startAt) return 'Time not set';
+  return endAt ? `${startDay}, ${startAt} – ${endDay === startDay ? endAt : end}` : start;
+};
+
+/** The class date over its start–end time. */
+const ClassTimeCell: React.FC<{ session: AdminSession }> = ({ session }) => {
+  const text = classTime(session), cut = text.indexOf(', ');
+  if (cut < 0) return <span className="text-slate-400">{text}</span>;
+  return <><span className="block whitespace-nowrap font-semibold text-slate-700">{text.slice(0, cut)}</span><span className="block whitespace-nowrap text-[11px] text-slate-500">{text.slice(cut + 2)}</span></>;
+};
+
+/** When the class was really opened and closed: the time alone on the class's own day, otherwise the date too. */
+const OpenedClosedCell: React.FC<{ session: AdminSession }> = ({ session }) => {
+  const day = shortTime(session.scheduled_start || session.opened_at).split(', ')[0];
+  const stamp = (value?: string | null) => { const text = shortTime(value), [date, time] = text.split(', '); return time && date === day ? time : text; };
+  return <>
+    <span className="block text-[11px]"><span className="text-slate-400">Opened at </span><span className="font-semibold text-slate-700">{stamp(session.opened_at)}</span></span>
+    <span className="mt-0.5 block text-[11px]"><span className="text-slate-400">Closed at </span>{session.is_open
+      ? <span className="inline-flex items-center gap-1 font-semibold text-brand-blue"><Clock className="h-3 w-3 shrink-0 motion-safe:animate-spin" />In progress</span>
+      : <span className="font-semibold text-slate-700">{stamp(session.closed_at)}</span>}</span>
+  </>;
+};
+
+/** A Malaysia-time instant as the date over the time, so the column never wraps mid-date. */
+const WhenCell: React.FC<{ value?: string | null }> = ({ value }) => {
+  const text = attendanceDateTime(value);
+  const [day, time] = text.split(', ');
+  if (!time) return <span className="text-slate-400">{text}</span>;
+  return <><span className="block whitespace-nowrap font-semibold text-slate-700">{day}</span><span className="block whitespace-nowrap text-[11px] text-slate-400">{time}</span></>;
+};
 
 interface FilterOption {
   value: string;
@@ -119,7 +183,9 @@ export const AttendanceManager: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed'>('all');
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
   const [selectedStaff, setSelectedStaff] = useState<string>('all');
+  const [range, setRange] = useState<AuditRange>(NO_RANGE);
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+  const malaysiaNow = localMinute(getMalaysiaDate());
 
   // Table Pagination States
   const [page, setPage] = useState<number>(1);
@@ -141,7 +207,7 @@ export const AttendanceManager: React.FC = () => {
   const choose = (nextProgramme: string, nextCourse: string) => {
     modalRequest.current?.abort();
     setProgramme(nextProgramme); setCourse(nextCourse);
-    setSearchQuery(''); setStatusFilter('all'); setSelectedGroup('all'); setSelectedStaff('all'); setPage(1);
+    setSearchQuery(''); setStatusFilter('all'); setSelectedGroup('all'); setSelectedStaff('all'); setRange(NO_RANGE); setPage(1);
     setSelectedSession(null); setAttendanceList([]); setModalError(null);
   };
   const scope = useProgrammeCourse(programme, course, choose);
@@ -222,9 +288,19 @@ export const AttendanceManager: React.FC = () => {
     ...uniqueStaff.map(staff => ({ value: staff, label: staff })),
   ], [uniqueStaff]);
 
+  // Class start in Malaysia time: From includes its minute, Until includes the whole of its minute (the audit log's rule).
+  const bounds = useMemo(() => {
+    const params = auditRangeParams(range);
+    return { from: params.created_from ? Date.parse(params.created_from) : -Infinity, to: params.created_to ? Date.parse(params.created_to) : Infinity };
+  }, [range]);
+
   // Combined QOL Filtered Sessions
   const filteredSessions = useMemo(() => {
     return sessions.filter(s => {
+      if (range.from || range.until) {
+        const at = Date.parse(s.scheduled_start || s.opened_at || '');
+        if (!(at >= bounds.from && at < bounds.to)) return false;
+      }
       // 1. Status Filter
       if (statusFilter === 'active' && !s.is_open && s.status !== 'Active') return false;
       if (statusFilter === 'closed' && (s.is_open || s.status === 'Active')) return false;
@@ -242,7 +318,7 @@ export const AttendanceManager: React.FC = () => {
         const matchCourseName = s.course_name.toLowerCase().includes(q);
         const matchLecturer = s.lecturer_name.toLowerCase().includes(q);
         const matchGroup = s.class_group.toLowerCase().includes(q);
-        const matchRole = (s.lecturer_role || '').toLowerCase().includes(q);
+        const matchRole = [s.lecturer_role || '', ...(s.lecturer_roles || [])].some(role => role.toLowerCase().includes(q));
 
         if (!matchCourseCode && !matchCourseName && !matchLecturer && !matchGroup && !matchRole) {
           return false;
@@ -251,7 +327,7 @@ export const AttendanceManager: React.FC = () => {
 
       return true;
     });
-  }, [sessions, statusFilter, selectedGroup, selectedStaff, searchQuery]);
+  }, [sessions, statusFilter, selectedGroup, selectedStaff, searchQuery, range, bounds]);
 
   // Table Pagination Computations
   const totalCount = filteredSessions.length;
@@ -286,10 +362,12 @@ export const AttendanceManager: React.FC = () => {
     setStatusFilter('all');
     setSelectedGroup('all');
     setSelectedStaff('all');
+    setRange(NO_RANGE);
     setPage(1);
   };
 
-  const isFilterActive = searchQuery !== '' || statusFilter !== 'all' || selectedGroup !== 'all' || selectedStaff !== 'all';
+  const isFilterActive = searchQuery !== '' || statusFilter !== 'all' || selectedGroup !== 'all' || selectedStaff !== 'all' || !!range.from || !!range.until;
+  const drawerFilterActive = selectedGroup !== 'all' || selectedStaff !== 'all';
 
   // Session Attendance Modal Logic
   const openAttendanceModal = async (session: AdminSession) => {
@@ -443,7 +521,6 @@ export const AttendanceManager: React.FC = () => {
     });
   }, [attendanceList, modalStatusFilter, studentSearchQuery]);
 
-  const formatDateTime = attendanceDateTime;
 
   const activeSessionCount = sessions.filter(s => s.is_open || s.status === 'Active').length;
   const closedSessionCount = sessions.length - activeSessionCount;
@@ -519,45 +596,55 @@ export const AttendanceManager: React.FC = () => {
             </button>
           </div>
 
-          {/* Multi-Criteria Filters Toggle */}
+          {/* Group and staff filters stay one click away; search and dates are always shown. */}
           <button
             type="button"
+            aria-expanded={isFilterDrawerOpen || drawerFilterActive}
             onClick={() => setIsFilterDrawerOpen(!isFilterDrawerOpen)}
             className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
-              isFilterActive
+              drawerFilterActive
                 ? 'bg-brand-blue-light text-brand-blue border-brand-blue/20'
                 : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
             }`}
           >
             <Filter className="h-3.5 w-3.5" />
             <span>Filter Criteria</span>
-            {isFilterActive && (
+            {drawerFilterActive && (
               <span className="w-2 h-2 rounded-full bg-brand-blue" />
             )}
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isFilterDrawerOpen ? 'rotate-180' : ''}`} />
           </button>
         </div>
 
-        {/* QOL Advanced Filter Bar */}
-        {(isFilterDrawerOpen || isFilterActive) && (
-          <div className="p-4 bg-slate-50/80 border border-slate-200/70 rounded-xl space-y-3 animate-in fade-in duration-150">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {/* 1. Search Query */}
-              <div className="min-w-0 space-y-1">
-                <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Search Keyword</label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                  <TextInput showCounter={false}
-                    type="text"
-                    placeholder="Course, Staff, Student..."
-                    value={searchQuery}
-                    onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
-                    className="w-full uipro-input !pl-9 !py-2 text-xs"
-                  />
-                </div>
-              </div>
+        {/* Search and class date/time range, always visible */}
+        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <div className="min-w-0 sm:col-span-2 xl:col-span-1">
+            <label htmlFor="attendance-class-search" className="mb-1.5 block text-xs text-slate-500 dark:text-slate-400">Search</label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <TextInput showCounter={false}
+                id="attendance-class-search"
+                type="search"
+                placeholder="Course, staff, role or group"
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-brand-blue focus:outline-none focus:ring-2 focus:ring-brand-blue/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              />
+            </div>
+          </div>
+          <SubmissionDateTimePicker label="From" value={range.from} now={malaysiaNow} zoneLabel="Malaysia time" max={range.until || undefined}
+            onChange={from => { setRange(current => ({ ...current, from })); setPage(1); }} />
+          <SubmissionDateTimePicker label="Until" value={range.until} now={malaysiaNow} zoneLabel="Malaysia time" min={range.from || undefined}
+            onChange={until => { setRange(current => ({ ...current, until })); setPage(1); }} />
+          <button type="button" onClick={() => { setRange(NO_RANGE); setPage(1); }} disabled={!range.from && !range.until}
+            className="uipro-button uipro-button-secondary h-11 px-4 text-xs sm:col-span-2 xl:col-span-1">Clear dates</button>
+        </div>
+        <p className="-mt-2 text-[11px] text-slate-500 dark:text-slate-400">Dates match the class start time, in Malaysia time.</p>
 
-              {/* 2. Class Group Filter */}
+        {(isFilterDrawerOpen || drawerFilterActive) && (
+          <div className="p-4 bg-slate-50/80 border border-slate-200/70 rounded-xl space-y-3 animate-in fade-in duration-150">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Class Group Filter */}
               <div className="space-y-1">
                 <label className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Class Group</label>
                 <FilterDropdown
@@ -579,21 +666,21 @@ export const AttendanceManager: React.FC = () => {
                 />
               </div>
             </div>
+          </div>
+        )}
 
-            {isFilterActive && (
-              <div className="flex justify-between items-center pt-2 border-t border-slate-200/50">
-                <span className="text-[11px] text-slate-500 font-medium">
-                  Found <strong className="text-slate-800">{totalCount}</strong> matching sessions
-                </span>
-                <button
-                  type="button"
-                  onClick={resetFilters}
-                  className="text-xs font-bold text-danger-red hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <X className="h-3.5 w-3.5" /> Clear All Filters
-                </button>
-              </div>
-            )}
+        {isFilterActive && (
+          <div className="flex items-center justify-between rounded-xl bg-blue-50/60 px-3 py-2 dark:bg-blue-500/10">
+            <span className="text-[11px] text-slate-600 font-medium dark:text-slate-300">
+              Found <strong className="text-slate-800 dark:text-white">{totalCount}</strong> matching sessions
+            </span>
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="text-xs font-bold text-danger-red hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" /> Clear All Filters
+            </button>
           </div>
         )}
 
@@ -601,7 +688,7 @@ export const AttendanceManager: React.FC = () => {
         {loading || pageChanging ? (
           <LoadingRegion label="Loading classes…">
             <ShimmerTableSkeleton
-              headers={['Course', 'Staff Name', 'Role', 'Group', 'Class Start', 'Class End', 'Opened At', 'Closed At', 'Status', 'Actions']}
+              headers={['Course', 'Staff Name', 'Role', 'Group', 'Class time', 'Opened / closed', 'Status', 'Actions']}
               rows={limit}
               showPagination={true}
             />
@@ -635,10 +722,8 @@ export const AttendanceManager: React.FC = () => {
                     <th className="py-3 px-4">Staff Name</th>
                     <th className="py-3 px-4">Role</th>
                     <th className="py-3 px-4">Group</th>
-                    <th className="py-3 px-4">Class Start (MYT)</th>
-                    <th className="py-3 px-4">Class End (MYT)</th>
-                    <th className="py-3 px-4">Opened At</th>
-                    <th className="py-3 px-4">Closed At</th>
+                    <th className="py-3 px-4">Class time (MYT)</th>
+                    <th className="py-3 px-4">Opened / closed</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
@@ -661,25 +746,15 @@ export const AttendanceManager: React.FC = () => {
                           <span>{session.lecturer_name}</span>
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 text-slate-500 font-medium">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-650 border border-slate-200">
-                          {session.lecturer_role || '—'}
-                        </span>
+                      <td className="py-3.5 px-4">
+                        <RoleChips session={session} />
                       </td>
-                      <td className="py-3.5 px-4 font-mono text-slate-600 font-bold">
-                        {session.class_group.startsWith('G') ? `Group ${session.class_group.replace('G', '')}` : session.class_group}
+                      <td className="py-3.5 px-4 whitespace-nowrap text-slate-700 font-semibold">
+                        {groupName(session.class_group)}
                       </td>
-                      <td className="py-3.5 px-4 text-slate-600 font-mono whitespace-nowrap">{formatDateTime(session.scheduled_start)}</td>
-                      <td className="py-3.5 px-4 text-slate-600 font-mono whitespace-nowrap">{formatDateTime(session.scheduled_end)}</td>
-                      <td className="py-3.5 px-4 text-slate-500 font-mono">{formatDateTime(session.opened_at)}</td>
-                      <td className="py-3.5 px-4 text-slate-500 font-mono">
-                        {!session.is_open ? (
-                          formatDateTime(session.closed_at)
-                        ) : (
-                          <span className="text-brand-blue font-semibold italic flex items-center gap-1">
-                            <Clock className="h-3 w-3 animate-spin shrink-0" /> In Progress
-                          </span>
-                        )}
+                      <td className="py-3.5 px-4"><ClassTimeCell session={session} /></td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <OpenedClosedCell session={session} />
                       </td>
                       <td className="py-3.5 px-4">
                         {session.status === 'Active' || session.is_open ? (
@@ -763,242 +838,176 @@ export const AttendanceManager: React.FC = () => {
         )}
       </div>}
 
-      {/* Modal Dialog: AUDIT / MANAGE ATTENDANCE */}
+      {/* Class attendance dialog: who attended one class, with the controls to correct it */}
       {selectedSession && createPortal((
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4" role="presentation">
-          <div className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm" onClick={closeAttendanceModal} />
-          
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4" role="presentation">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={closeAttendanceModal} />
+
           <div
             ref={attendanceDialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="attendance-audit-title"
             tabIndex={-1}
-            className="max-w-4xl w-full uipro-card bg-white relative z-10 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh] outline-none"
+            className="relative z-10 flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl outline-none animate-in zoom-in-95 duration-150 dark:border-slate-700 dark:bg-slate-900"
           >
-            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-              <div className="space-y-1">
-                <h3 id="attendance-audit-title" className="font-display font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <UserCheck className="h-4.5 w-4.5 text-brand-blue" />
-                  Audit Attendance Directory
-                </h3>
-                <p className="text-[10px] text-slate-400">
-                  Course: <strong className="text-slate-700">{selectedSession.course_code} - {selectedSession.course_name}</strong> | Group: <strong className="text-slate-700">{selectedSession.class_group.startsWith('G') ? `Group ${selectedSession.class_group.replace('G', '')}` : selectedSession.class_group}</strong>
+            <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800 sm:px-6">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-brand-blue dark:bg-blue-500/10">
+                <UserCheck className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 id="attendance-audit-title" className="text-base font-bold text-slate-900 dark:text-white">Class attendance</h3>
+                <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
+                  {selectedSession.course_code} · {selectedSession.course_name} · {groupName(selectedSession.class_group)}
                 </p>
-                <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">Class (Malaysia time): {formatDateTime(selectedSession.scheduled_start)} – {formatDateTime(selectedSession.scheduled_end)}</p>
-                <p className="text-[10px] text-slate-400">Opened: {formatDateTime(selectedSession.opened_at)} · Closed: {formatDateTime(selectedSession.closed_at)} · {selectedSession.status}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-slate-100 px-2.5 font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    <CalendarDays className="h-3.5 w-3.5 text-brand-blue" />
+                    {classTime(selectedSession)}
+                  </span>
+                  <span className="inline-flex h-6 items-center rounded-full border border-slate-200 px-2.5 font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300">{selectedSession.status || 'Closed'}</span>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={closeAttendanceModal}
                 aria-label="Close audit panel"
-                className="mt-0.5 shrink-0 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 cursor-pointer dark:hover:bg-slate-800 dark:hover:text-white"
               >
                 <X className="h-4.5 w-4.5" />
               </button>
             </div>
 
-            {/* Constraints Banner */}
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex gap-2.5 text-[10px] text-slate-500 font-sans leading-relaxed">
-              <ShieldAlert className="h-4.5 w-4.5 text-slate-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold text-slate-700">Administrative Audit Mode</p>
-                <p>
-                  Class start/end are scheduled times; Recorded At is the stored check-in, absence-finalization or manual-marking time, not a student's departure time. Unrecorded students are not confirmed absent. Edits retain earlier values and timestamps in Audit Logs; older missing times cannot be reconstructed.
-                </p>
-              </div>
-            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 py-4 sm:px-6">
+              <p className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300">
+                <Info className="h-4 w-4 shrink-0 text-brand-blue" />
+                Times are Malaysia time, and every change you make is kept in Audit Logs.
+              </p>
 
-            {/* Modal Controls Bar */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-              {/* Modal Filter Chips */}
-              <div className="flex flex-wrap items-center gap-1.5 bg-slate-100/70 p-1 rounded-xl w-full sm:w-auto">
-                <button
-                  type="button"
-                  onClick={() => setModalStatusFilter('all')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    modalStatusFilter === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  All ({attendanceList.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModalStatusFilter('present')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    modalStatusFilter === 'present' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  Present ({attendanceList.filter(r => r.status === 'present').length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModalStatusFilter('absent')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    modalStatusFilter === 'absent' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  Absent ({attendanceList.filter(r => r.status === 'absent').length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setModalStatusFilter('leave')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    modalStatusFilter === 'leave' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'
-                  }`}
-                >
-                  Medical / Leave ({attendanceList.filter(r => r.status === 'leave' || r.status.startsWith('mc_')).length})
-                </button>
-                <button type="button" onClick={() => setModalStatusFilter('unmarked')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${modalStatusFilter === 'unmarked' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500'}`}>
-                  Unrecorded ({attendanceList.filter(r => r.status === 'unmarked').length})
-                </button>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div role="group" aria-label="Show students" className="flex flex-wrap items-center gap-1 rounded-xl bg-slate-100/80 p-1 dark:bg-slate-800/70">
+                  {([
+                    ['all', 'All', attendanceList.length, 'text-slate-800'],
+                    ['present', 'Present', attendanceList.filter(r => r.status === 'present').length, 'text-emerald-700'],
+                    ['absent', 'Absent', attendanceList.filter(r => r.status === 'absent').length, 'text-rose-700'],
+                    ['leave', 'Leave', attendanceList.filter(r => r.status === 'leave' || r.status.startsWith('mc_')).length, 'text-slate-800'],
+                    ['unmarked', 'Unrecorded', attendanceList.filter(r => r.status === 'unmarked').length, 'text-amber-700'],
+                  ] as const).map(([value, label, count, tone]) => (
+                    <button key={value} type="button" aria-pressed={modalStatusFilter === value} onClick={() => setModalStatusFilter(value)}
+                      className={`h-8 rounded-lg px-3 text-xs font-semibold transition-all cursor-pointer ${modalStatusFilter === value ? `bg-white shadow-sm ${tone} dark:bg-slate-900` : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'}`}>
+                      {label} ({count})
+                    </button>
+                  ))}
+                </div>
+                <div className="relative w-full lg:w-64">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <TextInput showCounter={false}
+                    type="search"
+                    aria-label="Search students"
+                    placeholder="Search name or student ID"
+                    value={studentSearchQuery}
+                    onChange={(e) => setStudentSearchQuery(e.target.value)}
+                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-brand-blue focus:outline-none focus:ring-2 focus:ring-brand-blue/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                </div>
               </div>
 
-              {/* Modal student search toolbar */}
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                <TextInput showCounter={false}
-                  type="text"
-                  placeholder="Search student name or code..."
-                  value={studentSearchQuery}
-                  onChange={(e) => setStudentSearchQuery(e.target.value)}
-                  className="w-full uipro-input !pl-9 !py-2 text-xs"
-                />
-              </div>
-            </div>
-
-            {/* Attendance list output */}
-            <div className="overflow-auto flex-1 min-h-0 border border-slate-100 rounded-xl">
-              {modalLoading ? (
-                <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs" aria-live="polite">
-                  <InfinityLoop className="h-14 w-20 text-brand-blue" />
-                  <span className="font-semibold">Loading attendance records...</span>
-                </div>
-              ) : modalError ? (
-                <div className="p-4 text-center text-danger-red font-sans text-xs bg-danger-red-light">
-                  {modalError}
-                </div>
-              ) : filteredAttendance.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 font-sans text-xs">
-                  No enrolled students found matching search.
-                </div>
-              ) : (
-                <table className="w-full text-left border-collapse font-sans text-xs">
-                  <thead className="bg-slate-50/75 sticky top-0 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider z-10">
-                    <tr>
-                      <th className="py-2.5 px-4">Student Details</th>
-                      <th className="py-2.5 px-4">Student Code</th>
-                      <th className="py-2.5 px-4">Recorded At (MYT)</th>
-                      <th className="py-2.5 px-4 text-center">WiFi Verified</th>
-                      <th className="py-2.5 px-4 text-center">Liveness Passed</th>
-                      <th className="py-2.5 px-4 text-center">Attendance Status</th>
-                      <th className="py-2.5 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100/50">
-                    {filteredAttendance.map((record) => {
-                      const isSubmitting = submittingStudentId === record.student_id;
-                      return (
-                        <tr key={record.student_id} className="hover:bg-slate-50/30 transition-colors">
-                          <td className="py-3 px-4 font-semibold text-slate-800">{record.student_name}</td>
-                          <td className="py-3 px-4 font-mono text-slate-500 font-bold">{record.student_code}</td>
-                          <td className="py-3 px-4 text-slate-400 font-mono text-[11px]">
-                            {record.marked_at ? formatDateTime(record.marked_at) : 'Not marked'}
-                            <span className="mt-1 block text-[10px] font-sans text-slate-500">{attendanceSource(record.status, record.method)}</span>
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            {record.status !== 'present' ? (
-                              <span className="inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 cursor-not-allowed select-none">
-                                <Wifi className="h-3 w-3 shrink-0 opacity-50" />
-                                <span>N/A</span>
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => handleToggleOverride(record, 'wifi')}
-                                disabled={isSubmitting}
-                                className={`inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold cursor-pointer select-none transition-all ${
-                                  record.wifi_verified
-                                    ? 'bg-success-green-light text-success-green border-success-green/10 hover:bg-success-green/10'
-                                    : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
-                                }`}
-                              >
-                                <Wifi className="h-3 w-3 shrink-0" />
-                                <span>{record.wifi_verified ? 'Verified' : 'Bypassed'}</span>
-                              </button>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            {record.status !== 'present' ? (
-                              <span className="inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 cursor-not-allowed select-none">
-                                <User className="h-3 w-3 shrink-0 opacity-50" />
-                                <span>N/A</span>
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => handleToggleOverride(record, 'liveness')}
-                                disabled={isSubmitting}
-                                className={`inline-flex items-center gap-1 py-1 px-2.5 rounded-lg border text-[10px] font-semibold cursor-pointer select-none transition-all ${
-                                  record.liveness_passed
-                                    ? 'bg-success-green-light text-success-green border-success-green/10 hover:bg-success-green/10'
-                                    : 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
-                                }`}
-                              >
-                                <User className="h-3 w-3 shrink-0" />
-                                <span>{record.liveness_passed ? 'Passed' : 'Bypassed'}</span>
-                              </button>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            {record.status === 'present' ? (
-                              <span className="uipro-badge uipro-badge-success inline-flex items-center">
-                                <CheckCircle className="h-3 w-3 mr-1" /> Present
-                              </span>
-                            ) : record.status === 'leave' || record.status.startsWith('mc_') ? (
-                              <span className="uipro-badge bg-slate-100 text-slate-600 inline-flex items-center">
-                                {record.status === 'leave' ? 'On Leave' : record.status.replace('mc_', 'MC ').replace('_', ' ')}
-                              </span>
-                            ) : record.status === 'unmarked' ? (
-                              <span className="uipro-badge bg-amber-50 text-amber-700 inline-flex items-center">Unrecorded</span>
-                            ) : (
-                              <span className="uipro-badge uipro-badge-danger inline-flex items-center">
-                                <XCircle className="h-3 w-3 mr-1" /> Absent
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={() => handleToggleStatus(record)}
-                              disabled={isSubmitting}
-                              className={`uipro-button py-1.5 px-3 text-[10px] font-bold cursor-pointer transition-all ${
-                                record.status === 'present'
-                                  ? 'uipro-button-secondary border-danger-red/20 text-danger-red hover:bg-danger-red-light hover:text-danger-red'
-                                  : 'uipro-button-primary bg-success-green hover:bg-success-green/90 border-success-green/10'
-                              }`}
-                            >
-                              {isSubmitting ? (
-                                <Loader2 className="h-3 w-3 animate-spin mx-2" />
-                              ) : record.status === 'present' ? (
-                                'Mark Absent'
+              <div className="min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                {modalLoading ? (
+                  <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-3 font-sans text-xs" aria-live="polite">
+                    <InfinityLoop className="h-14 w-20 text-brand-blue" />
+                    <span className="font-semibold">Loading attendance…</span>
+                  </div>
+                ) : modalError ? (
+                  <div role="alert" className="p-4 text-center text-danger-red font-sans text-xs bg-danger-red-light">
+                    {modalError}
+                  </div>
+                ) : filteredAttendance.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 font-sans text-xs">
+                    No students match.
+                  </div>
+                ) : (
+                  <table className="w-full min-w-[720px] text-left border-collapse font-sans text-xs">
+                    <thead className="sticky top-0 z-10 bg-slate-50 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      <tr>
+                        <th className="py-3 pl-4 pr-3">Student</th>
+                        <th className="px-3 py-3">Time recorded</th>
+                        <th className="px-3 py-3 text-center">Campus Wi‑Fi</th>
+                        <th className="px-3 py-3 text-center">Face check</th>
+                        <th className="px-3 py-3 text-center">Status</th>
+                        <th className="py-3 pl-3 pr-4 text-right"><span className="sr-only">Change</span></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredAttendance.map((record) => {
+                        const isSubmitting = submittingStudentId === record.student_id;
+                        const present = record.status === 'present';
+                        const check = (passed: boolean, type: 'wifi' | 'liveness', Icon: React.ElementType, yes: string) => !present
+                          ? <span className="text-slate-300 dark:text-slate-600" title="Only checked for present students">—</span>
+                          : <button type="button" onClick={() => handleToggleOverride(record, type)} disabled={isSubmitting}
+                              title={passed ? 'Click to mark as not checked' : 'Click to mark as checked'}
+                              className={`inline-flex h-7 w-24 items-center justify-center gap-1 rounded-full border text-[10.5px] font-semibold transition-colors cursor-pointer disabled:cursor-wait ${passed
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                : 'attendance-pill-amber border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}>
+                              <Icon className="h-3 w-3 shrink-0" />{passed ? yes : 'Skipped'}
+                            </button>;
+                        return (
+                          <tr key={record.student_id} className="transition-colors hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                            <td className="py-3 pl-4 pr-3">
+                              <span className="block font-semibold text-slate-800 dark:text-slate-100">{record.student_name}</span>
+                              <span className="mt-0.5 block font-mono text-[10.5px] text-slate-400">{record.student_code}</span>
+                            </td>
+                            <td className="px-3 py-3">
+                              {record.marked_at ? <WhenCell value={record.marked_at} /> : <span className="block font-semibold text-slate-500">Not marked</span>}
+                              <span className="mt-0.5 block text-[10.5px] text-slate-400">{attendanceSource(record.status, record.method)}</span>
+                            </td>
+                            <td className="px-3 py-3 text-center">{check(record.wifi_verified, 'wifi', Wifi, 'Verified')}</td>
+                            <td className="px-3 py-3 text-center">{check(record.liveness_passed, 'liveness', User, 'Passed')}</td>
+                            <td className="px-3 py-3 text-center">
+                              {present ? (
+                                <span className="inline-flex h-7 w-24 items-center justify-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 text-[10.5px] font-bold text-emerald-700">
+                                  <CheckCircle className="h-3 w-3" /> Present
+                                </span>
+                              ) : record.status === 'leave' || record.status.startsWith('mc_') ? (
+                                <span className="inline-flex h-7 w-24 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-[10.5px] font-bold text-slate-600">
+                                  {record.status === 'leave' ? 'On Leave' : record.status.replace('mc_', 'MC ').replace('_', ' ')}
+                                </span>
+                              ) : record.status === 'unmarked' ? (
+                                <span title="No attendance recorded yet" className="attendance-pill-amber inline-flex h-7 w-24 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-[10.5px] font-bold text-amber-700">Unrecorded</span>
                               ) : (
-                                'Mark Present'
+                                <span className="attendance-pill-rose inline-flex h-7 w-24 items-center justify-center gap-1 rounded-full border border-rose-200 bg-rose-50 text-[10.5px] font-bold text-rose-700">
+                                  <XCircle className="h-3 w-3" /> Absent
+                                </span>
                               )}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
+                            </td>
+                            <td className="py-3 pl-3 pr-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStatus(record)}
+                                disabled={isSubmitting}
+                                className={`inline-flex h-8 w-28 items-center justify-center whitespace-nowrap rounded-lg border text-[11px] font-bold transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60 ${present
+                                  ? 'attendance-mark-absent border-rose-200 bg-white text-rose-600 hover:bg-rose-50 dark:bg-slate-900'
+                                  : 'attendance-mark-present border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'}`}
+                              >
+                                {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : present ? 'Mark Absent' : 'Mark Present'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
-            
-            <div className="flex justify-end pt-2">
+
+            <div className="flex justify-end border-t border-slate-100 px-5 py-3 dark:border-slate-800 sm:px-6">
               <button
+                type="button"
                 onClick={closeAttendanceModal}
-                className="uipro-button uipro-button-secondary py-2 px-4 cursor-pointer"
+                className="uipro-button uipro-button-secondary h-10 px-5 text-xs cursor-pointer"
               >
-                Close Audit panel
+                Close
               </button>
             </div>
           </div>

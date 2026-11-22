@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { BookOpen, CalendarDays, Check, Pencil, Save, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { BookOpen, CalendarDays, Check, Pencil, Save, RefreshCw, Search, Trash2, Users, X } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { AcademicSemester, Course, Programme, SemesterWrite } from '../services/api';
 import { CustomDropdown } from './CustomDropdown';
@@ -9,6 +9,7 @@ import { InfoTip } from './InfoTip';
 import { LoadingRegion, ShimmerSemesterCards, ShimmerText } from './Shimmer';
 import { DatePicker } from './DatePicker';
 import { SemesterRolloverPreview } from './SemesterRolloverPreview';
+import { SemesterGroupsDialog } from './SemesterGroups';
 import { TextInput } from './LimitedTextField';
 import { useMalaysiaToday } from '../hooks/useMalaysiaToday';
 import { swalConfirm, swalError, swalSuccess } from '../utils/swal';
@@ -166,6 +167,7 @@ function SemesterForm({ programmes, courses, stored, onDone, onCancel, coursesLo
 export function SemestersPanel({ programmes, courses, onSaved, ...courseState }: Props) {
   const [terms, setTerms] = useState<AcademicSemester[]>([]);
   const [editing, setEditing] = useState<AcademicSemester>();
+  const [groupsFor, setGroupsFor] = useState<AcademicSemester>();
   const [deleting, setDeleting] = useState<string>();
   const [loadError, setLoadError] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -209,6 +211,7 @@ export function SemestersPanel({ programmes, courses, onSaved, ...courseState }:
       {terms.map(term => <article key={term.id} className="flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 sm:flex-row dark:border-slate-700 dark:bg-slate-800">
         <div className="min-w-0 space-y-2"><h4 className="break-words text-sm font-bold">{term.name}</h4><p className="text-xs text-slate-500">{programmes.find(p => String(p.id) === term.programme_id)?.code} · {term.start_date} – {term.end_date}</p><p className="text-xs">{term.course_ids?.length ?? 0} courses</p><span className="inline-block rounded-full bg-blue-100 px-3 py-1 text-[10px] font-bold uppercase text-blue-700 dark:bg-blue-900 dark:text-blue-200">{term.status}</span></div>
         <div className="flex shrink-0 gap-2 self-start">
+          <button type="button" aria-label={`Groups in ${term.name}`} onClick={() => setGroupsFor(term)} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-brand-blue dark:border-slate-700 dark:bg-slate-900"><Users className="h-4 w-4" />Groups</button>
           <button type="button" disabled={!!deleting} aria-label={`Edit ${term.name}`} onClick={() => setEditing(term)} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-brand-blue disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"><Pencil className="h-4 w-4" />Edit</button>
           <button type="button" disabled={!!deleting} aria-label={`Delete ${term.name}`} onClick={() => void remove(term)} className="flex items-center gap-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900 dark:bg-slate-900 dark:hover:bg-rose-950/40"><Trash2 className="h-4 w-4" />{deleting === term.id ? 'Deleting…' : 'Delete'}</button>
         </div>
@@ -216,6 +219,7 @@ export function SemestersPanel({ programmes, courses, onSaved, ...courseState }:
     </section>
     {terms.length >= 2 && <SemesterRolloverPreview terms={terms} programmes={programmes} />}
     <AnimatePresence>
+      {groupsFor && <SemesterGroupsDialog key={`groups-${groupsFor.id}`} term={groupsFor} onClose={() => setGroupsFor(undefined)} />}
       {editing && <DialogShell key={editing.id} labelledBy="semester-edit-title" widthClass="max-w-2xl" onClose={() => setEditing(undefined)}>
         <SemesterForm programmes={programmes} courses={courses} {...courseState} stored={editing} onCancel={() => setEditing(undefined)}
           onDone={async () => { setEditing(undefined); await load(); onSaved(); }} />
