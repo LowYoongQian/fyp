@@ -1,5 +1,17 @@
 # Changelog
 
+## Profile, recovery email, face photo and check-in screens — 2026-11-23 03:11
+- Students can now remove their recovery email with the bin icon next to "Change email". After confirming, password reset links and account notices stop until a new address is verified, and the dashboard updates straight away. If removal fails, the email stays.
+- The Profile back button now uses the normal light or dark hover instead of a near-black block. In dark mode, "Change email" and the bin icon are readable again.
+- In Student Details, the registered face photo now loads in a fixed frame with a percentage and progress bar, then sharpens from a blur (no animation when reduced motion is on). Another student's photo never appears while the next one loads.
+- In the mobile app, the check-in result now fills the screen with one header and a Done or Close button. It shows "Waiting to sync" while the check-in is only stored on the phone, and "Attendance recorded" only once the server confirms it. Saved attendance now opens as its own page with a Back button. ChatGPT review pending.
+
+
+## Recovery email code boxes — 2026-11-23 01:24
+- Verifying a recovery email now uses six code boxes on the sign-in screen, the Profile page and the mobile app. Pasting or autofilling the code fills every box, and the code checks itself as soon as the sixth digit is in.
+- A wrong or expired code stays on screen with a clear message, "Resend code" counts down the one-minute wait and clears the boxes, and "Change email" and "Later" are still there. ChatGPT review pending.
+
+
 ## Signed-in devices and full Bahasa Malaysia — 2026-11-22 09:09
 - Signed-in devices now show the real device (for example "Samsung SM-S918B (Android 14)" or "Chrome on Windows") with its IP address, and signing in again on the same phone no longer adds a duplicate entry. The phone model needs the next mobile app build.
 - The whole website can now be shown in Bahasa Malaysia, including settings, menus, messages and pop-ups. The other languages keep their current translations and are being completed next.

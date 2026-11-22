@@ -1,5 +1,6 @@
 import '../i18n/tr.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 String offlineStatus(Object? status) => switch (status) {
   'synced' => 'Attendance recorded',
@@ -67,55 +68,47 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
     final card = dark ? const Color(0xFF2A2A2A) : Colors.white;
     const blue = Color(0xFF2563EB);
     final waiting = _rows.where((row) => !['synced', 'excused'].contains(row['status'])).length;
-    return FractionallySizedBox(
-      heightFactor: .8,
-      child: SafeArea(
+    final line = dark ? const Color(0xFF333333) : const Color(0xFFE2E8F0);
+    // A full page with one header: Back returns to the dashboard tab it was opened from.
+    return Scaffold(
+      backgroundColor: dark ? const Color(0xFF181818) : const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        backgroundColor: dark ? const Color(0xFF181818) : Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shape: Border(bottom: BorderSide(color: line)),
+        leading: IconButton(
+          tooltip: tr('Close saved attendance'),
+          onPressed: () => Navigator.maybePop(context),
+          icon: Icon(Icons.arrow_back_rounded, color: ink),
+        ),
+        titleSpacing: 0,
+        title: Text(tr('Saved attendance'), style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.bold, color: ink)),
+        actions: [
+          if (waiting > 0)
+            Container(
+              margin: const EdgeInsets.only(right: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD97706).withValues(alpha: dark ? .22 : .12),
+                borderRadius: BorderRadius.circular(99),
+              ),
+              child: Text(tr('{count} waiting', {'count': waiting}),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFFD97706))),
+            ),
+        ],
+      ),
+      body: SafeArea(
         top: false,
+        bottom: false,
         child: Column(
           children: [
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [blue, Color(0xFF0EA5E9)]),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const Icon(Icons.cloud_sync_rounded, color: Colors.white, size: 24),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Semantics(
-                          header: true,
-                          child: Text(
-                            tr('Saved attendance'),
-                            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: ink),
-                          ),
-                        ),
-                      ),
-                      if (waiting > 0)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFD97706).withValues(alpha: dark ? .22 : .12),
-                            borderRadius: BorderRadius.circular(99),
-                          ),
-                          child: Text('$waiting',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFFD97706))),
-                        ),
-                      IconButton(
-                        tooltip: tr('Close saved attendance'),
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close_rounded),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -237,8 +230,9 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            SafeArea(
+              top: false,
+              minimum: const EdgeInsets.fromLTRB(20, 8, 20, 20),
               child: FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: blue,

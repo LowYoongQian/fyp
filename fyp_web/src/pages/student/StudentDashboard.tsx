@@ -169,8 +169,10 @@ export const StudentDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
 
   useEffect(() => {
     const handleRecoveryEmailVerified = () => setRecoveryEmailVerified(true);
+    const handleRecoveryEmailRemoved = () => setRecoveryEmailVerified(false);
     window.addEventListener('recovery-email-verified', handleRecoveryEmailVerified);
-    return () => window.removeEventListener('recovery-email-verified', handleRecoveryEmailVerified);
+    window.addEventListener('recovery-email-removed', handleRecoveryEmailRemoved);
+    return () => { window.removeEventListener('recovery-email-verified', handleRecoveryEmailVerified); window.removeEventListener('recovery-email-removed', handleRecoveryEmailRemoved); };
   }, []);
 
   const noticeView = useOpenRecord(announcements);

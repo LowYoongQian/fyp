@@ -1519,6 +1519,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     setState(() => isSyncing = true);
     // Opens at once and becomes the result when the server answers, so the student is never left guessing.
     final progress = showCheckInProgressDialog(context, courseCode: courseCode, courseName: courseName);
+    String detail(String key) => extraDetails?[key]?.toString() ?? '';
     try {
       // 1. Collect live network facts for location corroboration.
       final netInfo = await NetworkInfoService.collect();
@@ -1565,7 +1566,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
           if (!current()) return;
           setState(() {});
-          progress.savedOnPhone();
+          progress.savedOnPhone(timeSlot: detail('timeSlot'), room: detail('room'), classGroup: detail('classGroup'));
         }
         return;
       } on http.ClientException {
@@ -1582,7 +1583,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           _offlineRows = await LocalCacheService.pendingCheckIns(owner, server);
           if (!current()) return;
           setState(() {});
-          progress.savedOnPhone();
+          progress.savedOnPhone(timeSlot: detail('timeSlot'), room: detail('room'), classGroup: detail('classGroup'));
         }
         return;
       }
@@ -1613,12 +1614,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       progress.succeed(
         courseCode: courseCode,
         courseName: courseName,
-        timeSlot:
-            extraDetails?['timeSlot']?.toString() ?? 'Active Class Session',
-        room: extraDetails?['room']?.toString() ?? '',
-        classGroup: extraDetails?['classGroup']?.toString() ?? '',
-        lecturerName: extraDetails?['lecturerName']?.toString() ?? '',
-        lecturerRole: extraDetails?['lecturerRole']?.toString() ?? '',
+        timeSlot: detail('timeSlot'),
+        room: detail('room'),
+        classGroup: detail('classGroup'),
+        lecturerName: detail('lecturerName'),
+        lecturerRole: detail('lecturerRole'),
         wifiVerified: verification.wifiVerified,
         livenessPassed: verification.livenessPassed,
       );
@@ -2315,12 +2315,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                     ),
                     clipBehavior: Clip.antiAlias,
                     child: InkWell(
-                      onTap: () => showModalBottomSheet(
-                        context: context,
-                        isScrollControlled: true,
-                        useSafeArea: true,
-                        backgroundColor: dark ? const Color(0xFF222222) : const Color(0xFFF8FAFC),
-                        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+                      // A full page with its own Back header, so the dashboard's header and tabs are not left showing behind it.
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                         builder: (ctx) => OfflineQueueSheet(
                           rows: _offlineRows,
                           onRefresh: () async {
@@ -2328,7 +2324,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                             return _offlineRows;
                           },
                         ),
-                      ),
+                      )),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
                         child: Row(children: [

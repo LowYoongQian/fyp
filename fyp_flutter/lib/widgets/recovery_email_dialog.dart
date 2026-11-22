@@ -1,8 +1,14 @@
+import 'dart:async';
+import 'dart:io';
+
 import '../i18n/tr.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 
 const _blue = Color(0xFF2563EB);
+const _codeLength = 6;
+const _resendSeconds = 60;   // the server's pause between codes (RECOVERY_RESEND_SECONDS)
 const _badge = [Color(0xFF2563EB), Color(0xFF06B6D4), Color(0xFF8B5CF6)];
 
 /// The first-sign-in prompt for a personal recovery email, then its 6-digit code. [request] sends the code, [verify] checks it;
@@ -40,15 +46,31 @@ class _RecoveryEmailDialog extends StatefulWidget {
 class _RecoveryEmailDialogState extends State<_RecoveryEmailDialog> {
   final _email = TextEditingController();
   final _code = TextEditingController();
+  final _codeFocus = FocusNode();
   String? _error;
   String _sentTo = '';
+  String _refused = '';   // the last code the server rejected; it is not sent again until a digit changes
   bool _codeSent = false, _busy = false;
+  int _waitLeft = 0;   // seconds until another code may be asked for
+  Timer? _tick;
 
   @override
   void dispose() {
+    _tick?.cancel();
     _email.dispose();
     _code.dispose();
+    _codeFocus.dispose();
     super.dispose();
+  }
+
+  void _startWait() {
+    _waitLeft = _resendSeconds;
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return timer.cancel();
+      setState(() => _waitLeft--);
+      if (_waitLeft <= 0) timer.cancel();
+    });
   }
 
   Future<void> _run(Future<void> Function() work) async {
@@ -68,19 +90,43 @@ class _RecoveryEmailDialogState extends State<_RecoveryEmailDialog> {
         final problem = recoveryEmailProblem(email);
         if (problem != null) throw Exception(problem);
         await widget.request(email);
-        if (mounted) setState(() { _codeSent = true; _sentTo = email; _code.clear(); });
+        if (mounted) {
+          setState(() { _codeSent = true; _sentTo = email; _code.clear(); _refused = ''; });
+          _startWait();
+        }
       });
 
-  Future<void> _verify() => _run(() async {
-        final code = _code.text.trim();
-        if (!RegExp(r'^\d{6}$').hasMatch(code)) throw Exception('Enter the 6-digit code.');
-        await widget.verify(code);
-        if (mounted) Navigator.pop(context);
-      });
+  /// One request at a time, whether the sixth digit, Enter or the button finished the code; a refused code waits for a change.
+  Future<void> _verify() async {
+    final code = _code.text;
+    if (_busy || code.length != _codeLength || code == _refused) return;
+    setState(() { _busy = true; _error = null; });
+    try {
+      await widget.verify(code);
+      if (mounted) Navigator.pop(context);
+    } catch (failure) {
+      if (!mounted) return;
+      // A wrong or expired code is refused by the server; a lost connection can be retried with the same digits.
+      final network = failure is TimeoutException || failure is SocketException || failure is http.ClientException;
+      setState(() { _error = failure.toString().replaceAll('Exception: ', ''); if (!network) _refused = code; });
+      _code.selection = TextSelection(baseOffset: 0, extentOffset: code.length);
+      _codeFocus.requestFocus();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _codeChanged(String code) {
+    setState(() { if (code != _refused) _error = null; });
+    if (code.length == _codeLength) _verify();
+  }
 
   Future<void> _resend() => _run(() async {
         await widget.request(_sentTo);
         if (mounted) {
+          setState(() { _code.clear(); _refused = ''; });
+          _startWait();
+          _codeFocus.requestFocus();
           ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text(tr('A new code is on its way.'))));
         }
       });
@@ -130,7 +176,7 @@ class _RecoveryEmailDialogState extends State<_RecoveryEmailDialog> {
               const SizedBox(height: 14),
               _Steps(second: _codeSent, dark: dark),
               const SizedBox(height: 14),
-              Text(tr(_codeSent ? 'Check your inbox' : 'Add a recovery email'), textAlign: TextAlign.center,
+              Text(tr(_codeSent ? 'Check your email' : 'Add a recovery email'), textAlign: TextAlign.center,
                   style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800, color: primary)),
               const SizedBox(height: 6),
               Text(
@@ -139,37 +185,47 @@ class _RecoveryEmailDialogState extends State<_RecoveryEmailDialog> {
                 style: theme.textTheme.bodyMedium?.copyWith(color: secondary, height: 1.4),
               ),
               const SizedBox(height: 18),
-              TextField(
-                key: ValueKey(_codeSent),
-                controller: _codeSent ? _code : _email,
-                autofocus: true,
-                enabled: !_busy,
-                keyboardType: _codeSent ? TextInputType.number : TextInputType.emailAddress,
-                autofillHints: _codeSent ? const [AutofillHints.oneTimeCode] : const [AutofillHints.email],
-                textAlign: _codeSent ? TextAlign.center : TextAlign.start,
-                maxLength: _codeSent ? 6 : null,
-                inputFormatters: _codeSent ? [FilteringTextInputFormatter.digitsOnly] : null,
-                onChanged: (_) { if (_error != null) setState(() => _error = null); },
-                onSubmitted: (_) => _codeSent ? _verify() : _sendCode(),
-                style: _codeSent
-                    ? theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800, letterSpacing: 10, color: primary)
-                    : theme.textTheme.bodyLarge?.copyWith(color: primary),
-                decoration: InputDecoration(
-                  counterText: '',
-                  labelText: _codeSent ? 'Verification code' : 'Personal email',
-                  hintText: _codeSent ? '000000' : 'yourname@example.com',
-                  prefixIcon: _codeSent ? null : const Icon(Icons.mail_outline_rounded),
-                  filled: true,
-                  fillColor: field,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: _error != null ? const Color(0xFFDC2626) : Colors.transparent),
-                  ),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _blue, width: 1.6)),
+              if (_codeSent) ...[
+                _CodeBoxes(
+                  controller: _code,
+                  focus: _codeFocus,
+                  enabled: !_busy,
+                  invalid: _error != null && _code.text == _refused,
+                  onChanged: _codeChanged,
+                  onSubmitted: _verify,
                 ),
-              ),
+                const SizedBox(height: 6),
+                Center(
+                  child: TextButton(
+                    onPressed: _busy || _waitLeft > 0 ? null : _resend,
+                    child: Text(_waitLeft > 0 ? tr('Resend code in {seconds}s', {'seconds': _waitLeft}) : tr('Resend code')),
+                  ),
+                ),
+              ] else
+                TextField(
+                  controller: _email,
+                  autofocus: true,
+                  enabled: !_busy,
+                  keyboardType: TextInputType.emailAddress,
+                  autofillHints: const [AutofillHints.email],
+                  onChanged: (_) { if (_error != null) setState(() => _error = null); },
+                  onSubmitted: (_) => _sendCode(),
+                  style: theme.textTheme.bodyLarge?.copyWith(color: primary),
+                  decoration: InputDecoration(
+                    labelText: 'Personal email',
+                    hintText: 'yourname@example.com',
+                    prefixIcon: const Icon(Icons.mail_outline_rounded),
+                    filled: true,
+                    fillColor: field,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(color: _error != null ? const Color(0xFFDC2626) : Colors.transparent),
+                    ),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _blue, width: 1.6)),
+                  ),
+                ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
                 Container(
@@ -201,7 +257,7 @@ class _RecoveryEmailDialogState extends State<_RecoveryEmailDialog> {
               ],
               const SizedBox(height: 18),
               FilledButton(
-                onPressed: _busy ? null : (_codeSent ? _verify : _sendCode),
+                onPressed: _busy || (_codeSent && (_code.text.length != _codeLength || _code.text == _refused)) ? null : (_codeSent ? _verify : _sendCode),
                 style: FilledButton.styleFrom(
                   backgroundColor: _blue,
                   foregroundColor: Colors.white,
@@ -212,17 +268,18 @@ class _RecoveryEmailDialogState extends State<_RecoveryEmailDialog> {
                   textStyle: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 child: _busy
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
+                    ? Row(mainAxisSize: MainAxisSize.min, children: [
+                        const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white)),
+                        if (_codeSent) ...[const SizedBox(width: 10), Text(tr('Verifying…'))],
+                      ])
                     : Text(tr(_codeSent ? 'Verify email' : 'Send code')),
               ),
               const SizedBox(height: 6),
               Wrap(
                 alignment: WrapAlignment.center,
                 children: [
-                  if (_codeSent) ...[
-                    TextButton(onPressed: _busy ? null : _resend, child: Text(tr('Resend code'))),
+                  if (_codeSent)
                     TextButton(onPressed: _busy ? null : () => setState(() { _codeSent = false; _error = null; }), child: Text(tr('Change email'))),
-                  ],
                   TextButton(
                     onPressed: _busy ? null : _skip,
                     style: TextButton.styleFrom(foregroundColor: secondary),
@@ -324,6 +381,126 @@ class _SkipWarning extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Six code boxes drawn over ONE real text field, so the numeric keyboard, one-time-code autofill, paste, Backspace and screen readers all
+/// work as in a normal field. Tapping a filled box selects its digit (typing replaces it); an empty box puts the caret at the end.
+class _CodeBoxes extends StatefulWidget {
+  final TextEditingController controller;
+  final FocusNode focus;
+  final bool enabled, invalid;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onSubmitted;
+  const _CodeBoxes({required this.controller, required this.focus, required this.enabled, required this.invalid, required this.onChanged, required this.onSubmitted});
+
+  @override
+  State<_CodeBoxes> createState() => _CodeBoxesState();
+}
+
+class _CodeBoxesState extends State<_CodeBoxes> {
+  void _redraw() { if (mounted) setState(() {}); }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_redraw);
+    widget.focus.addListener(_redraw);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_redraw);
+    widget.focus.removeListener(_redraw);
+    super.dispose();
+  }
+
+  void _tapBox(Offset at, double width) {
+    if (!widget.enabled) return;
+    final text = widget.controller.text;
+    final cell = (at.dx / (width / _codeLength)).floor().clamp(0, _codeLength - 1);
+    widget.controller.selection = cell < text.length
+        ? TextSelection(baseOffset: cell, extentOffset: cell + 1)
+        : TextSelection.collapsed(offset: text.length);
+    widget.focus.requestFocus();
+    SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final text = widget.controller.text;
+    final selection = widget.controller.selection;
+    final focused = widget.focus.hasFocus && widget.enabled;
+    bool active(int index) {
+      if (!focused || !selection.isValid) return false;
+      return selection.isCollapsed ? index == selection.start.clamp(0, _codeLength - 1) : index >= selection.start && index < selection.end;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) => Stack(
+        children: [
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0,
+              alwaysIncludeSemantics: true,   // the invisible field is still what screen readers announce and type into
+              child: TextField(
+                controller: widget.controller,
+                focusNode: widget.focus,
+                enabled: widget.enabled,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(_codeLength)],
+                showCursor: false,
+                enableInteractiveSelection: false,
+                onChanged: widget.onChanged,
+                onSubmitted: (_) => widget.onSubmitted(),
+                decoration: const InputDecoration(border: InputBorder.none, counterText: '', labelText: 'Verification code'),
+              ),
+            ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) => _tapBox(details.localPosition, constraints.maxWidth),
+            child: ExcludeSemantics(
+              child: Row(
+                children: List.generate(_codeLength, (index) {
+                  final digit = index < text.length ? text[index] : '';
+                  final on = active(index);
+                  final border = widget.invalid
+                      ? const Color(0xFFDC2626)
+                      : on
+                          ? _blue
+                          : (dark ? const Color(0xFF3A3A3A) : const Color(0xFFCBD5E1));
+                  return Expanded(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 140),
+                      height: 54,
+                      margin: EdgeInsets.only(left: index == 0 ? 0 : 7),
+                      decoration: BoxDecoration(
+                        color: on && !selection.isCollapsed
+                            ? _blue.withValues(alpha: dark ? .22 : .08)
+                            : (dark ? const Color(0xFF2D2D2D) : Colors.white),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: border, width: on || widget.invalid ? 2 : 1.2),
+                        boxShadow: on ? [BoxShadow(color: _blue.withValues(alpha: .18), blurRadius: 8)] : null,
+                      ),
+                      alignment: Alignment.center,
+                      child: digit.isNotEmpty
+                          ? Text(digit, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: dark ? Colors.white : const Color(0xFF0F172A)))
+                          : on
+                              ? Container(width: 2, height: 22, color: _blue)
+                              : Container(width: 6, height: 6, decoration: BoxDecoration(color: dark ? const Color(0xFF4B5563) : const Color(0xFFCBD5E1), shape: BoxShape.circle)),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

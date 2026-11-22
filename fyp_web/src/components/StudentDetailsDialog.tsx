@@ -7,7 +7,8 @@ import { attendanceDateTime } from '../utils/attendanceTime';
 import { ModalLayer } from './ModalLayer';
 import { ShimmerProfileModal } from './Shimmer';
 
-type Photo = { state: 'loading' } | { state: 'ready'; url: string } | { state: 'none'; text: string } | { state: 'error'; text: string };
+// `for` ties a result to the student and attempt it was loaded for, so a late answer can never show another student's photo.
+type Photo = { for: string } & ({ state: 'loading'; progress: number | null } | { state: 'ready'; url: string } | { state: 'none'; text: string } | { state: 'error'; text: string });
 
 const NA = 'Not available';
 const yes = (value: boolean) => (value ? 'Yes' : 'No');
@@ -27,6 +28,38 @@ export function PasswordRow({ linked, onChange }: { linked: boolean; onChange?: 
     </dd></div>;
 }
 
+/**
+ * The registered face in a fixed 192px frame. While it downloads: a soft moving backdrop, the real percentage (or "Loading photo…" when the
+ * size is unknown) and a thin bar under it. Once the image has decoded it is revealed from a strong blur to sharp; reduced motion skips the
+ * animation. A missing photo and an error keep the same frame, so nothing around it moves.
+ */
+function FacePhoto({ photo, name, onBroken }: { photo: Photo; name: string; onBroken: () => void }) {
+  const [revealed, setRevealed] = useState('');   // the url that has decoded and may sharpen
+  const sharp = photo.state === 'ready' && revealed === photo.url;
+  const percent = photo.state === 'loading' && photo.progress != null ? Math.round(photo.progress * 100) : null;
+  return (
+    <div data-face-photo={photo.state === 'ready' ? (sharp ? 'sharp' : 'revealing') : photo.state} className="relative h-48 w-48 overflow-hidden rounded-2xl">
+      {photo.state === 'ready' && <img key={photo.url} src={photo.url} alt={`Registered face of ${name}`} onError={onBroken}
+        // One painted frame of the blurred image first; a fast decode in the same frame would otherwise skip the reveal transition.
+        onLoad={event => { const url = photo.url; void event.currentTarget.decode().catch(() => undefined).then(() => requestAnimationFrame(() => requestAnimationFrame(() => setRevealed(url)))); }}
+        className={`face-photo-image absolute inset-0 h-full w-full object-cover ${sharp ? 'is-sharp' : ''}`} />}
+      {(photo.state === 'loading' || (photo.state === 'ready' && !sharp && !revealed)) && (
+        <div role="status" aria-label={percent != null ? `Loading photo, ${percent}%` : 'Loading photo'} className={`face-photo-backdrop absolute inset-0 flex flex-col items-center justify-center gap-2 ${photo.state === 'ready' ? 'is-leaving' : ''}`}>
+          <span aria-hidden="true" className="text-lg font-bold tabular-nums text-slate-700">{percent != null ? `${percent}%` : photo.state === 'ready' ? '100%' : ''}</span>
+          {percent == null && photo.state === 'loading' && <span aria-hidden="true" className="-mt-1 text-xs font-medium text-slate-500">Loading photo…</span>}
+          <span aria-hidden="true" className="face-photo-track"><span className={percent == null && photo.state === 'loading' ? 'is-unknown' : ''} style={percent != null ? { width: `${percent}%` } : photo.state === 'ready' ? { width: '100%' } : undefined} /></span>
+        </div>
+      )}
+      {(photo.state === 'none' || photo.state === 'error') && (
+        <div role={photo.state === 'error' ? 'alert' : 'status'} className={`flex h-full w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 text-center text-xs ${photo.state === 'error' ? 'border-rose-300 bg-rose-50/60 text-rose-700' : 'border-slate-300 text-slate-500'}`}>
+          <UserRound aria-hidden="true" className="h-7 w-7 opacity-60" />
+          {photo.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="space-y-3"><h3 className="text-xs font-bold text-slate-700">{title}</h3>
     <dl className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 sm:grid-cols-2">{children}</dl></section>;
@@ -35,14 +68,17 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 export function StudentDetailsDialog({ student, onClose, onChangePassword }: { student: AdminStudent; onClose: () => void; onChangePassword?: () => void }) {
   const [details, setDetails] = useState<StudentDetails | null>(null);
   const [error, setError] = useState('');
-  const [photo, setPhoto] = useState<Photo>({ state: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  const current = `${student.id}:${attempt}`;
+  const [loadedPhoto, setPhoto] = useState<Photo>({ for: current, state: 'loading', progress: null });
+  const photo: Photo = loadedPhoto.for === current ? loadedPhoto : { for: current, state: 'loading', progress: null };
   const dialogRef = useRef<HTMLElement>(null);
-  const retry = useCallback(() => { setDetails(null); setError(''); setPhoto({ state: 'loading' }); setAttempt(n => n + 1); }, []);
+  const retry = useCallback(() => { setDetails(null); setError(''); setAttempt(n => n + 1); }, []);
 
   // One effect per student/attempt: a rapid A-to-B switch or close aborts A, so stale data and photos never render.
   useEffect(() => {
     const controller = new AbortController();
+    const key = `${student.id}:${attempt}`;
     let objectUrl = '';
     (async () => {
       try {
@@ -50,17 +86,18 @@ export function StudentDetailsDialog({ student, onClose, onChangePassword }: { s
         if (controller.signal.aborted) return;
         setDetails(loaded);
         const { is_registered, photo_available, registration_version } = loaded.face;
-        if (!is_registered || !registration_version) return setPhoto({ state: 'none', text: 'Not registered' });
-        if (!photo_available) return setPhoto({ state: 'none', text: 'Photo unavailable' });
+        if (!is_registered || !registration_version) return setPhoto({ for: key, state: 'none', text: 'Not registered' });
+        if (!photo_available) return setPhoto({ for: key, state: 'none', text: 'Photo unavailable' });
         try {
-          const blob = await apiService.adminGetFacePhoto(student.id, registration_version, controller.signal);
+          const blob = await apiService.adminGetFacePhoto(student.id, registration_version, controller.signal,
+            progress => { if (!controller.signal.aborted) setPhoto({ for: key, state: 'loading', progress }); });
           if (controller.signal.aborted) return;
           objectUrl = URL.createObjectURL(blob);
-          setPhoto({ state: 'ready', url: objectUrl });
+          setPhoto({ for: key, state: 'ready', url: objectUrl });
         } catch (failure) {
           if (controller.signal.aborted) return;
           const status = (failure as { response?: { status?: number } })?.response?.status;
-          setPhoto(status === 404 ? { state: 'none', text: 'Photo unavailable' } : { state: 'error', text: apiErrorMessage(failure, 'The photo could not be loaded.') });
+          setPhoto(status === 404 ? { for: key, state: 'none', text: 'Photo unavailable' } : { for: key, state: 'error', text: apiErrorMessage(failure, 'The photo could not be loaded.') });
         }
       } catch (failure) {
         if (!controller.signal.aborted) setError(apiErrorMessage(failure, 'Student details could not be loaded.'));
@@ -103,10 +140,7 @@ export function StudentDetailsDialog({ student, onClose, onChangePassword }: { s
         <p>{error}</p><button type="button" onClick={retry} className="uipro-button uipro-button-secondary"><RefreshCw className="h-4 w-4 mr-2" />Retry</button></div>
       : !details ? <div role="status" aria-label="Loading student details"><ShimmerProfileModal /></div> : <>
         <section aria-label="Registered face" className="flex flex-col items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-          {photo.state === 'ready'
-            ? <img src={photo.url} alt={`Registered face of ${details.identity.name}`} onError={() => setPhoto({ state: 'error', text: 'The photo could not be displayed.' })} className="h-48 w-48 rounded-2xl object-cover" />
-            : <div className="flex h-48 w-48 items-center justify-center rounded-2xl border border-dashed border-slate-300 text-center text-xs text-slate-500" role={photo.state === 'error' ? 'alert' : 'status'}>
-                {photo.state === 'loading' ? 'Loading photo…' : photo.text}</div>}
+          <FacePhoto photo={photo} name={details.identity.name} onBroken={() => setPhoto({ for: current, state: 'error', text: 'The photo could not be displayed.' })} />
           {photo.state === 'error' && <button type="button" onClick={retry} className="uipro-button uipro-button-secondary"><RefreshCw className="h-4 w-4 mr-2" />Retry</button>}
         </section>
         <Group title="Identity">

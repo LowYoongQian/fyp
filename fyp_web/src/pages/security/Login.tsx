@@ -6,6 +6,8 @@ import { apiService } from '../../services/api';
 import { apiErrorMessage } from '../../utils/apiError';
 import { personalEmailError } from '../../utils/personalEmail';
 import Swal from 'sweetalert2';
+import { createRoot, type Root } from 'react-dom/client';
+import { RecoveryCodeForm } from '../../components/RecoveryCodeForm';
 import { recoveryReminderPreference, recoveryReminderStoredLocally, saveRecoveryReminder, syncRecoveryReminder } from '../../utils/recoveryReminder';
 import sasLogoLocal from '../../assets/emblem.webp';
 import { Aurora, BlackHole, ConstellationFigure, CrescentMoon, FullMoon, BirdFlock, PlanetBody, StarField, SunlitCloud, type PlacedConstellation } from './LoginSky';
@@ -856,95 +858,30 @@ export const Login: React.FC = () => {
       title: '!text-slate-900 dark:!text-slate-100 !font-display !font-bold !text-xl',
       htmlContainer: 'password-reset-content !text-slate-600 dark:!text-slate-300 !text-xs',
     };
-    // Step 2: one large code box (digits only, paste-friendly, checks itself at the 6th digit). A wrong or expired code keeps the dialog open
-    // with the reason. "Send a new code" waits out the server's one-minute pause on screen; "Change it" goes back to step 1 with the address.
-    let resendTimer = 0;
-    const step = await Swal.fire({
-      title: 'Check your email',
-      progressSteps: ['1', '2'],
-      currentProgressStep: 1,
-      html: `<div class="recovery-code-sent">
-          <span class="recovery-code-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3.5 7 8.5 6 8.5-6"/></svg></span>
-          <p class="recovery-email-intro">We sent a 6-digit code to <strong class="recovery-code-address">${shown}</strong>. It expires in 10 minutes.</p>
-          <button type="button" id="recovery-change" class="recovery-link">Wrong address? Change it</button>
-        </div>
-        <label for="recovery-code-input" class="password-reset-label recovery-code-label">Verification code</label>
-        <input id="recovery-code-input" class="recovery-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-describedby="recovery-code-help">
-        <p id="recovery-code-help" class="recovery-code-help">Didn't get it? Check Spam or Promotions, or <button type="button" id="recovery-resend" class="recovery-link">send a new code</button>.</p>
-        <p id="recovery-code-status" class="recovery-reminder-status recovery-code-status" role="status" aria-live="polite"></p>`,
-      showCancelButton: true,
-      confirmButtonText: 'Verify email',
-      cancelButtonText: 'Later',
-      reverseButtons: true,
-      showLoaderOnConfirm: true,
-      allowOutsideClick: false,
-      allowEscapeKey: false,
-      buttonsStyling: false,
-      focusConfirm: false,
-      customClass: {
-        ...dialogClass,
-        actions: 'password-reset-actions recovery-email-actions',
-        confirmButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-primary',
-        cancelButton: '!rounded-xl !px-5 !py-2.5 !text-xs !font-semibold uipro-button uipro-button-secondary',
-      },
-      didOpen: () => {
-        const input = document.getElementById('recovery-code-input') as HTMLInputElement;
-        const resend = document.getElementById('recovery-resend') as HTMLButtonElement;
-        const status = document.getElementById('recovery-code-status')!;
-        let waitUntil = Date.now() + 60_000;
-        let sending = false;
-        const tick = () => {
-          const left = Math.ceil((waitUntil - Date.now()) / 1000);
-          resend.disabled = sending || left > 0;
-          resend.textContent = sending ? 'sending…' : left > 0 ? `send a new code in ${left}s` : 'send a new code';
-        };
-        tick();
-        resendTimer = window.setInterval(tick, 1000);
-        input.addEventListener('input', () => {
-          const digits = input.value.replace(/\D/g, '').slice(0, 6);
-          if (input.value !== digits) input.value = digits;
-          input.classList.remove('is-invalid');
-          Swal.resetValidationMessage();
-          if (digits.length === 6) Swal.clickConfirm();
-        });
-        resend.addEventListener('click', async () => {
-          sending = true; tick();
-          try {
-            await apiService.requestRecoveryEmail(sentTo);
-            waitUntil = Date.now() + 60_000;
-            status.textContent = `A new code is on its way to ${sentTo}. The previous code no longer works.`;
-            input.value = '';
-            input.focus();
-            Swal.resetValidationMessage();
-          } catch (error) {
-            Swal.showValidationMessage(apiErrorMessage(error, 'The code could not be sent. Please try again.'));
-          }
-          sending = false; tick();
-        });
-        document.getElementById('recovery-change')!.addEventListener('click', () => Swal.close({ isConfirmed: false, isDenied: true, isDismissed: false }));
-        input.focus();
-      },
-      willClose: () => window.clearInterval(resendTimer),
-      preConfirm: async () => {
-        const input = document.getElementById('recovery-code-input') as HTMLInputElement;
-        const code = input.value.replace(/\D/g, '');
-        if (code.length !== 6) {
-          input.classList.add('is-invalid'); input.focus();
-          Swal.showValidationMessage('Enter the 6-digit code from the email.');
-          return false;
-        }
-        try {
-          await apiService.verifyRecoveryEmail(code);
-          return true;
-        } catch (error) {
-          input.classList.add('is-invalid'); input.select();
-          Swal.showValidationMessage(apiErrorMessage(error, 'That code did not work. Please try again.'));
-          return false;
-        }
-      },
+    // Step 2: the shared six-box code form, mounted inside the dialog. It verifies itself at the sixth digit, waits out the server's resend
+    // pause on screen, and keeps a wrong or expired code editable; "Change email" goes back to step 1 with the address kept.
+    const outcome = await new Promise<'verified' | 'change' | 'later'>(resolve => {
+      let root: Root | null = null;
+      const finish = (result: 'verified' | 'change' | 'later') => { resolve(result); Swal.close(); };
+      void Swal.fire({
+        progressSteps: ['1', '2'],
+        currentProgressStep: 1,
+        html: '<div id="recovery-code-root"></div>',
+        showConfirmButton: false,
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        buttonsStyling: false,
+        customClass: { ...dialogClass, popup: `${dialogClass.popup} recovery-code-popup` },
+        didOpen: () => {
+          root = createRoot(document.getElementById('recovery-code-root')!);
+          root.render(<RecoveryCodeForm address={sentTo} onVerified={() => finish('verified')} onChangeEmail={() => finish('change')} onLater={() => finish('later')} />);
+        },
+        // Unmounted after the dialog's own close, never inside a React event of the form it removes.
+        didDestroy: () => { const mounted = root; root = null; setTimeout(() => mounted?.unmount()); },
+      });
     });
-    if (step.isDenied) return setupRecoveryEmail(userId, sentTo);
-    if (!step.isConfirmed) return;
+    if (outcome === 'change') return setupRecoveryEmail(userId, sentTo);
+    if (outcome !== 'verified') return;
     // The dashboard and its next-step card are already open behind this dialog; tell them the task is done.
     window.dispatchEvent(new CustomEvent('recovery-email-verified'));
     await Swal.fire({

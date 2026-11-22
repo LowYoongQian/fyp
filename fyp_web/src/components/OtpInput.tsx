@@ -21,7 +21,7 @@ export function OtpInput({ value, onChange, label, disabled = false, invalid = f
   const active = (index: number) => focused && (start === end ? index === Math.min(start, OTP_LENGTH - 1) : index >= start && index < end);
 
   return (
-    <div className="relative" data-otp>
+    <div className="relative" data-otp data-otp-invalid={invalid || undefined}>
       <input
         ref={input}
         type="text"
@@ -72,6 +72,7 @@ export function OtpInput({ value, onChange, label, disabled = false, invalid = f
             >
               {digit}
               {on && start === end && !digit && <span className="otp-caret" />}
+              {!on && !digit && <span className="otp-dot" />}
             </div>
           );
         })}

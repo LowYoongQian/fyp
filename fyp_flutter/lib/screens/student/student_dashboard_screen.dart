@@ -2243,6 +2243,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                           extraDetails: {
                                             'challenge_token': challengeToken,
                                             'retry': openScan,
+                                            if (identical(session, matchingOpenSession)) 'timeSlot': '$sessionStartLabel - $sessionEndLabel',
                                             'room': session['room'],
                                             'classGroup': session['classGroup'],
                                             'lecturerName': session['createdByName'] ?? session['lecturerName'],

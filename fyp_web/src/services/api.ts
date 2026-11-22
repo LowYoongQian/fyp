@@ -645,6 +645,9 @@ export const apiService = {
     (await api.post('/auth/recovery-email/request', { recovery_email: recoveryEmail })).data,
   verifyRecoveryEmail: async (code: string) =>
     (await api.post('/auth/recovery-email/verify', { code })).data,
+  /** Unlinks the signed-in student's own recovery email (and any waiting code or unused reset link). Safe to repeat. */
+  removeRecoveryEmail: async () =>
+    (await api.delete('/auth/recovery-email')).data as { message: string; recovery_email: null; recovery_email_verified: false },
 
   // Real Backend Session APIs
   openSession: async (courseId: number | string, classGroup: string = 'All') => {
@@ -895,9 +898,11 @@ export const apiService = {
   adminGetStudentDetails: async (studentId: number | string, signal?: AbortSignal): Promise<StudentDetails> => {
     return (await api.get(`/admin/students/${studentId}/details`, { signal, timeout: 15000 })).data;
   },
-  adminGetFacePhoto: async (studentId: number | string, registrationVersion: string, signal?: AbortSignal): Promise<Blob> => {
+  /** onProgress: the downloaded share (0–1), or null while the total size is unknown. */
+  adminGetFacePhoto: async (studentId: number | string, registrationVersion: string, signal?: AbortSignal, onProgress?: (share: number | null) => void): Promise<Blob> => {
     try {
-      return (await api.get(`/admin/students/${studentId}/face/photo`, { params: { registration_version: registrationVersion }, responseType: 'blob', signal, timeout: 15000 })).data;
+      return (await api.get(`/admin/students/${studentId}/face/photo`, { params: { registration_version: registrationVersion }, responseType: 'blob', signal, timeout: 15000,
+        onDownloadProgress: onProgress && (event => onProgress(event.total ? Math.min(1, event.loaded / event.total) : null)) })).data;
     } catch (error) {
       // A failed blob request carries its JSON error body as a Blob; decode it so the dialog can show the server's own message.
       const response = (error as { response?: { data?: unknown } })?.response;

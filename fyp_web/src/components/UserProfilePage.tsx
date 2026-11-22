@@ -3,8 +3,9 @@ import { ModalLayer } from './ModalLayer';
 import React, { useState, useEffect, useRef } from 'react';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { swalSuccess } from '../utils/swal';
+import { swalConfirm, swalError, swalSuccess } from '../utils/swal';
 import { apiErrorMessage } from '../utils/apiError';
+import { RecoveryCodeForm } from './RecoveryCodeForm';
 import {
   User, Mail, ShieldCheck, Lock, Camera, Clock,
   CheckCircle, Loader2, X, KeyRound, Shield, AlertTriangle, Pencil, Save,
@@ -52,12 +53,12 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
   const canUseRecoveryEmail = profile?.role === 'student';   // the server links and resets with a recovery email for students only
   const [activeTab, setActiveTab] = useState<'profile' | 'security'>(initialTab);
   const [recoveryEmail, setRecoveryEmail] = useState('');
-  const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryStep, setRecoveryStep] = useState<'email' | 'code'>('email');
   const [recoveryLoading, setRecoveryLoading] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   // Replacing a verified address: the current one keeps receiving resets until the new one is verified.
   const [changingRecovery, setChangingRecovery] = useState(false);
+  const [removingRecovery, setRemovingRecovery] = useState(false);
 
   // Change Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -186,7 +187,6 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
       const res = profile;
       setRecoveryEmail(res.recovery_email_pending || (res.recovery_email_verified ? '' : res.recovery_email) || '');
       setRecoveryStep('email');
-      setRecoveryCode('');
       setRecoveryError(null);
       setAvatarUrl(res.avatar_url || '');
       setIdentityForm({ name: res.name || '', email: res.email || '', code: res.code || '' });
@@ -216,46 +216,38 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
     }
   };
 
-  const resendRecoveryCode = async () => {
-    if (recoveryLoading) return;
-    setRecoveryError(null);
-    setRecoveryLoading(true);
+  // Removal is shown only after the server confirms it; if it fails, the address stays exactly as it was.
+  const removeRecoveryEmail = async () => {
+    const address = profile?.recovery_email;
+    if (!address || removingRecovery) return;
+    const confirmed = await swalConfirm('Remove recovery email?',
+      `Password reset links and account notices sent to ${address} will stop until you verify a new recovery email.`, 'Remove email', true);
+    if (!confirmed) return;
+    setRemovingRecovery(true);
     try {
-      await apiService.requestRecoveryEmail(recoveryEmail.trim());
-      setRecoveryCode('');
-      void swalSuccess('New code sent', `Check ${recoveryEmail.trim()} for the new 6-digit code.`);
-    } catch (err) {
-      setRecoveryError(apiErrorMessage(err, 'Could not send code.'));
+      await apiService.removeRecoveryEmail();
+      setProfile((current: any) => ({ ...current, recovery_email: null, recovery_email_verified: false, recovery_email_pending: null }));
+      setRecoveryEmail(''); setRecoveryStep('email'); setRecoveryError(null); setChangingRecovery(false);
+      window.dispatchEvent(new CustomEvent('recovery-email-removed'));
+      await swalSuccess('Recovery email removed', 'Add a new recovery email to get password reset links again.');
+    } catch (error) {
+      await swalError('Recovery email not removed', apiErrorMessage(error, 'Please try again.'));
     } finally {
-      setRecoveryLoading(false);
+      setRemovingRecovery(false);
     }
   };
 
-  const confirmRecoveryCode = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!canUseRecoveryEmail) return;
-    setRecoveryError(null);
-    if (!/^\d{6}$/.test(recoveryCode.trim())) {
-      setRecoveryError('Enter the 6-digit code.');
-      return;
-    }
-    setRecoveryLoading(true);
-    try {
-      await apiService.verifyRecoveryEmail(recoveryCode.trim());
-      setProfile((current: any) => ({
-        ...current,
-        recovery_email: recoveryEmail.trim().toLowerCase(),
-        recovery_email_verified: true,
-        recovery_email_pending: null,
-      }));
-      setChangingRecovery(false);
-      window.dispatchEvent(new CustomEvent('recovery-email-verified'));
-      await swalSuccess('Email verified', 'Recovery email is ready.');
-    } catch (err: any) {
-      setRecoveryError(err.response?.data?.detail || 'Invalid code.');
-    } finally {
-      setRecoveryLoading(false);
-    }
+  // The shared code form has verified the address with the server: record it and say so.
+  const recoveryVerified = async () => {
+    setProfile((current: any) => ({
+      ...current,
+      recovery_email: recoveryEmail.trim().toLowerCase(),
+      recovery_email_verified: true,
+      recovery_email_pending: null,
+    }));
+    setChangingRecovery(false);
+    window.dispatchEvent(new CustomEvent('recovery-email-verified'));
+    await swalSuccess('Email verified', 'Recovery email is ready.');
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -392,8 +384,9 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Back to dashboard"
-            style={{ color: THEME_TOKENS.textSecondary }}
-            className="h-11 w-11 flex items-center justify-center transition-colors cursor-pointer rounded-xl hover:bg-[#252525] focus-visible:ring-2 focus-visible:ring-[#2563eb]"
+            title="Back to dashboard"
+            // The same theme-aware hover as the header's icon buttons (light slate, dark grey), never a fixed near-black.
+            className="h-11 w-11 flex items-center justify-center transition-colors cursor-pointer rounded-xl text-[var(--theme-text-secondary)] hover:bg-[var(--theme-surface-elevated)] hover:text-[var(--theme-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]"
           >
             <ArrowLeft className="h-5 w-5" />
           </button>
@@ -725,63 +718,58 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({
                   <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-700">
                     <CheckCircle className="h-4 w-4 shrink-0" />
                     <span className="min-w-0 flex-1 truncate font-bold">{profile.recovery_email}</span>
-                    {!changingRecovery && <button type="button" onClick={() => { setChangingRecovery(true); setRecoveryStep('email'); setRecoveryEmail(''); setRecoveryCode(''); setRecoveryError(null); }}
-                      className="shrink-0 text-[10px] font-bold text-emerald-800 underline underline-offset-2">Change email</button>}
+                    {!changingRecovery && <>
+                      <button type="button" disabled={removingRecovery} onClick={() => { setChangingRecovery(true); setRecoveryStep('email'); setRecoveryEmail(''); setRecoveryError(null); }}
+                        className="shrink-0 text-[10px] font-bold text-emerald-800 underline underline-offset-2 disabled:opacity-50 dark:text-emerald-200">Change email</button>
+                      <button type="button" onClick={removeRecoveryEmail} disabled={removingRecovery} title="Remove recovery email" aria-label="Remove recovery email"
+                        className="-my-1 shrink-0 rounded-lg p-1.5 text-emerald-800 transition-colors hover:bg-rose-100 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 disabled:opacity-60 dark:text-emerald-200 dark:hover:bg-rose-500/20 dark:hover:text-rose-200">
+                        {removingRecovery ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Trash2 aria-hidden="true" className="h-4 w-4" />}
+                      </button>
+                    </>}
                   </div>
                 )}
                 {(!profile?.recovery_email_verified || changingRecovery) && (
-                  <form onSubmit={recoveryStep === 'email' ? requestRecoveryCode : confirmRecoveryCode} className="mt-4 space-y-3">
+                  <div className="mt-4 space-y-3">
                     {changingRecovery && <p role="note" className="text-[10px] leading-relaxed text-slate-500">Your current recovery email stays active until the new one is verified.</p>}
                     <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
                       <span className="rounded-full bg-brand-blue px-2 py-1 text-white">1</span>
-                      <span>Add email</span>
+                      <span>{profile?.recovery_email_verified ? 'New email' : 'Add recovery email'}</span>
                       <span className="h-px flex-1 bg-slate-200" />
                       <span className={`rounded-full px-2 py-1 ${recoveryStep === 'code' ? 'bg-brand-blue text-white' : 'bg-slate-200 text-slate-500'}`}>2</span>
                       <span>Verify</span>
                     </div>
                     {recoveryStep === 'email' ? (
-                      <div>
-                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Personal email</label>
-                        <TextInput
-                          type="email"
-                          value={recoveryEmail}
-                          onChange={event => setRecoveryEmail(event.target.value)}
-                          placeholder="yourname@example.com"
-                          autoComplete="email"
-                          className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                        />
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Email Code</label>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          maxLength={6}
-                          value={recoveryCode}
-                          onChange={event => setRecoveryCode(event.target.value.replace(/\D/g, ''))}
-                          placeholder="6-digit code"
-                          className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-center font-mono text-base font-bold tracking-[0.35em] text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-                        />
-                        <p className="mt-2 text-[10px] text-slate-500">We sent a code to <strong className="break-all">{recoveryEmail.trim()}</strong>. It expires in 10 minutes.</p>
-                        <div className="mt-2 flex flex-wrap gap-4">
-                          <button type="button" onClick={() => { setRecoveryStep('email'); setRecoveryError(null); }} className="text-[10px] font-bold text-brand-blue">Change email</button>
-                          <button type="button" onClick={resendRecoveryCode} disabled={recoveryLoading} className="text-[10px] font-bold text-brand-blue disabled:opacity-50">Send a new code</button>
+                      <form onSubmit={requestRecoveryCode} className="space-y-3">
+                        <div>
+                          <label className="mb-1 block text-[10px] font-bold uppercase text-slate-500">Personal email</label>
+                          <TextInput
+                            type="email"
+                            value={recoveryEmail}
+                            onChange={event => setRecoveryEmail(event.target.value)}
+                            placeholder="yourname@example.com"
+                            autoComplete="email"
+                            className="h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 outline-none transition focus:border-brand-blue focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                          />
                         </div>
+                        {recoveryError && <p className="text-[10px] font-bold text-red-500">{recoveryError}</p>}
+                        <button
+                          type="submit"
+                          disabled={recoveryLoading}
+                          className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-blue text-xs font-bold text-white shadow-sm disabled:opacity-50"
+                        >
+                          {recoveryLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                          Send Code
+                        </button>
+                      </form>
+                    ) : (
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900/60 sm:p-5">
+                        <RecoveryCodeForm address={recoveryEmail.trim()} onVerified={recoveryVerified}
+                          onChangeEmail={() => { setRecoveryStep('email'); setRecoveryError(null); }} />
                       </div>
                     )}
-                    {recoveryError && <p className="text-[10px] font-bold text-red-500">{recoveryError}</p>}
-                    <button
-                      type="submit"
-                      disabled={recoveryLoading}
-                      className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-blue text-xs font-bold text-white shadow-sm disabled:opacity-50"
-                    >
-                      {recoveryLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-                      {recoveryStep === 'email' ? 'Send Code' : 'Verify Email'}
-                    </button>
                     {changingRecovery && <button type="button" disabled={recoveryLoading} onClick={() => { setChangingRecovery(false); setRecoveryStep('email'); setRecoveryError(null); }}
                       className="w-full text-[10px] font-bold text-slate-500 disabled:opacity-50">Keep current email</button>}
-                  </form>
+                  </div>
                 )}
               </section>}
 

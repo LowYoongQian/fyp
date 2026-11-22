@@ -52,8 +52,9 @@ export function StudentNextAction({ userId }: { userId: string }) {
   useEffect(() => {
     const again = () => void load();
     window.addEventListener('recovery-email-verified', again);
+    window.addEventListener('recovery-email-removed', again);
     window.addEventListener('focus', again);
-    return () => { window.removeEventListener('recovery-email-verified', again); window.removeEventListener('focus', again); };
+    return () => { window.removeEventListener('recovery-email-verified', again); window.removeEventListener('recovery-email-removed', again); window.removeEventListener('focus', again); };
   }, [load]);
   useLiveRefresh(load, ['sessions', 'attendance', 'account', 'timetable'], userId);
 

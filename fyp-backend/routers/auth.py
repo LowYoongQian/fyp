@@ -344,6 +344,25 @@ def request_recovery_email(body: RecoveryEmailRequest, user: User = Depends(get_
     return {"message": "Code sent"}
 
 
+@router.delete("/recovery-email")
+def remove_recovery_email(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Unlink the signed-in student's own recovery email: the address, its verified status, a replacement code still waiting and any
+    unused password-reset link all go. The row lock makes it take turns with a code request, a code check or a reset request for the
+    same account, so one already running either finishes first (and is then undone here) or finds nothing left to use. Repeating it
+    is harmless."""
+    if user.role != "student":
+        raise HTTPException(status_code=403, detail="Student account required")
+    account = _locked_account(db, user)
+    linked = bool(account.recovery_email or account.recovery_email_pending or account.recovery_code_hash or account.password_reset_hash)
+    account.recovery_email = None
+    account.recovery_email_verified = False
+    account.recovery_email_pending = account.recovery_code_hash = account.recovery_code_expires_at = None
+    account.password_reset_hash = account.password_reset_expires_at = None
+    db.commit()
+    return {"message": "Recovery email removed" if linked else "No recovery email was linked",
+            "recovery_email": None, "recovery_email_verified": False}
+
+
 @router.post("/recovery-email/verify")
 def verify_recovery_email(body: RecoveryEmailVerify, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     account = _locked_account(db, user)
@@ -388,7 +407,8 @@ def forgot_password(body: ForgotPasswordRequest, background: BackgroundTasks, db
     """A reset link goes to the account's VERIFIED personal email. The answer is the same whatever happens (unknown address, staff or
     personal address, no verified link, a link sent a moment ago, a provider failure), so it never shows whether an account exists."""
     school_email = personal_email.normalized(body.school_email)
-    user = db.query(User).filter(func.lower(User.email) == school_email).first() if personal_email.is_student_identity(school_email) else None
+    # Locked, so a recovery email removed meanwhile is either read as gone or has this new link cleared by the removal right after.
+    user = db.query(User).filter(func.lower(User.email) == school_email).with_for_update().first() if personal_email.is_student_identity(school_email) else None
     address = personal_email.deliverable_address(user) if user and _approved_student(db, user) else None
     issued = user.password_reset_expires_at - timedelta(minutes=RESET_LINK_MINUTES) if user and address and user.password_reset_expires_at else None
     if address and not (issued and (utcnow() - issued).total_seconds() < RESET_RESEND_SECONDS):

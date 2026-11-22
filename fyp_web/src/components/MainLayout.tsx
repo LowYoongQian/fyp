@@ -172,7 +172,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           { id: 'student_dashboard', label: t('common.dashboard', 'en'), icon: LayoutDashboard },
           { id: 'student_timetable', label: t('common.timetable', 'en'), icon: Calendar },
           { id: 'student_mc', label: 'Medical Leave', icon: FileText },
-          { id: 'student_contact', label: t('student.contactAdmin', 'en'), icon: MessageSquare }
+          { id: 'student_contact', label: 'Contact Admin', icon: MessageSquare }
         ]
       : [
           { id: 'dashboard', label: t('common.dashboard', 'en'), icon: LayoutDashboard },
