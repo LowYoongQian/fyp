@@ -1,5 +1,9 @@
 # Changelog
 
+## Saved attendance bar over the dashboard scene — 2026-11-23 18:30
+- In the mobile app, the "Saved attendance attempts" bar no longer sits on a plain grey band: the dashboard's sky and hills now continue behind it, and the bar is a solid card with a soft shadow, lined up with the cards above. Tapping it and Retry work as before. ChatGPT review pending.
+
+
 ## Face photo percentage and full-size view — 2026-11-23 17:10
 - In Student Details, the registered face photo now always shows a moving percentage above its loading bar, including while the server is still fetching the photo, and reaches 100% only when the photo has arrived.
 - A new expand button at the top right of the photo (or a click on the photo) opens it full size. Close it with the X, Escape or a click outside the photo; the Student Details window stays open. ChatGPT review pending.

@@ -2253,15 +2253,25 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         children: [
           const AuroraBackground(),
 
-          AnimatedSwitcher(
-            key: ValueKey(jsonEncode([_studentGeneration, staffAuthToken])),
-            duration: const Duration(milliseconds: 300),
-            child: KeyedSubtree(
-              key: ValueKey(
-                'tab_${selectedTab}_logged_${isStudentLoggedIn || isStaffLoggedIn}',
+          // The saved-attendance bar sits in the body under the screen, so the scene, not a plain band, is behind it.
+          Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                child: AnimatedSwitcher(
+                  key: ValueKey(jsonEncode([_studentGeneration, staffAuthToken])),
+                  duration: const Duration(milliseconds: 300),
+                  child: KeyedSubtree(
+                    key: ValueKey(
+                      'tab_${selectedTab}_logged_${isStudentLoggedIn || isStaffLoggedIn}',
+                    ),
+                    child: bodyContent,
+                  ),
+                ),
               ),
-              child: bodyContent,
-            ),
+              // Only while an attempt still needs the phone or the student; once all are recorded the bar goes away.
+              if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.any(offlineWaiting)) _savedAttendanceBar(),
+            ],
           ),
 
           // Loading Overlay (Shimmer Skeleton Screen)
@@ -2299,83 +2309,84 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             ),
         ],
       ),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Only while an attempt still needs the phone or the student; once all are recorded the bar goes away.
-          if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.any(offlineWaiting))
-            SafeArea(
-              top: false,
-              child: Builder(builder: (context) {
-                final dark = Theme.of(context).brightness == Brightness.dark;
-                final waiting = _offlineRows.where(offlineWaiting).toList();
-                // The most urgent state colours the bar: something to fix, then still waiting, then with the lecturer.
-                final statuses = {for (final row in waiting) '${row['status'] ?? 'pending'}'};
-                final look = offlineStatusLook(['failed', 'rejected', 'cancelled', 'pending', 'needs_review']
-                    .firstWhere(statuses.contains, orElse: () => statuses.first));
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  child: Material(
-                    color: look.color.withValues(alpha: dark ? .18 : .08),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      side: BorderSide(color: look.color.withValues(alpha: .35)),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      // A full page with its own Back header, so the dashboard's header and tabs are not left showing behind it.
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                        builder: (ctx) => OfflineQueueSheet(
-                          rows: _offlineRows,
-                          onRefresh: () async {
-                            await _syncOffline();
-                            return _offlineRows;
-                          },
-                        ),
-                      )),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                        child: Row(children: [
-                          Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(color: look.color.withValues(alpha: .16), shape: BoxShape.circle),
-                            child: _offlineBusy
-                                ? Padding(
-                                    padding: const EdgeInsets.all(9),
-                                    child: CircularProgressIndicator(strokeWidth: 2.2, color: look.color),
-                                  )
-                                : Icon(look.icon, size: 19, color: look.color),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text(
-                                tr('Saved attendance attempts ({_offlineRowsCount})', {
-                                  '_offlineRowsCount': waiting.length,
-                                }),
-                                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: dark ? Colors.white : const Color(0xFF0F172A)),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                tr(waiting.map(_offlineLabel).toSet().join(' · ')),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: look.color),
-                              ),
-                            ]),
-                          ),
-                          Icon(Icons.chevron_right_rounded, color: look.color),
-                        ]),
-                      ),
-                    ),
-                  ),
-                );
-              }),
+      bottomNavigationBar: _buildBottomNavigationBar(),
+    );
+  }
+
+  Widget _savedAttendanceBar() {
+    return SafeArea(
+      top: false,
+      child: Builder(builder: (context) {
+        final dark = Theme.of(context).brightness == Brightness.dark;
+        final waiting = _offlineRows.where(offlineWaiting).toList();
+        // The most urgent state colours the bar: something to fix, then still waiting, then with the lecturer.
+        final statuses = {for (final row in waiting) '${row['status'] ?? 'pending'}'};
+        final look = offlineStatusLook(['failed', 'rejected', 'cancelled', 'pending', 'needs_review']
+            .firstWhere(statuses.contains, orElse: () => statuses.first));
+        return Padding(
+          // Same side margin as the dashboard cards above it.
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Material(
+            // Solid, so the scene behind never shows through the text.
+            color: Color.alphaBlend(look.color.withValues(alpha: dark ? .18 : .08), dark ? const Color(0xFF222222) : Colors.white),
+            elevation: 6,
+            shadowColor: Colors.black.withValues(alpha: dark ? .5 : .18),
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: look.color.withValues(alpha: .35)),
             ),
-          _buildBottomNavigationBar(),
-        ],
-      ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              // A full page with its own Back header, so the dashboard's header and tabs are not left showing behind it.
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (ctx) => OfflineQueueSheet(
+                  rows: _offlineRows,
+                  onRefresh: () async {
+                    await _syncOffline();
+                    return _offlineRows;
+                  },
+                ),
+              )),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                child: Row(children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(color: look.color.withValues(alpha: .16), shape: BoxShape.circle),
+                    child: _offlineBusy
+                        ? Padding(
+                            padding: const EdgeInsets.all(9),
+                            child: CircularProgressIndicator(strokeWidth: 2.2, color: look.color),
+                          )
+                        : Icon(look.icon, size: 19, color: look.color),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                        tr('Saved attendance attempts ({_offlineRowsCount})', {
+                          '_offlineRowsCount': waiting.length,
+                        }),
+                        style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: dark ? Colors.white : const Color(0xFF0F172A)),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        tr(waiting.map(_offlineLabel).toSet().join(' · ')),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: look.color),
+                      ),
+                    ]),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: look.color),
+                ]),
+              ),
+            ),
+          ),
+        );
+      }),
     );
   }
 
