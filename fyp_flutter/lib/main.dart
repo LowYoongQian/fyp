@@ -675,11 +675,17 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _syncOffline() async {
-    if (_offlineBusy || !isStudentLoggedIn || _studentUserId.isEmpty || kIsWeb) {
+  Future<void>? _offlineSync;
+
+  /// One sync at a time. A second caller (Retry while the 20 s timer is already syncing) waits for the running sync and then
+  /// sees its result, instead of returning at once as if nothing happened.
+  Future<void> _syncOffline() => _offlineSync ??= _sendOffline().whenComplete(() => _offlineSync = null);
+
+  Future<void> _sendOffline() async {
+    if (!mounted || !isStudentLoggedIn || _studentUserId.isEmpty || kIsWeb) {
       return;
     }
-    _offlineBusy = true;
+    setState(() => _offlineBusy = true);
     final owner = _studentUserId,
         token = studentAuthToken,
         server = ApiConfig.getEffectiveUrl();
@@ -723,7 +729,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       debugPrint('Offline check-in processing deferred: ${e.runtimeType}');
     } finally {
       client.close();
-      _offlineBusy = false;
+      if (mounted) setState(() => _offlineBusy = false); // with setState, so the bar's spinner never stays on
     }
     if (recorded && current() && !isSyncing) unawaited(syncData(context));
   }
@@ -2296,13 +2302,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.isNotEmpty)
+          // Only while an attempt still needs the phone or the student; once all are recorded the bar goes away.
+          if (isStudentLoggedIn && selectedTab == 1 && _offlineRows.any(offlineWaiting))
             SafeArea(
               top: false,
               child: Builder(builder: (context) {
                 final dark = Theme.of(context).brightness == Brightness.dark;
+                final waiting = _offlineRows.where(offlineWaiting).toList();
                 // The most urgent state colours the bar: something to fix, then still waiting, then with the lecturer.
-                final statuses = {for (final row in _offlineRows) '${row['status'] ?? 'pending'}'};
+                final statuses = {for (final row in waiting) '${row['status'] ?? 'pending'}'};
                 final look = offlineStatusLook(['failed', 'rejected', 'cancelled', 'pending', 'needs_review']
                     .firstWhere(statuses.contains, orElse: () => statuses.first));
                 return Padding(
@@ -2344,13 +2352,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               Text(
                                 tr('Saved attendance attempts ({_offlineRowsCount})', {
-                                  '_offlineRowsCount': _offlineRows.length,
+                                  '_offlineRowsCount': waiting.length,
                                 }),
                                 style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: dark ? Colors.white : const Color(0xFF0F172A)),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                tr(_offlineRows.map(_offlineLabel).toSet().join(' · ')),
+                                tr(waiting.map(_offlineLabel).toSet().join(' · ')),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: look.color),

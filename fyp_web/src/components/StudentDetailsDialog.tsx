@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, UserRound, X } from 'lucide-react';
+import { Maximize2, RefreshCw, UserRound, X } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { AdminStudent, StudentDetails } from '../services/api';
 import { apiErrorMessage } from '../utils/apiError';
 import { attendanceDateTime } from '../utils/attendanceTime';
+import { ImageViewer } from './ImageViewer';
 import { ModalLayer } from './ModalLayer';
 import { ShimmerProfileModal } from './Shimmer';
 
@@ -35,21 +36,41 @@ export function PasswordRow({ linked, onChange }: { linked: boolean; onChange?: 
  */
 function FacePhoto({ photo, name, onBroken }: { photo: Photo; name: string; onBroken: () => void }) {
   const [revealed, setRevealed] = useState('');   // the url that has decoded and may sharpen
+  const [expanded, setExpanded] = useState(false);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  const [clock, setClock] = useState({ for: '', ms: 0 });   // time spent loading this photo
+  const loading = photo.state === 'loading';
+  useEffect(() => {
+    if (!loading) return;
+    const start = performance.now();
+    const timer = window.setInterval(() => setClock({ for: photo.for, ms: performance.now() - start }), 100);
+    return () => window.clearInterval(timer);
+  }, [loading, photo.for]);
   const sharp = photo.state === 'ready' && revealed === photo.url;
-  const percent = photo.state === 'loading' && photo.progress != null ? Math.round(photo.progress * 100) : null;
+  // shortcut: until bytes arrive (the server is still fetching the photo) the percentage is a time estimate easing toward 90 %;
+  // the real download share takes over as soon as it is larger, and it reaches 100 % only when the photo is here.
+  const elapsed = clock.for === photo.for ? clock.ms : 0;
+  const percent = loading ? Math.round(Math.max(90 * (1 - Math.exp(-elapsed / 2500)), (photo.progress ?? 0) * 100)) : 100;
   return (
     <div data-face-photo={photo.state === 'ready' ? (sharp ? 'sharp' : 'revealing') : photo.state} className="relative h-48 w-48 overflow-hidden rounded-2xl">
-      {photo.state === 'ready' && <img key={photo.url} src={photo.url} alt={`Registered face of ${name}`} onError={onBroken}
+      {photo.state === 'ready' && <img key={photo.url} src={photo.url} alt={`Registered face of ${name}`} onError={onBroken} onClick={() => setExpanded(true)}
         // One painted frame of the blurred image first; a fast decode in the same frame would otherwise skip the reveal transition.
         onLoad={event => { const url = photo.url; void event.currentTarget.decode().catch(() => undefined).then(() => requestAnimationFrame(() => requestAnimationFrame(() => setRevealed(url)))); }}
-        className={`face-photo-image absolute inset-0 h-full w-full object-cover ${sharp ? 'is-sharp' : ''}`} />}
-      {(photo.state === 'loading' || (photo.state === 'ready' && !sharp && !revealed)) && (
-        <div role="status" aria-label={percent != null ? `Loading photo, ${percent}%` : 'Loading photo'} className={`face-photo-backdrop absolute inset-0 flex flex-col items-center justify-center gap-2 ${photo.state === 'ready' ? 'is-leaving' : ''}`}>
-          <span aria-hidden="true" className="text-lg font-bold tabular-nums text-slate-700">{percent != null ? `${percent}%` : photo.state === 'ready' ? '100%' : ''}</span>
-          {percent == null && photo.state === 'loading' && <span aria-hidden="true" className="-mt-1 text-xs font-medium text-slate-500">Loading photo…</span>}
-          <span aria-hidden="true" className="face-photo-track"><span className={percent == null && photo.state === 'loading' ? 'is-unknown' : ''} style={percent != null ? { width: `${percent}%` } : photo.state === 'ready' ? { width: '100%' } : undefined} /></span>
+        className={`face-photo-image absolute inset-0 h-full w-full cursor-zoom-in object-cover ${sharp ? 'is-sharp' : ''}`} />}
+      {(loading || (photo.state === 'ready' && !sharp && !revealed)) && (
+        <div role="progressbar" aria-label="Loading photo" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
+          className={`face-photo-backdrop absolute inset-0 flex flex-col items-center justify-center gap-2 ${photo.state === 'ready' ? 'is-leaving' : ''}`}>
+          <span aria-hidden="true" className="text-lg font-bold tabular-nums text-slate-700">{percent}%</span>
+          <span aria-hidden="true" className="face-photo-track"><span style={{ width: `${percent}%` }} /></span>
+          <span aria-hidden="true" className="text-[11px] font-medium text-slate-500">Loading photo…</span>
         </div>
       )}
+      {photo.state === 'ready' && <button ref={expandButton} type="button" onClick={() => setExpanded(true)} aria-label="Expand photo" title="Expand photo"
+        className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900/55 text-white backdrop-blur-sm transition-colors hover:bg-slate-900/75 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">
+        <Maximize2 aria-hidden="true" className="h-4 w-4" />
+      </button>}
+      {expanded && photo.state === 'ready' && <ImageViewer url={photo.url} label={`Registered face of ${name}, full size`}
+        onClose={() => { setExpanded(false); window.requestAnimationFrame(() => expandButton.current?.focus()); }} />}
       {(photo.state === 'none' || photo.state === 'error') && (
         <div role={photo.state === 'error' ? 'alert' : 'status'} className={`flex h-full w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 text-center text-xs ${photo.state === 'error' ? 'border-rose-300 bg-rose-50/60 text-rose-700' : 'border-slate-300 text-slate-500'}`}>
           <UserRound aria-hidden="true" className="h-7 w-7 opacity-60" />
@@ -115,6 +136,7 @@ export function StudentDetailsDialog({ student, onClose, onChangePassword }: { s
   }, []);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;   // the full-size photo above handled it (it keeps Tab on its Close button)
       if (event.key === 'Escape') { event.preventDefault(); onClose(); }
       if (event.key !== 'Tab') return;
       const targets = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') || []);

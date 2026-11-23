@@ -25,6 +25,10 @@ String offlineStatus(Object? status) => switch (status) {
   _ => (icon: Icons.cloud_upload_outlined, color: const Color(0xFFD97706)),
 };
 
+/// Settled attempts need nothing more from the phone or the student, so they do not keep the dashboard's saved-attendance bar up.
+const offlineSettled = {'synced', 'excused', 'approved'};
+bool offlineWaiting(Map<String, Object?> row) => !offlineSettled.contains(row['status']);
+
 class OfflineQueueSheet extends StatefulWidget {
   final List<Map<String, Object?>> rows;
   final Future<List<Map<String, Object?>>> Function() onRefresh;
@@ -40,19 +44,31 @@ class OfflineQueueSheet extends StatefulWidget {
 class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
   late List<Map<String, Object?>> _rows = widget.rows;
   bool _busy = false;
-  String? _error;
+  ({String text, bool ok})? _outcome; // what the last Retry did, so the button never seems to do nothing
   Future<void> _refresh() async {
     if (_busy) return;
+    final toSend = _rows.any((row) => ['pending', 'needs_review'].contains(row['status']));
     setState(() {
       _busy = true;
-      _error = null;
+      _outcome = null;
     });
     try {
-      final rows = await widget.onRefresh();
-      if (mounted) setState(() => _rows = rows);
+      // At least a moment of spinner, so a quick answer is still seen to happen.
+      final answers = await Future.wait<Object?>([widget.onRefresh(), Future<void>.delayed(const Duration(milliseconds: 600))]);
+      final rows = answers.first as List<Map<String, Object?>>;
+      if (mounted) {
+        setState(() {
+          _rows = rows;
+          _outcome = !toSend
+              ? (text: 'Nothing waiting to send.', ok: true)
+              : rows.any((row) => row['status'] == 'pending')
+              ? (text: 'Not sent: the server could not be reached. Reconnect and try again.', ok: false)
+              : (text: 'Sent. Each attempt below shows its result.', ok: true);
+        });
+      }
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Could not refresh. Reconnect and try again.');
+        setState(() => _outcome = (text: 'Could not refresh. Reconnect and try again.', ok: false));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -67,7 +83,7 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
     final muted = dark ? const Color(0xFFA0A0A0) : const Color(0xFF64748B);
     final card = dark ? const Color(0xFF2A2A2A) : Colors.white;
     const blue = Color(0xFF2563EB);
-    final waiting = _rows.where((row) => !['synced', 'excused'].contains(row['status'])).length;
+    final waiting = _rows.where(offlineWaiting).length;
     final line = dark ? const Color(0xFF333333) : const Color(0xFFE2E8F0);
     // A full page with one header: Back returns to the dashboard tab it was opened from.
     return Scaffold(
@@ -206,34 +222,39 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
                         );
                       },
                     ),
-                  if (_error != null)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFDC2626).withValues(alpha: dark ? .16 : .07),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.wifi_off_rounded, size: 18, color: Color(0xFFDC2626)),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Semantics(
-                              liveRegion: true,
-                              child: Text(tr(_error!),
-                                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                 ],
               ),
             ),
             SafeArea(
               top: false,
               minimum: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-              child: FilledButton.icon(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                // Above the button, so the answer to Retry is always on screen however long the list is.
+                if (_outcome case final outcome?)
+                  Builder(builder: (context) {
+                    final tone = outcome.ok ? const Color(0xFF16A34A) : const Color(0xFFDC2626);
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: tone.withValues(alpha: dark ? .16 : .07),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: tone.withValues(alpha: .3)),
+                      ),
+                      child: Row(children: [
+                        Icon(outcome.ok ? Icons.check_circle_outline_rounded : Icons.wifi_off_rounded, size: 18, color: tone),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Semantics(
+                            liveRegion: true,
+                            child: Text(tr(outcome.text),
+                                style: TextStyle(fontSize: 12.5, height: 1.35, fontWeight: FontWeight.w600, color: dark ? Colors.white : const Color(0xFF0F172A))),
+                          ),
+                        ),
+                      ]),
+                    );
+                  }),
+                FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: blue,
                   foregroundColor: Colors.white,
@@ -251,6 +272,7 @@ class _OfflineQueueSheetState extends State<OfflineQueueSheet> {
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
+              ]),
             ),
           ],
         ),

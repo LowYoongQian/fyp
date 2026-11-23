@@ -1,5 +1,15 @@
 # Changelog
 
+## Face photo percentage and full-size view — 2026-11-23 17:10
+- In Student Details, the registered face photo now always shows a moving percentage above its loading bar, including while the server is still fetching the photo, and reaches 100% only when the photo has arrived.
+- A new expand button at the top right of the photo (or a click on the photo) opens it full size. Close it with the X, Escape or a click outside the photo; the Student Details window stays open. ChatGPT review pending.
+
+
+## Saved attendance bar and Retry — 2026-11-23 17:01
+- In the mobile app, the "Saved attendance attempts" bar now disappears once every saved check-in is recorded, instead of staying on the dashboard.
+- "Retry pending / refresh" now shows a loading spinner and then says what happened: nothing to send, sent, or not sent because the server could not be reached. If a sync is already running in the background, it waits for that sync instead of doing nothing. ChatGPT review pending.
+
+
 ## Profile, recovery email, face photo and check-in screens — 2026-11-23 03:11
 - Students can now remove their recovery email with the bin icon next to "Change email". After confirming, password reset links and account notices stop until a new address is verified, and the dashboard updates straight away. If removal fails, the email stays.
 - The Profile back button now uses the normal light or dark hover instead of a near-black block. In dark mode, "Change email" and the bin icon are readable again.
