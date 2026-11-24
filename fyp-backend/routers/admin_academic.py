@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from db.database import get_db
 from domain import timetable_access
+from domain.attendance import require_no_attendance_history
 from domain.audit import log_admin_action
 from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, add_missing_meetings, conflicting_meetings, groups_for_course,
                               lecturer_slot_conflict, lecture_meetings, meeting_key_for, pick_slot_for_new)
@@ -743,13 +744,7 @@ def delete_enrolment(enrolment_id: str, db: Session = Depends(get_db), current_u
     if enrol is None:
         raise HTTPException(404, "Enrolment not found")
 
-    completed = db.query(ClassSession.id).filter(
-        ClassSession.course_id == enrol.course_id, ClassSession.status == "completed",
-        ClassSession.class_group.in_(["All", enrol.class_group])).first()
-    recorded = db.query(AttendanceRecord.id).join(ClassSession).filter(
-        ClassSession.course_id == enrol.course_id, AttendanceRecord.student_id == enrol.student_id).first()
-    if completed or recorded:
-        raise HTTPException(409, "This enrolment is needed for attendance history: the student has a completed class or an attendance record in this course.")
+    require_no_attendance_history(db, enrol, enrol.course.course_code if enrol.course else "This course")
 
     # Read before the delete makes the relationships unavailable.
     deleted_desc = (

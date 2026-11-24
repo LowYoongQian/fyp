@@ -162,7 +162,7 @@ export const swalConfirm = async (title: string, text: string, confirmText: stri
 /** One choice from a short list; null when cancelled. */
 export const swalChoose = async (title: string, text: string, options: Record<string, string>, confirmText = 'Continue'): Promise<string | null> => {
   const result = await baseModal.fire({
-    title, text, input: 'select', inputOptions: options, inputPlaceholder: 'Choose…', showCancelButton: true,
+    title, text, input: 'radio', inputOptions: options, inputAttributes: { 'aria-label': title }, showCancelButton: true,
     confirmButtonColor: '#2563eb', cancelButtonColor: '#64748b', confirmButtonText: confirmText, cancelButtonText: 'Cancel',
     inputValidator: value => (value ? null : 'Choose one.'),
   });

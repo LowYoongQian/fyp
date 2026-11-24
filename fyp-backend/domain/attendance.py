@@ -18,7 +18,17 @@ Policy (must stay in sync across both consumers):
 from fastapi import HTTPException
 
 from ml.features import compute_features
-from db.models import Enrolment
+from db.models import AttendanceRecord, ClassSession, Enrolment
+
+
+def require_no_attendance_history(db, enrol, course_code):
+    completed = db.query(ClassSession.id).filter(
+        ClassSession.course_id == enrol.course_id, ClassSession.status == "completed",
+        ClassSession.class_group.in_(["All", enrol.class_group])).first()
+    recorded = db.query(AttendanceRecord.id).join(ClassSession).filter(
+        ClassSession.course_id == enrol.course_id, AttendanceRecord.student_id == enrol.student_id).first()
+    if completed or recorded:
+        raise HTTPException(409, f"{course_code}: this student has a completed class or an attendance record. Their enrolment and group must be kept.")
 
 
 def require_session_enrolment(db, session, student_id, status_code: int = 400):

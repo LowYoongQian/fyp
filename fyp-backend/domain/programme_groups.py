@@ -14,6 +14,7 @@ from sqlalchemy import true
 from sqlalchemy.orm import Session
 
 from db.models import AcademicSemester, Course, CourseStaffAssignment, Enrolment, Programme, SemesterGroupMember, Student, User
+from domain.attendance import require_no_attendance_history
 from domain.audit import log_admin_action
 from domain.scheduler import add_missing_meetings, groups_for_course
 from domain import semesters
@@ -228,7 +229,7 @@ def roster(db: Session, semester) -> dict:
 
 def _semester_enrolments(db: Session, semester, student_id):
     return (db.query(Enrolment, Course).join(Course, Course.id == Enrolment.course_id)
-            .filter(Enrolment.student_id == student_id, Course.semester_id == semester.id).order_by(Course.course_code).all())
+            .filter(Enrolment.student_id == student_id, Course.semester_id == semester.id).order_by(Course.course_code).with_for_update(of=Enrolment).all())
 
 
 def _set_course_group(db: Session, enrolment, course, group, may_open=True):
@@ -273,6 +274,9 @@ def move_programme_group(db: Session, user, semester_id, student_id, group, dry_
         effect = {"scope": "programme", "student": _person(student), "from": old, "to": group,
                   "courses_moving": [c.course_code for _, c in follows], "courses_unchanged": [c.course_code for _, c in stays],
                   "review": conflicts.get(student.id)}
+        if old != group:
+            for enrolment, course in follows:
+                require_no_attendance_history(db, enrolment, course.course_code)
         if dry_run or old == group:
             db.rollback()
             return {**effect, "saved": False}
@@ -328,6 +332,8 @@ def move_course_group(db: Session, user, enrolment_id, group, dry_run=False, all
                                .filter_by(semester_id=course.semester_id, student_id=enrolment.student_id).scalar())
         effect = {"scope": "course", "student": _person(student), "course_code": course.course_code, "from": enrolment.class_group,
                   "to": group, "programme_group": programme_group}
+        if enrolment.class_group != group:
+            require_no_attendance_history(db, enrolment, course.course_code)
         if dry_run or enrolment.class_group == group:
             db.rollback()
             return {**effect, "saved": False}

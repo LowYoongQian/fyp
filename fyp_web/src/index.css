@@ -2052,3 +2052,20 @@ html.dark .face-photo-backdrop span.text-slate-500 { color: #cbd5e1; }
   .face-photo-backdrop { animation: none; }
   .face-photo-image { transition: none; }
 }
+
+/* Group choices use the same selectable cards as teaching roles. */
+.swal2-popup .swal2-radio {
+  @apply mx-5 max-h-64 flex-wrap gap-2 overflow-y-auto bg-transparent p-1;
+}
+.swal2-popup .swal2-radio label {
+  @apply m-0 flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200;
+}
+.swal2-popup .swal2-radio label:has(input:checked) {
+  @apply border-brand-blue bg-blue-50 text-brand-blue dark:bg-blue-950 dark:text-blue-200;
+}
+.swal2-popup .swal2-radio label:focus-within {
+  @apply ring-2 ring-brand-blue;
+}
+.swal2-popup .swal2-radio input {
+  @apply m-0 accent-brand-blue;
+}

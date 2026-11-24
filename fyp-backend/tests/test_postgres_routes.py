@@ -1008,3 +1008,55 @@ def test_disjoint_semesters_can_reuse_room_and_teacher(pg):
     old = db.query(ClassMeeting).filter_by(course_id=course["id"]).one()
     new = db.query(ClassMeeting).filter_by(course_id=next_course["id"]).one()
     call(pg, "PUT", f"/admin/timetable/{new.id}", dict(day=old.day, start=old.start, end=old.end, room=old.room))
+
+@pytest.mark.parametrize("scope", ["course", "semester"])
+@pytest.mark.parametrize("history", ["old_group", "all", "record_only", "none"])
+def test_group_corrections_preserve_attendance_history(scope, history):
+    from fastapi import HTTPException
+    from db.models import AcademicSemester, AttendanceRecord, ClassSession, Enrolment, Programme, SemesterGroupMember
+    from domain.programme_groups import move_course_group, move_programme_group
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=[t for t in Base.metadata.sorted_tables
+                                            if t.name not in ("ai_chat_sessions", "ai_chat_messages")])
+    with Session(engine) as db:
+        programme = Programme(name="Test", code="QA")
+        admin = User(email="admin@test.invalid", password_hash="unused", role="admin")
+        db.add_all([programme, admin])
+        db.flush()
+        today = campus_now().date()
+        term = AcademicSemester(programme_id=programme.id, name="Active", start_date=today-timedelta(days=7),
+                                end_date=today+timedelta(days=7))
+        student = Student(programme_id=programme.id, name="Student", student_code="ST000001")
+        db.add_all([term, student])
+        db.flush()
+        courses = [Course(course_name=code, course_code=code, programme_id=programme.id, semester_id=term.id)
+                   for code in ("A101", "B202")]
+        db.add_all(courses)
+        db.flush()
+        enrolments = [Enrolment(student_id=student.id, course_id=c.id, class_group="G6") for c in courses]
+        lesson = ClassSession(course_id=courses[1].id, class_group={"all": "All", "none": "G8"}.get(history, "G6"),
+                              status="open" if history == "record_only" else "completed")
+        db.add_all([*enrolments, lesson])
+        db.flush()
+        if history == "record_only":
+            db.add(AttendanceRecord(student_id=student.id, session_id=lesson.id, status="present"))
+        db.commit()
+        def move(preview):
+            if scope == "course":
+                return move_course_group(db, admin, enrolments[1].id, "G7", dry_run=preview)
+            return move_programme_group(db, admin, term.id, student.id, "G7", dry_run=preview)
+
+        for preview in (True, False):
+            if history == "none":
+                assert move(preview)["saved"] == (not preview)
+            else:
+                with pytest.raises(HTTPException) as error:
+                    move(preview)
+                assert error.value.status_code == 409 and "B202" in error.value.detail
+            db.expire_all()
+            changed = history == "none" and not preview
+            assert [e.class_group for e in enrolments] == [
+                "G7" if changed and scope == "semester" else "G6", "G7" if changed else "G6"]
+            assert db.query(SemesterGroupMember).count() == int(changed and scope == "semester")
+    engine.dispose()
