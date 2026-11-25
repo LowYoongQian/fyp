@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Float,
+    Column, Integer, String, Boolean, Float, JSON,
     ForeignKey, Date, DateTime, LargeBinary, Text, func, UniqueConstraint,
     CheckConstraint, Index, text,
 )
@@ -218,6 +218,7 @@ class Course(Base):
     course_code  = Column(String, unique=True, nullable=False)
     planned_total_hours = Column(Float, nullable=True)
     semester_id  = Column(UUID(as_uuid=False), ForeignKey("academic_semesters.id", ondelete="RESTRICT"), nullable=True, index=True)
+    plan_recorded_from = Column(Date, nullable=True)
     lecturer_id  = Column(UUID(as_uuid=False), ForeignKey("lecturers.id"), index=True)
     programme_id = Column(UUID(as_uuid=False), ForeignKey("programmes.id", ondelete="SET NULL"), nullable=True, index=True)
     # A course has no schedule of its own: class_meetings holds the timetable, one row
@@ -264,6 +265,7 @@ class ClassMeeting(Base):
     # When this slot started to exist (set on creation and whenever its day or time changes). Occurrences that began earlier were never owed,
     # so the missed-class recovery must not invent review rows for them. NULL = a slot from before this column: its old recovery stays.
     effective_from = Column(DateTime, nullable=True, default=utcnow)
+    retire_on = Column(Date, nullable=True)
 
     course        = relationship("Course")
     lecturer      = relationship("Lecturer")
@@ -503,14 +505,16 @@ class FaceEnrolmentRequest(Base):
 # ML At-Risk Model Scores
 class RiskScore(Base):
     __tablename__ = "risk_scores"
+    __table_args__ = (UniqueConstraint("student_id", "course_id", name="uq_current_risk_score"),)
     id                  = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     student_id          = Column(UUID(as_uuid=False), ForeignKey("students.id"), index=True)
     course_id           = Column(UUID(as_uuid=False), ForeignKey("courses.id"), index=True)
-    risk_score          = Column(Float, nullable=False)
+    risk_score          = Column(Float, nullable=True)
     risk_label          = Column(String, nullable=True)
     attendance_rate     = Column(Float, nullable=True)
     risk_factors        = Column(String, nullable=True)
     updated_at          = Column(DateTime, server_default=func.now())
+    assessment_source   = Column(String, nullable=True)
 
     # Legacy fields are retained because the existing database includes them.
     # Nullable: the live table has them NULL-able and recompute_risk_scores
@@ -523,6 +527,30 @@ class RiskScore(Base):
     
     student             = relationship("Student", back_populates="risk_scores")
     course              = relationship("Course")
+
+
+class TeachingRuleVersion(Base):
+    __tablename__ = "teaching_rule_versions"
+    meeting_id = Column(UUID(as_uuid=False), primary_key=True)
+    effective_date = Column(Date, primary_key=True)
+    course_id = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    slot = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+
+
+class TeachingPlan(Base):
+    __tablename__ = "teaching_plans"
+    id = Column(Integer, primary_key=True)
+    course_id = Column(UUID(as_uuid=False), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    details = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False)
+
+
+class RiskUpdate(Base):
+    __tablename__ = "risk_updates"
+    id = Column(Integer, primary_key=True)
+    course_id = Column(UUID(as_uuid=False), nullable=False, index=True)
+    student_id = Column(UUID(as_uuid=False), nullable=True)
+    class_group = Column(String, nullable=True)
 
 # Campus wifi whitelist
 class CampusNetwork(Base):

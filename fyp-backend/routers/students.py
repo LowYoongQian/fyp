@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from typing import Optional
 from uuid import UUID
@@ -15,13 +15,13 @@ from db.models import (
 )
 from utils.security import require_student
 from utils.db_helpers import require_own_profile
-from domain.attendance import session_hours, attendance_rate_percent, completed_class_count
+from domain.attendance import CREDITED_STATUSES, attendance_status, session_hours, attendance_rate_percent, completed_class_count
 from integrations.face import (
     _embedding_to_floats,
     _cosine_distance, _FACE_MATCH_THRESHOLD,
 )
 from domain import student_next_action, timetable_access
-from domain.scheduler import calculate_schedule, get_course_group_slots, meeting_key_for, session_end_utc
+from domain.scheduler import calculate_schedule, get_course_group_slots, session_end_utc
 from domain.session_sync import sync_class_sessions
 from routers.attendance_features import _next_meeting
 from routers.face_enrolment import FaceCaptureSubmit, submit_capture, face_version, lock_student
@@ -94,7 +94,8 @@ def verify_face_only(body: FaceSelfTestSubmit, db: Session = Depends(get_db), cu
 
 
 @router.get("/me/courses")
-def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(require_student)):
+def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depends(get_db),
+                   current_user: User = Depends(require_student), on_date: date | None = None):
     """Courses this student is enrolled in, with timetable info for the app. The web timetable passes one semester_id."""
     sync_class_sessions()
     student = require_own_profile(db, Student, current_user.id, "Student")
@@ -110,7 +111,11 @@ def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depe
     rows = [(c, group) for c, group in query.all() if timetable_access.schedule_viewable(c)]
 
     # Calculate deterministic clash-free schedules
-    schedule_map = calculate_schedule(db)
+    schedule_map = calculate_schedule(db, on_date=on_date)
+    group_slots = {}
+    for key, slot in schedule_map.items():
+        if slot["role"] in ("Tutor", "Practical"):
+            group_slots.setdefault((slot["course_id"], slot["class_group"], slot["role"]), []).append((key, slot))
 
     # Everything the loop needs, fetched once per query instead of once per course.
     course_ids = [c.id for c, _ in rows]
@@ -125,6 +130,7 @@ def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depe
     # endpoint once counted present-only over a flat session count and treated "open but
     # past today" as held, so the app and the web dashboard disagreed for one student.
     sessions_by_course = {}
+    term_by_course = {course.id: course.semester for course, _ in rows}
     for sid, cid, sgroup, opened, closed_at, scheduled_start, scheduled_end in db.query(
         ClassSession.id, ClassSession.course_id, ClassSession.class_group,
         ClassSession.opened_at, ClassSession.closed_at,
@@ -133,6 +139,8 @@ def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depe
         ClassSession.course_id.in_(course_ids),
         ClassSession.status == "completed",
     ).order_by(ClassSession.scheduled_start.asc().nullslast(), ClassSession.id.asc()).all():
+        if not timetable_access.held_in_semester(term_by_course[cid], scheduled_start or opened):
+            continue
         sessions_by_course.setdefault(cid, []).append(
             (sid, sgroup, session_hours(opened, closed_at,
                                         scheduled_start=scheduled_start, scheduled_end=scheduled_end)))
@@ -140,7 +148,7 @@ def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depe
     attended = {
         (student.id, sid) for (sid,) in db.query(AttendanceRecord.session_id).filter(
             AttendanceRecord.student_id == student.id,
-            AttendanceRecord.status.in_(["present", "leave"]),
+            AttendanceRecord.status.in_(CREDITED_STATUSES),
         ).all()
     }
 
@@ -179,14 +187,11 @@ def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depe
                 "completed_classes": completed,
             })
         
-        # 2 & 3. Tutor / Practical — this student's group only, one row per staff assignment. A course may have several
-        # assignments in the same role and each owns its meeting; keeping only the first hid the rest from the student.
+        # A dated slot can still be owed after its staff allocation ends.
+        teachers = {a.id: a.lecturer for a in assignments}
         for role in ("Tutor", "Practical"):
-            for assign in (a for a in assignments if a.role == role):
-                key = meeting_key_for(role, c.id, assign.id, group)
-                slot = schedule_map.get(key)
-                if not slot:
-                    continue
+            for key, slot in group_slots.get((c.id, group, role), []):
+                teacher = teachers.get(slot["assignment_id"])
                 result.append({
                     "id": key,
                     "course_id": c.id,
@@ -198,7 +203,7 @@ def get_my_courses(semester_id: Optional[UUID] = Query(None), db: Session = Depe
                     "schedule_start": slot["start"],
                     "schedule_end": slot["end"],
                     "schedule_room": slot["room"],
-                    "lecturer_name": assign.lecturer.name if assign.lecturer else "TBA",
+                    "lecturer_name": teacher.name if teacher else "TBA",
                     "role": role,
                     "attendance_rate": attendance_rate,
                     "completed_classes": completed,
@@ -305,7 +310,7 @@ def get_my_attendance(db: Session = Depends(get_db), current_user: User = Depend
             "course_code": c.course_code,
             "course_name": c.course_name,
             "class_group": s.class_group,
-            "status": ar.status,
+            "status": attendance_status(ar.status),
             "marked_at": iso_utc(ar.marked_at),
             "network_verified": ar.network_verified,
             "liveness_passed": ar.liveness_passed,

@@ -14,7 +14,7 @@ from sqlalchemy.exc import DBAPIError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from db.database import SessionLocal, engine
-from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course, ClassMeeting, StudentFeedback
+from db.models import Alert, FaceEmbedding, FaceEnrolmentRequest, FacePhotoCleanup, User, AuthSession, AuthFactor, AuthLoginChallenge, AuthAttempt, PushDevice, PushDelivery, AcademicSemester, Course, ClassMeeting, StudentFeedback, RiskScore, RiskUpdate, TeachingPlan, TeachingRuleVersion
 from domain.account_security import validate_session
 from integrations.mobile_push import push_loop
 from utils.security import decode_token
@@ -74,6 +74,9 @@ NO_STORE_PREFIXES = (
     "/students/me/attendance",
     "/students/me/courses",       # timetable edits must reach mobile immediately
     "/lecturers/me/timetable",
+    "/lecturers/me/alerts",
+    "/analytics/risk-scores",
+    "/analytics/overview",
     "/admin/timetable",
     "/admin/sessions",
     "/students/me/attendance-overview",
@@ -254,8 +257,13 @@ async def _keep_pool_warm():
 
 
 async def _class_lifecycle_loop():
+    from domain.risk_service import process_risk_updates
     while True:
         sync_class_sessions(force=True)
+        try:
+            await asyncio.to_thread(process_risk_updates)
+        except Exception as error:
+            logger.warning("At-Risk update worker could not read its queue (%s)", type(error).__name__)
         await asyncio.sleep(60)
 
 
@@ -336,12 +344,12 @@ def _check_semester_schema():
 
 
 def _check_class_meeting_schema():
-    # Missed-class recovery reads class_meetings.effective_from (migration b4d7e1f0a2c9).
     try:
         with engine.connect() as connection:
-            connection.execute(select(ClassMeeting.effective_from).where(false()))
+            for table in (ClassMeeting, Course, TeachingRuleVersion, TeachingPlan, RiskScore, RiskUpdate):
+                connection.execute(select(table.__table__).where(false()))
     except DBAPIError as error:
-        raise RuntimeError('Timetable database schema is not ready (migration b4d7e1f0a2c9); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
+        raise RuntimeError('Timetable and At-Risk schema is not ready (migration e65f4d09a321); run venv\\Scripts\\python.exe -m alembic upgrade head before starting the backend.') from error
 
 
 def _check_feedback_severity_schema():

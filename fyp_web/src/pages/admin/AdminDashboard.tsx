@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiService } from '../../services/api';
+import { useLiveResource } from '../../hooks/useLiveResource';
 import type { AdminStudent, AdminStaff, Programme, Course, ActiveSession } from '../../services/api';
 import {
   Users,
@@ -20,6 +21,7 @@ export const AdminDashboard: React.FC = () => {
   const [courses, setCourses] = useState<Course[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const pending = useLiveResource(apiService.getPendingTeaching, 'admin-pending-teaching', ['attendance', 'sessions', 'timetable']);
 
   const fetchData = async () => {
     setLoading(true);
@@ -110,6 +112,19 @@ export const AdminDashboard: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {pending.error && <p role="alert">Could not refresh teaching completion exceptions.</p>}
+      {!!pending.data?.length && (
+        <section className="uipro-card bg-white p-6">
+          <h3 className="font-bold">Pending Teaching Completion</h3>
+          <ul className="mt-2 space-y-2 text-sm">
+            {pending.data.map(row => <li key={row.course_id + ':' + row.class_group}>
+              <strong>{row.course_code} · {row.class_group} · {row.semester}</strong>
+              <div>{row.outstanding_minutes} of {row.planned_minutes} planned minutes outstanding. {row.reason}</div>
+            </li>)}
+          </ul>
+        </section>
+      )}
 
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

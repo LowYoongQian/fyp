@@ -278,9 +278,10 @@ export interface RiskScore {
   course_id: number | string;
   course_code?: string;
   course_name?: string;
-  risk_score: number;
-  risk_label: 'low' | 'medium' | 'high' | 'observing';
-  attendance_rate: number;
+  risk_score: number | null;
+  risk_label: 'low' | 'medium' | 'high' | null;
+  attendance_rate: number | null;
+  assessment_source: 'Plan Incomplete' | 'No Attendance Data' | 'Observing' | 'Guaranteed High' | 'Guaranteed Low' | 'ML Prediction' | 'Model Unavailable' | 'Pending Teaching Completion' | 'Final Attendance Met' | 'Final Attendance Below Minimum';
   risk_factors?: string | null;
   updated_at?: string | null;
 }
@@ -786,8 +787,8 @@ export const apiService = {
   },
 
   /** One semester at a time, never cached: the server refuses anything but the caller's own current semester, and an old answer must not outlive that. */
-  getLecturerTimetable: async (semesterId: string, signal?: AbortSignal): Promise<Course[]> =>
-    (await api.get('/lecturers/me/timetable', { params: { semester_id: semesterId }, signal })).data,
+  getLecturerTimetable: async (semesterId: string, signal?: AbortSignal, onDate?: string): Promise<Course[]> =>
+    (await api.get('/lecturers/me/timetable', { params: { semester_id: semesterId, on_date: onDate }, signal })).data,
   // Students and staff send no filter; an admin must (the server refuses an admin read without them, and anyone else's forged one).
   getTimetableSemesters: async (filter?: TimetableScope, signal?: AbortSignal): Promise<TimetableSemester[]> =>
     (await api.get('/timetable/semesters', { params: filter && { programme_id: filter.programmeId, course_id: filter.courseId }, signal, timeout: 10000 })).data,
@@ -817,24 +818,35 @@ export const apiService = {
   },
 
   getRiskScores: async (): Promise<RiskScore[]> => {
-    return cachedGet('/analytics/risk-scores');
+    return (await api.get('/analytics/risk-scores')).data;
   },
+
+  getPendingTeaching: async (signal: AbortSignal): Promise<{
+    course_id: string; course_code: string; semester: string; class_group: string;
+    outstanding_minutes: number; planned_minutes: number; reason: string;
+  }[]> => (await api.get('/analytics/pending-teaching', { signal })).data,
 
   getAnalyticsOverview: async (courseId?: number | string): Promise<AnalyticsOverview> => {
     return cachedGet('/analytics/overview', courseId ? { course_id: courseId } : undefined);
   },
 
   getAlertLogs: async (): Promise<AlertLog[]> => {
-    return cachedGet('/lecturers/me/alerts');
+    return (await api.get('/lecturers/me/alerts')).data;
   },
 
+  previewManualAlert: async (studentId: number | string, courseId: number | string): Promise<
+    Pick<RiskScore, 'attendance_rate' | 'risk_score' | 'risk_label' | 'risk_factors' | 'assessment_source' | 'updated_at'> &
+    { assessment_token: string; email_body: string }
+  > => (await api.post('/lecturers/me/alerts/preview', { student_id: studentId, course_id: courseId })).data,
+
   /** alertId is the logical warning identifier: reuse it for a retry so the provider and server never send twice. */
-  triggerManualAlert: async (studentId: number | string, courseId: number | string, alertId: string, emailBody: string) => {
+  triggerManualAlert: async (studentId: number | string, courseId: number | string, alertId: string, emailBody: string, assessmentToken?: string) => {
     const response = await api.post('/lecturers/me/alerts', {
       student_id: studentId,
       course_id: courseId,
       alert_id: alertId,
       email_body: emailBody,
+      assessment_token: assessmentToken,
     }, { timeout: 20000 });
     return response.data;
   },
@@ -998,8 +1010,8 @@ export const apiService = {
   adminGetAssignments: async (): Promise<CourseStaffAssignment[]> => {
     return cachedGet('/admin/assignments');
   },
-  adminGetTimetable: async (semesterId: string, filter: TimetableScope, signal?: AbortSignal): Promise<Course[]> =>
-    (await api.get('/admin/timetable', { params: { semester_id: semesterId, programme_id: filter.programmeId, course_id: filter.courseId }, signal })).data,
+  adminGetTimetable: async (semesterId: string, filter: TimetableScope, signal?: AbortSignal, onDate?: string): Promise<Course[]> =>
+    (await api.get('/admin/timetable', { params: { semester_id: semesterId, programme_id: filter.programmeId, course_id: filter.courseId, on_date: onDate }, signal })).data,
   adminUpdateTimetableSlot: async (
     meetingId: number | string,
     slot: { day: string; start: string; end: string; room: string }
@@ -1147,8 +1159,8 @@ export const apiService = {
     const response = await api.get(`/students/me/medical-leave/${encodeURIComponent(requestId)}/proof`, { responseType: 'blob' });
     return response.data;
   },
-  studentGetCourses: async (semesterId: string, signal?: AbortSignal): Promise<Course[]> =>
-    (await api.get('/students/me/courses', { params: { semester_id: semesterId }, signal })).data,
+  studentGetCourses: async (semesterId: string, signal?: AbortSignal, onDate?: string): Promise<Course[]> =>
+    (await api.get('/students/me/courses', { params: { semester_id: semesterId, on_date: onDate }, signal })).data,
   studentGetAttendance: async (): Promise<StudentAttendanceRecord[]> => {
     return cachedGet('/students/me/attendance');
   },

@@ -378,12 +378,12 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
     if (!editing?.meetingId) return;
     setSaving(true);
     try {
-      await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
+      const result = await apiService.adminUpdateTimetableSlot(editing.meetingId, editForm);
       setEditing(null);
       void loadTimetable();   // reports its own failure; the saved slot is not in doubt
       void swalSuccess(
         'Timetable slot updated',
-        `${editing.classGroup || 'All groups'} · ${editForm.day} ${editForm.start}-${editForm.end}`
+        result.message
       );
     } catch (err: any) {
       swalError('Failed to update slot', err.response?.data?.detail || 'Please try again.');
@@ -397,7 +397,7 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
     return () => loadController.current?.abort();
     // One load per account and semester; the loader reads the current props.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.user_id, semester.id]);
+  }, [user?.user_id, semester.id, selectedDateStr]);
 
   useLiveRefresh(() => loadTimetable(false), ['timetable'], String(user?.user_id));
 
@@ -412,7 +412,7 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
       let mappedEvents: TimetableEvent[] = [];
       if (user?.role === 'admin') {
         // The assignments only explain what is NOT scheduled, so a failure to read them never blocks the timetable itself.
-        const [adminTimetable, assigned] = await Promise.all([apiService.adminGetTimetable(semester.id, filter as TimetableScope, signal), apiService.adminGetAssignments().catch(() => [] as CourseStaffAssignment[])]);
+        const [adminTimetable, assigned] = await Promise.all([apiService.adminGetTimetable(semester.id, filter as TimetableScope, signal, selectedDateStr), apiService.adminGetAssignments().catch(() => [] as CourseStaffAssignment[])]);
         if (signal.aborted) return;
         setAssignments(assigned);
         mappedEvents = adminTimetable.map((slot: any) => ({
@@ -433,7 +433,7 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
           programmeName: slot.programme_name
         }));
       } else if (user?.role === 'student') {
-        const studentCoursesData = await apiService.studentGetCourses(semester.id, signal);
+        const studentCoursesData = await apiService.studentGetCourses(semester.id, signal, selectedDateStr);
         if (signal.aborted) return;
         setStudentCourses(studentCoursesData);
         mappedEvents = studentCoursesData.map(course => ({
@@ -451,7 +451,7 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
           type: 'normal'
         }));
       } else {
-        const lecturerTimetable = await apiService.getLecturerTimetable(semester.id, signal);
+        const lecturerTimetable = await apiService.getLecturerTimetable(semester.id, signal, selectedDateStr);
         mappedEvents = lecturerTimetable.map(slot => ({
           id: slot.id,
           noticeId: slot.meeting_id ? String(slot.meeting_id) : undefined,
@@ -581,15 +581,15 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
 
     const confirmed = await swalConfirmDelete(
       `${ev.courseCode} ${ev.group}${ev.classGroup ? ` ${ev.classGroup}` : ''} class`,
-      `This removes the ${ev.day} ${ev.startTime}-${ev.endTime} timetable slot. Existing attendance history will be kept.`
+      `Remove the recurring ${ev.day} ${ev.startTime}-${ev.endTime} timetable slot from the next teaching week?`
     );
     if (!confirmed) return;
 
     setDeletingMeetingId(ev.meetingId);
     try {
-      await apiService.adminDeleteTimetableSlot(ev.meetingId);
-      setEvents(current => current.filter(item => item.meetingId !== ev.meetingId));
-      await swalSuccess('Class time removed', 'The timetable slot has been deleted.');
+      const result = await apiService.adminDeleteTimetableSlot(ev.meetingId);
+      void loadTimetable(false);
+      await swalSuccess('Timetable removal saved', result.message);
     } catch (error) {
       swalError('Failed to remove class time', getRequestError(error, 'Please try again.'));
     } finally {
@@ -778,9 +778,9 @@ const TimetableBody: React.FC<{ semester: TimetableSemester; filter?: TimetableS
     moveQueuesRef.current.set(moveKey, request);
     try {
       await request;
-      confirmedPositionsRef.current.set(moveKey, { day: nextDay, startTime: nextStart, endTime: nextEnd });
       if (moveVersionsRef.current.get(moveKey) === moveVersion) {
-        void swalSuccess('Class moved', `${nextDay} · ${timeRange(nextStart, nextEnd)}`);
+        void loadTimetable(false);
+        void swalSuccess('Timetable change saved', `Effective next teaching week · ${nextDay} · ${timeRange(nextStart, nextEnd)}`);
       }
     } catch (err: unknown) {
       if (moveVersionsRef.current.get(moveKey) === moveVersion) {

@@ -1,6 +1,7 @@
 import os
 import uuid
-from datetime import datetime, timezone
+import hashlib
+from datetime import date, datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from db.models import (
     CourseStaffAssignment,
     Enrolment,
     Lecturer,
+    RiskScore,
     Student,
     User,
     UserNotification,
@@ -35,6 +37,8 @@ from domain.scheduler import (
     slots_for_assignment,
 )
 from domain import personal_email
+from domain.risk_access import require_risk_access, scoped_enrolments
+from domain.risk_service import lock_assessment, recompute_course
 from integrations import resend_mail
 from integrations.announcement_files import ALLOWED_TYPES
 from integrations.announcement_files import attachment_response
@@ -59,6 +63,7 @@ class AlertCreate(BaseModel):
     # and the base of the email provider's idempotency key.
     alert_id: str | None = None
     email_body: str | None = Field(default=None, max_length=5000)
+    assessment_token: str | None = None
 
 @router.get("/me/courses")
 def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
@@ -98,12 +103,10 @@ def get_lecturer_courses(db: Session = Depends(get_db), current_user: User = Dep
 
 @router.get("/me/alerts")
 def get_lecturer_alerts(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        
-    courses = db.query(Course).filter(Course.id.in_(timetable_access.teaching_course_ids(db, lecturer.id))).all()
-    course_ids = [c.id for c in courses]
-    
-    alerts = db.query(Alert).filter(Alert.course_id.in_(course_ids)).order_by(Alert.triggered_at.desc()).all()
+    visible = scoped_enrolments(db, current_user).filter(
+        Enrolment.student_id == Alert.student_id, Enrolment.course_id == Alert.course_id,
+    ).correlate(Alert).exists()
+    alerts = db.query(Alert).filter(visible).order_by(Alert.triggered_at.desc()).all()
 
     # Pre-load all referenced students and courses in two queries instead of 2×N
     alert_student_ids = list({a.student_id for a in alerts})
@@ -145,11 +148,14 @@ _ALERT_FAILURES = {
 }
 
 
-def _warning_text(student: Student, course: Course) -> str:
+def _warning_text(student: Student, course: Course, score: RiskScore) -> str:
+    rate = score.attendance_rate
+    rate_text = f" Your recorded attendance is {min(rate, .7999) if rate < .8 else rate:.2%}." if rate is not None else ""
     return (
         f"Dear {student.name},\n\n"
-        f"This is a warning about your attendance in {course.course_name} ({course.course_code}). "
-        f"Your attendance is below the 80% threshold. Please contact your lecturer or the academic office.\n\n"
+        f"I am writing about your attendance in {course.course_name} ({course.course_code}).{rate_text} "
+        "The course requires at least 80% attendance by contact hours. Please review your attendance record "
+        "and contact your lecturer if you have questions or need support.\n\n"
         f"Regards,\nLecturer / Academic Office"
     )
 
@@ -159,18 +165,32 @@ def _alert_result(alert: Alert) -> dict:
             "sent_at": iso_utc(alert.sent_at) if alert.delivery_status == "accepted" else None}
 
 
+def _warning_assessment(db, current_user, body):
+    lock_assessment(db, body.course_id)
+    require_risk_access(db, current_user, body.course_id, body.student_id)
+    recompute_course(db, body.course_id, allowed={body.student_id})
+    db.flush()
+    score = db.query(RiskScore).filter_by(student_id=body.student_id, course_id=body.course_id).populate_existing().one()
+    token = hashlib.sha256(repr((score.attendance_rate, score.risk_score, score.risk_label, score.assessment_source,
+                                 score.risk_factors)).encode()).hexdigest()
+    return score, token
+
+
+@router.post("/me/alerts/preview")
+def warning_preview(body: AlertCreate, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    score, token = _warning_assessment(db, current_user, body)
+    student, course = db.get(Student, body.student_id), db.get(Course, body.course_id)
+    from routers.analytics import risk_result
+    result = {**risk_result(score), "assessment_token": token, "email_body": _warning_text(student, course, score)}
+    db.commit()
+    return result
+
+
 @router.post("/me/alerts")
 def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+    require_risk_access(db, current_user, body.course_id, body.student_id)
     student = get_or_404(db, Student, body.student_id, "Student")
     course = get_or_404(db, Course, body.course_id, "Course")
-    # Server-side scope: the lecturer must teach this course and the student must be enrolled in it; no client recipient exists.
-    if course.id not in set(my_course_ids(db, lecturer.id)):
-        raise HTTPException(403, "You are not assigned to this course.")
-    if course.id not in set(timetable_access.teaching_course_ids(db, lecturer.id)):
-        raise HTTPException(403, timetable_access.NOT_CURRENT)
-    if not db.query(Enrolment.id).filter(Enrolment.student_id == student.id, Enrolment.course_id == course.id).first():
-        raise HTTPException(404, "This student is not enrolled in the selected course.")
     account = db.get(User, student.user_id) if student.user_id else None
     address = personal_email.deliverable_address(account)   # verified personal email only: never a school alias, never the login address
     if not address:
@@ -181,9 +201,14 @@ def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), curre
         alert_id = str(uuid.UUID(body.alert_id)) if body.alert_id else str(uuid.uuid4())
     except ValueError:
         raise HTTPException(422, "Invalid warning identifier.")
-    text = (body.email_body or "").strip() or _warning_text(student, course)
-
+    lock_assessment(db, body.course_id)
     alert = db.query(Alert).filter(Alert.id == alert_id).with_for_update().first()
+    if alert is not None and alert.student_id == student.id and alert.course_id == course.id and alert.triggered_by == "lecturer" and alert.delivery_status == "accepted":
+        return _alert_result(alert)
+    score, token = _warning_assessment(db, current_user, body)
+    if (alert is None or alert.attempted_at is None) and body.assessment_token is not None and body.assessment_token != token:
+        raise HTTPException(409, "Attendance changed. Reopen the warning preview to review the latest assessment.")
+    text = (body.email_body or "").strip() or _warning_text(student, course, score)
     if alert is None:
         alert = Alert(id=alert_id, student_id=student.id, course_id=course.id, alert_type="manual_warning", email_body=text,
                       triggered_by="lecturer", triggered_at=utcnow(), delivery_status="pending")
@@ -218,7 +243,8 @@ def trigger_manual_alert(body: AlertCreate, db: Session = Depends(get_db), curre
 
 
 @router.get("/me/timetable")
-def get_lecturer_timetable(semester_id: Optional[UUID] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+def get_lecturer_timetable(semester_id: Optional[UUID] = Query(None), db: Session = Depends(get_db),
+                          current_user: User = Depends(require_lecturer), on_date: date | None = None):
     # Find the lecturer profile
     lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         
@@ -241,7 +267,7 @@ def get_lecturer_timetable(semester_id: Optional[UUID] = Query(None), db: Sessio
     )
 
     # Calculate deterministic clash-free schedules
-    schedule_map = calculate_schedule(db)
+    schedule_map = calculate_schedule(db, on_date=on_date)
     
     result = []
     for c in courses:

@@ -5,14 +5,14 @@ from datetime import datetime, timedelta, time
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy import or_
 from utils.timeutil import local_offset, utcnow
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from db.database import SessionLocal
 from db.models import (
     Enrolment, ClassSession, AttendanceRecord, Student, ClassMeeting, Course,
     Lecturer, User,
 )
 import time as time_module
-from domain.scheduler import calculate_schedule
+from domain.scheduler import calculate_schedule, schedule_versions
 from domain.medical_leave import apply_approved_medical_leave
 from domain.class_lifecycle import close_class_if_due, needs_admin_escalation, reminder_stage
 from domain.semesters import within_semester
@@ -147,7 +147,11 @@ def _sync_class_sessions_now(db: Session):
         tz_offset = local_offset()
 
         now_local = now_utc + tz_offset
-        schedule_map = calculate_schedule(db, for_session_creation=True)
+        meetings = db.query(ClassMeeting).options(joinedload(ClassMeeting.course).joinedload(Course.semester)).order_by(
+            ClassMeeting.id,
+        ).with_for_update(read=True, of=ClassMeeting).all()
+        versions = schedule_versions(db, meetings)
+        schedule_map = calculate_schedule(db, on_date=now_local.date(), meetings=meetings, versions=versions)
         materialize_upcoming(db, now_utc, tz_offset, schedule_map)
 
         # Fetch existing dated classes once; scheduled_start is authoritative for
@@ -155,7 +159,7 @@ def _sync_class_sessions_now(db: Session):
         min_date_utc = datetime.combine(now_local - timedelta(days=7), time(0, 0, 0)) - tz_offset
         sessions_list = db.query(ClassSession).filter(
             (ClassSession.scheduled_start >= min_date_utc) | (ClassSession.opened_at >= min_date_utc)
-        ).all()
+        ).order_by(ClassSession.id).with_for_update().all()
 
         sessions_by_key = {
             (str(s.meeting_id), s.scheduled_start): s
@@ -171,7 +175,10 @@ def _sync_class_sessions_now(db: Session):
         for i in range(7):
             date_check = (now_local - timedelta(days=i)).date()
             day_name = date_check.strftime("%A")
-            for slot in schedule_map.values():
+            dated_schedule = schedule_map if i == 0 else calculate_schedule(
+                db, on_date=date_check, meetings=meetings, versions=versions,
+            )
+            for slot in dated_schedule.values():
                 if slot["day"] != day_name or not slot.get("meeting_id"):
                     continue
                 if not within_semester(slot.get("semester"), date_check):

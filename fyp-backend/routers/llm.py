@@ -18,8 +18,9 @@ from sqlalchemy.orm import Session
 from config import OPENROUTER_API_KEY, OPENROUTER_CHAT_FALLBACK_MODEL, OPENROUTER_CHAT_MODEL, OPENROUTER_EMBEDDING_MODEL
 from db.database import get_db
 from db.models import AIChatMessage, AIChatSession, AttendanceRecord, ClassSession, Course, Enrolment, Lecturer, RiskScore, Student, User
+from domain.attendance import CREDITED_STATUSES
+from domain.risk_access import risk_course_ids, teaching_group_filter
 from domain.ai_assistant import AIPlan, apply_context, context_follow_up_plan, deterministic_plan, resolve_student, scoped_student_rates, student_course_rates
-from domain.timetable_access import teaching_course_ids
 from schemas import QueryRequest, QueryResponse
 from utils.security import require_lecturer
 from utils.timeutil import campus_now, local_offset, utcnow
@@ -198,7 +199,7 @@ def _course_scope(db: Session, user: User) -> list[Course]:
     if not lecturer:
         return []
     # Current-semester courses only, so an answer never presents an ended semester's data as current.
-    return db.query(Course).filter(Course.id.in_(teaching_course_ids(db, lecturer.id))).order_by(Course.course_code).all()
+    return db.query(Course).filter(Course.id.in_(risk_course_ids(db, lecturer.id))).order_by(Course.course_code).all()
 
 
 def _match_course(courses: list[Course], hint: str | None) -> Course | None:
@@ -454,10 +455,10 @@ def _follow_up_questions(plan: dict, asked=()) -> list[str]:
     return [text for text in dict.fromkeys(questions) if text.casefold() not in seen][:4]
 
 
-def _student_answer(db: Session, plan: dict, courses: list[Course]) -> tuple[str, int]:
+def _student_answer(db: Session, plan: dict, courses: list[Course], enrolment_scope=None) -> tuple[str, int]:
     course_ids = [course.id for course in courses]
     resolution = resolve_student(
-        db, course_ids, hint=plan.get("student_hint"), student_id=plan.get("student_id")
+        db, course_ids, hint=plan.get("student_hint"), student_id=plan.get("student_id"), enrolment_scope=enrolment_scope
     )
     if not resolution.student:
         if len(resolution.matches) > 1:
@@ -470,7 +471,9 @@ def _student_answer(db: Session, plan: dict, courses: list[Course]) -> tuple[str
     course = _match_course(courses, plan.get("course_code") or plan.get("course_hint"))
     if (plan.get("course_code") or plan.get("course_hint")) and not course:
         return "I could not find that course in your assigned courses.", 0
-    rates = student_course_rates(db, student, course_ids, course.id if course else None)
+    rates = student_course_rates(db, student, course_ids, course.id if course else None, enrolment_scope)
+    if not rates:
+        return "I could not find that student in your teaching scope for the selected course.", 0
     intent = plan.get("intent")
     if intent == "student_attendance_rate":
         if not rates:
@@ -487,11 +490,12 @@ def _student_answer(db: Session, plan: dict, courses: list[Course]) -> tuple[str
         return f"{student.name} ({student.student_code}) account status is {status}.", 1
     if intent == "student_risk":
         rows = db.query(RiskScore, Course).join(Course, Course.id == RiskScore.course_id).filter(
-            RiskScore.student_id == student.id, RiskScore.course_id.in_([item.id for item, _, _ in rates])
+            RiskScore.student_id == student.id, RiskScore.course_id.in_([item.id for item, _, _ in rates]),
+            RiskScore.assessment_source.isnot(None)
         ).order_by(Course.course_code).all()
         if not rows:
             return f"No current risk score is available for {student.name}.", 0
-        lines = [f"{item.course_code}: {score.risk_label or 'Observing'}" for score, item in rows]
+        lines = [f"{item.course_code}: {score.risk_label + ' risk · ' if score.risk_label else ''}{score.assessment_source}" for score, item in rows]
         return f"{student.name} risk status:\n\n" + "\n".join(lines), len(lines)
     enrolment_groups = {item.id: group for item, group, _ in rates}
     query = db.query(ClassSession, Course).join(Course, Course.id == ClassSession.course_id).filter(
@@ -541,7 +545,7 @@ def _plural(count: int, word: str, many: str | None = None) -> str:
     return f"{count} {word if count == 1 else (many or word + 's')}"
 
 
-def _day_attendance(db: Session, plan: dict, scope: list[str], note) -> tuple[str, int]:
+def _day_attendance(db: Session, plan: dict, scope: list[str], note, enrolment_scope=None) -> tuple[str, int]:
     """Who was absent (no present or approved-leave record) or present in the classes that finished in a campus-time window."""
     present = plan.get("intent") == "present_count"
     start, end, label = _window(plan.get("date_scope"))
@@ -554,8 +558,11 @@ def _day_attendance(db: Session, plan: dict, scope: list[str], note) -> tuple[st
     later = f" {_plural(running, 'class is', 'classes are')} still in progress and not counted yet." if running else ""
     if not finished:
         return f"No classes finished {label} in your courses, so there is no attendance to count yet.{later}", 0
-    enrolled = db.query(Enrolment.student_id, Enrolment.course_id, Enrolment.class_group, Student.name, Student.student_code).join(
-        Student, Student.id == Enrolment.student_id).filter(Enrolment.course_id.in_({course.id for _, course in finished})).all()
+    enrolled_query = db.query(Enrolment.student_id, Enrolment.course_id, Enrolment.class_group, Student.name, Student.student_code).join(
+        Student, Student.id == Enrolment.student_id).filter(Enrolment.course_id.in_({course.id for _, course in finished}))
+    if enrolment_scope is not None:
+        enrolled_query = enrolled_query.filter(enrolment_scope)
+    enrolled = enrolled_query.all()
     if group:
         enrolled = [row for row in enrolled if (row.class_group or "").casefold() == group.casefold()]
     marks = {(row.student_id, row.session_id): row.status for row in db.query(
@@ -568,7 +575,7 @@ def _day_attendance(db: Session, plan: dict, scope: list[str], note) -> tuple[st
         places += len(expected)
         for row in expected:
             status = marks.get((row.student_id, session.id))
-            if (status == "present") if present else (status not in {"present", "leave"}):
+            if (status == "present") if present else (status not in CREDITED_STATUSES):
                 students.add(row.student_id)
                 lines.append(f"{row.name} ({row.student_code}) — {course.course_code} {session.class_group} · {_when(session.scheduled_start or session.opened_at)}")
     note(f"Checked {_plural(places, 'expected attendance')} against the attendance records")
@@ -611,14 +618,14 @@ def _schedule(db: Session, plan: dict, scope: list[str], note) -> tuple[str, int
     return f"{head}\n\n{_numbered(lines)}", len(rows)
 
 
-def _answer_from_database(db: Session, plan: dict, courses: list[Course], note=None) -> tuple[str, int]:
+def _answer_from_database(db: Session, plan: dict, courses: list[Course], note=None, enrolment_scope=None, formal_risk=False) -> tuple[str, int]:
     """Every answer is written here from database rows inside the caller's own course scope; note() reports what was read."""
     note = note or (lambda _text: None)
     intent = plan.get("intent")
     if intent == "unsupported":
         return _DOMAIN_REPLY, 0
     if str(intent).startswith("student_"):
-        return _student_answer(db, plan, courses)
+        return _student_answer(db, plan, courses, enrolment_scope)
     course_hint = plan.get("course_code") or plan.get("course_hint")
     course = _match_course(courses, course_hint)
     if course_hint and not course:
@@ -627,14 +634,31 @@ def _answer_from_database(db: Session, plan: dict, courses: list[Course], note=N
     if not scope:
         return "You have no courses in the current semester.", 0
     where = (f" in {course.course_code}" if course else " across your courses") + (f" {plan['group']}" if plan.get("group") else "")
+    visible = db.query(Enrolment).filter(Enrolment.course_id.in_(scope))
+    if enrolment_scope is not None:
+        visible = visible.filter(enrolment_scope)
+    if plan.get("group"):
+        visible = visible.filter(func.lower(Enrolment.class_group) == str(plan["group"]).lower())
     if intent == "my_courses":
-        counts = dict(db.query(Enrolment.course_id, func.count()).filter(Enrolment.course_id.in_(scope)).group_by(Enrolment.course_id).all())
+        counts = dict(visible.with_entities(Enrolment.course_id, func.count()).group_by(Enrolment.course_id).all())
         chosen = [c for c in courses if c.id in scope]
         note(f"Counted enrolments in {_plural(len(chosen), 'course')}")
         lines = [f"{c.course_code} — {c.course_name} · {_plural(counts.get(c.id, 0), 'student')}" for c in chosen]
         return f"{_plural(len(chosen), 'course')} you can ask about:\n\n{_numbered(lines)}", len(chosen)
+    if intent == "risk_list" and formal_risk:
+        pairs = visible.with_entities(Enrolment.student_id, Enrolment.course_id).distinct().subquery()
+        results = db.query(RiskScore, Student, Course).join(Student, Student.id == RiskScore.student_id).join(
+            Course, Course.id == RiskScore.course_id,
+        ).join(pairs, (pairs.c.student_id == RiskScore.student_id) & (pairs.c.course_id == RiskScore.course_id)).filter(
+            RiskScore.assessment_source.isnot(None), RiskScore.risk_label.in_(("high", "medium")),
+        ).order_by(RiskScore.risk_score.desc()).limit(_MAX_ROWS).all()
+        if not results:
+            return "No current medium- or high-risk assessments are available in your teaching scope.", 0
+        lines = [f"{student.name} ({student.student_code}) — {course.course_code} · {score.risk_label} risk · {score.assessment_source}"
+                 for score, student, course in results]
+        return _numbered(lines), len(lines)
     if intent in {"course_average", "course_attendance", "group_attendance", "risk_list"}:
-        rates = scoped_student_rates(db, scope, plan.get("group"))
+        rates = scoped_student_rates(db, scope, plan.get("group"), enrolment_scope)
         note(f"Calculated live attendance for {_plural(len(rates), 'student course record')} (the same rule as the dashboard)")
         if not rates:
             return "No matching attendance data is available.", 0
@@ -658,6 +682,8 @@ def _answer_from_database(db: Session, plan: dict, courses: list[Course], note=N
         query = db.query(Student.name, Student.student_code, Course.course_code, Enrolment.class_group).join(Enrolment, Enrolment.student_id == Student.id).join(Course, Course.id == Enrolment.course_id).filter(Enrolment.course_id.in_(scope))
         if plan.get("group"):
             query = query.filter(func.lower(Enrolment.class_group) == str(plan["group"]).lower())
+        if enrolment_scope is not None:
+            query = query.filter(enrolment_scope)
         total = query.count()
         students = query.with_entities(func.count(func.distinct(Student.id))).scalar() or 0
         rows = query.order_by(Student.name, Course.course_code).limit(_MAX_ROWS).all()
@@ -667,7 +693,7 @@ def _answer_from_database(db: Session, plan: dict, courses: list[Course], note=N
         lines = [f"{r.name} ({r.student_code}) — {r.course_code} {r.class_group}" for r in rows]
         return f"Found {_plural(students, 'enrolled student')}{where}:\n\n{_numbered(lines, total)}", students
     if intent in {"present_count", "absent_count"}:
-        return _day_attendance(db, plan, scope, note)
+        return _day_attendance(db, plan, scope, note, enrolment_scope)
     if intent in {"session_list", "timetable"}:
         return _schedule(db, plan, scope, note)
     if intent == "session_attendance":
@@ -678,9 +704,12 @@ def _answer_from_database(db: Session, plan: dict, courses: list[Course], note=N
         if not session_row:
             return "No matching class session was found.", 0
         session, item = session_row
+        member_ids = visible.filter(Enrolment.course_id == item.id)
+        if session.class_group != "All":
+            member_ids = member_ids.filter(Enrolment.class_group == session.class_group)
         rows = db.query(Student.name, Student.student_code, AttendanceRecord.status).join(
             AttendanceRecord, AttendanceRecord.student_id == Student.id
-        ).filter(AttendanceRecord.session_id == session.id).order_by(Student.name).limit(_MAX_ROWS).all()
+        ).filter(AttendanceRecord.session_id == session.id, Student.id.in_(member_ids.with_entities(Enrolment.student_id))).order_by(Student.name).limit(_MAX_ROWS).all()
         note(f"Read the attendance list of {item.course_code} {session.class_group} on {_when(session.scheduled_start or session.opened_at)}")
         if not rows:
             return f"No attendance records are available for {item.course_code} {session.class_group}.", 0
@@ -778,7 +807,13 @@ async def _answer_question(body: QueryRequest, db: Session, current_user: User, 
                     memories = await _memory_context(db, current_user.id, question) if not body.temporary else []
                     answer = 'Temporary chats do not access saved conversations.' if body.temporary else (("Relevant earlier questions:\n\n" + "\n".join(f"- {item}" for item in memories)) if memories else "I could not find a relevant earlier discussion.")
                 else:
-                    answer, row_count = _answer_from_database(db, plan, courses, step)
+                    enrolment_scope = None
+                    if current_user.role == "lecturer":
+                        lecturer = db.query(Lecturer).filter_by(user_id=current_user.id).one_or_none()
+                        if lecturer:
+                            enrolment_scope = teaching_group_filter(db, lecturer.id)
+                    formal_risk = bool(re.search(r"\b(?:high|at)[ -]?risk\b", question, re.I))
+                    answer, row_count = _answer_from_database(db, plan, courses, step, enrolment_scope, formal_risk)
                 if plan.get("intent") != "unsupported":
                     next_context = dict(session.context_state or {})
                     if plan.get("resolved_student_id"):

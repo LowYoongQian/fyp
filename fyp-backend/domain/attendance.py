@@ -18,6 +18,18 @@ Policy (must stay in sync across both consumers):
 from fastapi import HTTPException
 
 from ml.features import compute_features
+
+APPROVED_LEAVE_STATUSES = ("leave", "mc_approved")
+CREDITED_STATUSES = ("present", *APPROVED_LEAVE_STATUSES)
+
+
+def attendance_status(status):
+    return "leave" if status == "mc_approved" else status
+
+
+def preserve_approved_leave(record):
+    if record and record.status in APPROVED_LEAVE_STATUSES:
+        raise HTTPException(409, "This attendance record is covered by approved medical leave")
 from db.models import AttendanceRecord, ClassSession, Enrolment
 
 

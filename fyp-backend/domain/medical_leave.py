@@ -12,6 +12,7 @@ from db.models import (
     Student,
     UserNotification,
 )
+from domain.attendance import preserve_approved_leave
 from utils.timeutil import local_offset, utcnow
 
 
@@ -72,6 +73,7 @@ def review_attendance_request(db, row, decision, reviewer_id, note):
                     AttendanceRecord.student_id == row.student_id,
                     AttendanceRecord.session_id == row.session_id,
                 ).first()
+                preserve_approved_leave(record)
                 if not record:
                     record = AttendanceRecord(student_id=row.student_id, session_id=row.session_id)
                     db.add(record)

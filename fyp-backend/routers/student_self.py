@@ -25,7 +25,7 @@ from db.models import (
 )
 from utils.security import require_student
 from utils.db_helpers import require_own_profile
-from domain.attendance import session_hours, attendance_rate_percent, completed_class_count
+from domain.attendance import CREDITED_STATUSES, session_hours, attendance_rate_percent, completed_class_count
 from utils.timeutil import utcnow
 
 router = APIRouter(prefix="/students/me", tags=["Student Self-Service"])
@@ -106,7 +106,7 @@ def get_my_enrolments(
     attended = {
         (student.id, sid) for (sid,) in db.query(AttendanceRecord.session_id).filter(
             AttendanceRecord.student_id == student.id,
-            AttendanceRecord.status.in_(["present", "leave"]),
+            AttendanceRecord.status.in_(CREDITED_STATUSES),
         ).all()
     }
 

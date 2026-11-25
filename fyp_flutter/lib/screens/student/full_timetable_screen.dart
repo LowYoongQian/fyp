@@ -11,11 +11,13 @@ import '../../widgets/glass_card.dart';
 class FullTimetableScreen extends StatefulWidget {
   final List<Map<String, dynamic>> schedule;
   final Future<List<Map<String, dynamic>>> Function() onRefresh;
+  final Future<List<Map<String, dynamic>>> Function(DateTime)? onWeek;
 
   const FullTimetableScreen({
     super.key,
     required this.schedule,
     required this.onRefresh,
+    this.onWeek,
   });
 
   @override
@@ -43,7 +45,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     'SUN',
   ];
   late DateTime _weekMonday;
-  SemesterWindow? get _semester => sharedSemester(_schedule);
+  SemesterWindow? get _semester => sharedSemester(_schedule) ?? sharedSemester(widget.schedule);
 
   /// "2–8 Nov" or "27 Oct – 2 Nov".
   String _rangeLabel(DateTime a, DateTime b) => dayRange(a, b);
@@ -63,6 +65,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
 
   late PageController _pageController;
   late List<Map<String, dynamic>> _schedule;
+  int _scheduleRequest = 0;
 
   @override
   void initState() {
@@ -80,14 +83,21 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
   @override
   void didUpdateWidget(covariant FullTimetableScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.schedule, widget.schedule)) {
+    if (_weekMonday == _thisMonday && !identical(oldWidget.schedule, widget.schedule)) {
       _schedule = List<Map<String, dynamic>>.from(widget.schedule);
     }
   }
 
   Future<void> _refreshSchedule() async {
-    final latestSchedule = await widget.onRefresh();
-    if (!mounted) return;
+    final request = ++_scheduleRequest;
+    final week = _weekMonday;
+    final start = _semester?.start;
+    final onDate = start != null && start.isAfter(week) ? start : week;
+    final onWeek = widget.onWeek;
+    final latestSchedule = onWeek == null || week == _thisMonday
+        ? await widget.onRefresh()
+        : await onWeek(onDate);
+    if (!mounted || request != _scheduleRequest) return;
     setState(() {
       _schedule = List<Map<String, dynamic>>.from(latestSchedule);
     });
@@ -142,7 +152,17 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
     return remaining == 0 ? tr('{h}h', {'h': hours}) : tr('{h}h {m}m', {'h': hours, 'm': remaining});
   }
 
-  void _shiftWeek(int weeks) => setState(() => _weekMonday = _weekMonday.add(Duration(days: 7 * weeks)));
+  void _shiftWeek(int weeks) {
+    _selectWeek(_weekMonday.add(Duration(days: 7 * weeks)));
+  }
+
+  void _selectWeek(DateTime monday) {
+    setState(() {
+      _weekMonday = monday;
+      _schedule = monday == _thisMonday ? List.of(widget.schedule) : [];
+    });
+    _refreshSchedule();
+  }
 
   /// Previous / next stay inside the semester's weeks when there are semester dates.
   bool get _canGoBack => _semester == null || _weekMonday.isAfter(_semester!.firstMonday);
@@ -151,10 +171,8 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
 
   void _goToToday() {
     final today = math.min(6, math.max(0, ApiConfig.now.weekday - 1));
-    setState(() {
-      _weekMonday = _thisMonday;
-      _selectedDayIndex = today;
-    });
+    _selectWeek(_thisMonday);
+    setState(() => _selectedDayIndex = today);
     if (_pageController.hasClients) {
       _pageController.animateToPage(today, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
     }
@@ -284,7 +302,7 @@ class _FullTimetableScreenState extends State<FullTimetableScreen> {
         ),
       ),
     );
-    if (selected != null && mounted) setState(() => _weekMonday = selected);
+    if (selected != null && mounted) _selectWeek(selected);
   }
 
   @override

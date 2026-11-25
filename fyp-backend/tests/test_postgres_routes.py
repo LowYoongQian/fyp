@@ -240,7 +240,16 @@ def test_mfa_login_never_issues_token_before_valid_single_use_code(pg, monkeypat
     call(pg,'POST','/auth/login/verify',dict(challenge_token=challenge['challenge_token'],code=pyotp.TOTP(secret).now()),role='anonymous',expected=401)
 
 
-def test_assignment_create_duplicate_remove_and_timetable_room_conflict(pg):
+@pytest.fixture
+def before_teaching_hours(monkeypatch):
+    from routers import admin_academic
+    # Clash tests edit unbound courses before classes start. The live-window
+    # refusal has its own test and otherwise masks the clash on some weekdays.
+    morning = datetime.combine(campus_now().date(), time(6))
+    monkeypatch.setattr(admin_academic, 'campus_now', lambda: morning)
+
+
+def test_assignment_create_duplicate_remove_and_timetable_room_conflict(pg, before_teaching_hours):
     _,staff=provision(pg,'staff')
     programme,course,body=academic(pg)
     assignment=dict(course_id=course['id'],lecturer_id=str(staff.id),role='Lecturer')
@@ -412,10 +421,14 @@ def test_analytics_course_ownership_and_removed_enrolment_hides_stale_scores(pg)
     pg[2]['teacher']={'Authorization':'Bearer '+login['access_token']}
     own=pg[0].get(Course,lesson.course_id)
     own.lecturer_id=staff.id
+    pg[0].query(ClassMeeting).filter_by(course_id=own.id, role='Lecture').one().lecturer_id=staff.id
     foreign=Course(course_code='FOREIGN-QA',course_name='Foreign Course')
     pg[0].add(foreign);pg[0].flush()
     pg[0].add(Enrolment(student_id=student.id,course_id=foreign.id,class_group='G1'))
-    pg[0].add_all([RiskScore(student_id=student.id,course_id=own.id,risk_score=.2,risk_label='low',attendance_rate=.9),RiskScore(student_id=student.id,course_id=foreign.id,risk_score=.8,risk_label='high',attendance_rate=.3)])
+    pg[0].add_all([RiskScore(student_id=student.id,course_id=own.id,risk_score=.2,risk_label='low',attendance_rate=.9,
+                            assessment_source='ML Prediction'),
+                   RiskScore(student_id=student.id,course_id=foreign.id,risk_score=.8,risk_label='high',attendance_rate=.3,
+                             assessment_source='ML Prediction')])
     pg[0].commit()
     call(pg,'GET','/analytics/risk-scores',role='anonymous',expected=401)
     call(pg,'GET','/analytics/risk-scores',role='enrolled',expected=403)
@@ -606,11 +619,13 @@ def test_flow_b_staff_opens_student_checks_in_auto_closes_at_5pm_three_roles_agr
     programme,course,body=academic(pg)
     call(pg,'PUT','/admin/courses/'+course['id'],{**body,'lecturer_id':str(teacher.id)})
     today=campus_now().date()
+    meeting=pg[0].query(ClassMeeting).one()
+    # The timetable must already be effective when the simulated 3pm lesson starts.
+    monkeypatch.setattr('routers.admin_academic.utcnow', lambda: datetime.combine(today, time(6)))
+    call(pg,'PUT','/admin/timetable/'+str(meeting.id),dict(day=today.strftime('%A'),start='15:00',end='17:00',room='Flow B Room'))
     call(pg,'POST','/admin/semesters',dict(programme_id=programme['id'],name='Flow B Term',start_date=str(today),semester_type='short',course_ids=[course['id']]),expected=201)
     call(pg,'PUT','/admin/students/'+str(student.id)+'/programme',dict(programme_id=programme['id']))
     call(pg,'POST','/admin/enrolments',dict(student_id=str(student.id),course_id=course['id'],class_group='G1'),expected=201)
-    meeting=pg[0].query(ClassMeeting).one()
-    call(pg,'PUT','/admin/timetable/'+str(meeting.id),dict(day=today.strftime('%A'),start='15:00',end='17:00',room='Flow B Room'))
     for role,identity in [('flow_student',student_body),('flow_staff',teacher_body)]:
         result=call(pg,'POST','/auth/login',dict(identifier=identity['email'],password=identity['password']),role='anonymous')
         pg[2][role]={'Authorization':'Bearer '+result['access_token']}
@@ -756,6 +771,9 @@ def test_class_today_reuses_regular_row_and_includes_staff_replacement(pg, monke
     signed_in = call(pg, 'POST', '/auth/login', {'identifier': staff_body['staff_id'], 'password': staff_body['password']}, role='anonymous')
     pg[2]['teacher'] = {'Authorization': 'Bearer ' + signed_in['access_token']}
     today = campus_now().date()
+    meeting = pg[0].query(ClassMeeting).one()
+    monkeypatch.setattr('routers.admin_academic.utcnow', lambda: datetime.combine(today, time(6)))
+    call(pg, 'PUT', f'/admin/timetable/{meeting.id}', {'day': today.strftime('%A'), 'start': '15:00', 'end': '17:00', 'room': 'Room A'})
     call(pg, 'POST', '/admin/semesters', {
         'programme_id': programme['id'], 'name': 'Synthetic Today Term',
         'start_date': str(today), 'semester_type': 'short', 'course_ids': [course['id']],
@@ -763,15 +781,15 @@ def test_class_today_reuses_regular_row_and_includes_staff_replacement(pg, monke
     now = datetime.combine(today, time(7, 30))
     monkeypatch.setattr(sessions, 'utcnow', lambda: now)
     monkeypatch.setattr(sessions, 'campus_now', lambda: now + timedelta(hours=8))
-    meeting = pg[0].query(ClassMeeting).one()
-    call(pg, 'PUT', f'/admin/timetable/{meeting.id}', {'day': today.strftime('%A'), 'start': '15:00', 'end': '17:00', 'room': 'Room A'})
     original, = call(pg, 'GET', '/sessions/today', role='teacher')
     assert original['status'] == 'scheduled' and original['course_code'] == course['course_code']
     assert call(pg, 'GET', '/sessions/today', role='teacher') == [original]
     path = f"/sessions/{original['id']}"
     call(pg, 'POST', path + '/cancel', {'reason': 'Synthetic timetable change'}, role='teacher')
+    replacement_start = now + timedelta(hours=2)
     replacement = call(pg, 'POST', path + '/replacement', {
-        'scheduled_start': now.isoformat(), 'scheduled_end': (now + timedelta(hours=1)).isoformat(), 'room': 'Room B',
+        'scheduled_start': replacement_start.isoformat(),
+        'scheduled_end': (replacement_start + timedelta(hours=2)).isoformat(), 'room': 'Room B',
     }, role='teacher', expected=201)
     original_after, replacement_today = call(pg, 'GET', '/sessions/today', role='teacher')
     assert original_after['id'] == original['id'] and original_after['status'] == 'cancelled'
@@ -782,7 +800,7 @@ def test_class_today_reuses_regular_row_and_includes_staff_replacement(pg, monke
     pg[0].commit()
     attention, = call(pg, 'GET', '/sessions/needs-attention', role='teacher')
     assert attention['id'] == replacement['id'] and attention['course_code'] == course['course_code']
-    now += timedelta(hours=2)
+    now = replacement_start + timedelta(hours=2)
     held = call(pg, 'POST', f"/sessions/{replacement['id']}/held", role='teacher')
     assert held['status'] == 'completed' and held['is_open'] is False
     assert pg[0].query(ClassSession).count() == 2
@@ -974,7 +992,7 @@ def test_batch_roles_are_atomic_and_retries_keep_the_same_meetings(pg, monkeypat
     assert {m.id for m in db.query(ClassMeeting)} == meetings
 
 
-def test_assigning_lecturer_rejects_overlapping_lecture_without_saving_roles(pg):
+def test_assigning_lecturer_rejects_overlapping_lecture_without_saving_roles(pg, before_teaching_hours):
     from db.models import CourseStaffAssignment
     db = pg[0]
     _, staff = provision(pg, "staff")

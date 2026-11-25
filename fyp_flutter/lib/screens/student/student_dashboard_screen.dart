@@ -61,6 +61,7 @@ class MainScreen extends StatefulWidget {
   final Future<void> Function()? onAttendanceRefresh;
   final Future<void> Function()? onAnnouncementsRefresh;
   final Future<List<Map<String, dynamic>>> Function() onTimetableRefresh;
+  final Future<List<Map<String, dynamic>>> Function(DateTime)? onTimetableWeek;
   final Function(
     dynamic,
     String,
@@ -93,6 +94,7 @@ class MainScreen extends StatefulWidget {
     this.onAttendanceRefresh,
     this.onAnnouncementsRefresh,
     required this.onTimetableRefresh,
+    this.onTimetableWeek,
     required this.onCheckInComplete,
     required this.onRegisterFace,
     this.onFaceStatusRefresh,
@@ -557,6 +559,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 builder: (context) => FullTimetableScreen(
                   schedule: widget.studentSchedule,
                   onRefresh: widget.onTimetableRefresh,
+                  onWeek: widget.onTimetableWeek,
                 ),
               ),
             );

@@ -18,7 +18,7 @@ from db.models import (
     Announcement, AttendanceRecord, AttendanceRequest, ClassMeeting, ClassSession, Course,
     CourseStaffAssignment, Enrolment, Lecturer, Student, User, UserNotification,
 )
-from domain.attendance import session_hours, require_session_enrolment
+from domain.attendance import CREDITED_STATUSES, attendance_status, session_hours, require_session_enrolment
 from domain.scheduler import get_course_group_slots, session_checkin_state
 from domain import semesters, timetable_access
 from domain.announcements import visible_announcements
@@ -86,16 +86,17 @@ def _new_announcement_event(user, announcement):
     return user.created_at is None or occurred_at >= user.created_at
 
 
-def notify_timetable_change(db: Session, meeting: ClassMeeting, old_slot: str) -> None:
+def notify_timetable_change(db: Session, meeting: ClassMeeting, old_slot: str, effective_date=None) -> None:
     course = meeting.course or db.get(Course, meeting.course_id)
+    new_slot = f"{meeting.day} {meeting.start}-{meeting.end}, {meeting.room}"
+    effective = f" (effective {effective_date.isoformat()}, Malaysia time)" if effective_date else ""
     if meeting.lecturer_id:
         lecturer = db.get(Lecturer, meeting.lecturer_id)
         if lecturer and lecturer.user_id:
-            new_slot = f"{meeting.day} {meeting.start}-{meeting.end}, {meeting.room}"
             add_notification(
-                db, lecturer.user_id, "timetable_change", "Class time changed",
-                f"{course.course_code}: {old_slot} → {new_slot}",
-                f"meeting:{meeting.id}:{meeting.day}:{meeting.start}:{meeting.end}:{meeting.room}",
+                db, lecturer.user_id, "timetable_change", "Timetable updated",
+                f"{course.course_code}: {old_slot} → {new_slot}{effective}",
+                f"meeting:{meeting.id}:{new_slot}:{effective_date}",
                 {"meeting_id": meeting.id, "course_id": meeting.course_id},
             )
     enrolments = db.query(Enrolment).filter(Enrolment.course_id == meeting.course_id).all()
@@ -104,11 +105,10 @@ def notify_timetable_change(db: Session, meeting: ClassMeeting, old_slot: str) -
             continue
         student = db.get(Student, enrolment.student_id)
         if student and student.user_id:
-            new_slot = f"{meeting.day} {meeting.start}-{meeting.end}, {meeting.room}"
             add_notification(
-                db, student.user_id, "timetable_change", "Class time changed",
-                f"{course.course_code}: {old_slot} → {new_slot}",
-                f"meeting:{meeting.id}:{meeting.day}:{meeting.start}:{meeting.end}:{meeting.room}",
+                db, student.user_id, "timetable_change", "Timetable updated",
+                f"{course.course_code}: {old_slot} → {new_slot}{effective}",
+                f"meeting:{meeting.id}:{new_slot}:{effective_date}",
                 {"meeting_id": meeting.id, "course_id": meeting.course_id},
             )
 
@@ -205,7 +205,7 @@ def student_attendance_overview(db: Session = Depends(get_db), current_user: Use
         earned = sum(
             session_hours(s.opened_at, s.closed_at,
                           scheduled_start=s.scheduled_start, scheduled_end=s.scheduled_end) for s in held
-            if record_by_session.get(s.id) and record_by_session[s.id].status in ("present", "leave")
+            if record_by_session.get(s.id) and record_by_session[s.id].status in CREDITED_STATUSES
         )
         rate = round((earned / total * 100) if total else 100.0, 1)
         average = (total / len(held)) if held else 2.0
@@ -308,6 +308,7 @@ def student_attendance_sessions(scope: Literal["all", "current"] = Query("all"),
     meetings = db.query(ClassMeeting).filter(
         ClassMeeting.course_id.in_(list(groups))
     ).all()
+    meetings_by_id = {meeting.id: meeting for meeting in meetings}
     lecturer_ids = {meeting.lecturer_id for meeting in meetings if meeting.lecturer_id}
     lecturer_by_id = {
         row.id: row for row in db.query(Lecturer).filter(Lecturer.id.in_(lecturer_ids)).all()
@@ -336,7 +337,12 @@ def student_attendance_sessions(scope: Literal["all", "current"] = Query("all"),
         return (user.profile_name or user.email) if user else fallback
 
     def matching_meeting(session: ClassSession) -> ClassMeeting | None:
-        local_start = session.opened_at + local_offset()
+        if session.meeting_id in meetings_by_id:
+            return meetings_by_id[session.meeting_id]
+        when = session.scheduled_start or session.opened_at
+        if when is None:
+            return None
+        local_start = when + local_offset()
         day = local_start.strftime("%A")
         start = local_start.strftime("%H:%M")
         candidates = [
@@ -379,10 +385,10 @@ def student_attendance_sessions(scope: Literal["all", "current"] = Query("all"),
             "class_group": session.class_group,
             "enrolled_group": groups[session.course_id],
             "class_type": class_type,
-            "room": meeting.room if meeting else None,
+            "room": session.room or (meeting.room if meeting else None),
             "staff_name": lecturer.name if lecturer else "Not assigned",
             "staff_role": class_type,
-            "status": record.status if record else "absent",
+            "status": attendance_status(record.status) if record else "absent",
             "taken_by": taken_by,
             "taken_at": iso_utc(request.reviewed_at) if request and request.reviewed_at else iso_utc(record.marked_at) if record else None,
             "network_ip": record.source_ip if record else None,
@@ -418,7 +424,7 @@ def reconcile_offline_checkin(session_id: str, body: OfflineRecovery,
     record = db.query(AttendanceRecord).filter(
         AttendanceRecord.student_id == student.id, AttendanceRecord.session_id == session_id,
     ).first()
-    if record and record.status in ("present", "leave"):
+    if record and record.status in CREDITED_STATUSES:
         return {"status": "synced" if record.status == "present" else "excused"}
     # Reuse any correction for this student/class, including a previous rejection.
     # Serializing on the class also prevents concurrent retries creating two requests.

@@ -25,6 +25,7 @@ Future<void> until(WidgetTester tester,FutureOr<bool> Function() ready) async {
   }
 }
 Future<dynamic> rootFor(WidgetTester tester) async {
+  app.ApiConfig.pinIntegrationTestServer(qaServer);
   await control('reset');
   final prefs=await SharedPreferences.getInstance();
   await prefs.setString('custom_api_url',qaServer); // Real Android preference storage; no clear/reset.
@@ -44,6 +45,7 @@ Future<void> workWithFrames(WidgetTester tester,Future<void> work) async {
 }
 Future<void> sync(WidgetTester tester,dynamic root) => workWithFrames(tester,root.syncData(root.context));
 void main() {
+  app.ApiConfig.pinIntegrationTestServer(qaServer);
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets('native SQLite owner and server scopes preserve independent caches',(tester) async {
     const a='native-scope-A',b='native-scope-B',one='https://synthetic-one.invalid',two='https://synthetic-two.invalid';

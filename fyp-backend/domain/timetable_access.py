@@ -59,8 +59,8 @@ def schedule_viewable(course) -> bool:
 def lecture_slot(course, meeting) -> dict:
     """The schedule_* fields for a course's lecture in a course list: the real values only when the schedule may be shown, otherwise null."""
     shown = meeting is not None and schedule_viewable(course)
-    return {"schedule_day": meeting.day if shown else None, "schedule_start": meeting.start if shown else None,
-            "schedule_end": meeting.end if shown else None, "schedule_room": meeting.room if shown else None}
+    return {"schedule_day": meeting["day"] if shown else None, "schedule_start": meeting["start"] if shown else None,
+            "schedule_end": meeting["end"] if shown else None, "schedule_room": meeting["room"] if shown else None}
 
 
 def _scope(db: Session, user):

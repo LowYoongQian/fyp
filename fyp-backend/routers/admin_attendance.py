@@ -15,7 +15,7 @@ from domain.scheduler import calculate_schedule, get_course_group_slots, session
 from utils.timeutil import local_offset
 from db.models import User, Student, Course, CourseStaffAssignment, Enrolment, ClassMeeting, ClassSession, AttendanceRecord, Lecturer
 from utils.security import require_admin
-from domain.attendance import require_session_enrolment
+from domain.attendance import preserve_approved_leave, require_session_enrolment
 from domain.attendance_audit import attendance_snapshot, audit_attendance_edit
 from utils.db_helpers import get_or_404
 from schemas import (
@@ -249,6 +249,7 @@ def update_admin_attendance(
     before = attendance_snapshot(record)
     recorded_at = utcnow()
     if record:
+        preserve_approved_leave(record)
         record.status = body.status
         record.method = f"admin_override:{current_user.id}"
         record.network_verified = body.wifi_verified

@@ -4,6 +4,11 @@ const {chromium, expect, localUrl} = require('../../qa/browser.cjs');
 localUrl(process.env.MC_API);
 const data = JSON.parse(process.env.MC_SCENARIO);
 const origin = 'http://127.0.0.1:5179';
+const decision = process.env.MC_REVIEW_DECISION || 'approved';
+assert.ok(['approved', 'rejected'].includes(decision));
+const action = decision === 'approved' ? 'Approve' : 'Reject';
+const status = decision === 'approved' ? 'Approved' : 'Rejected';
+const expectedRate = decision === 'approved' ? 100 : 50;
 
 (async () => {
   const browser = await chromium.launch();
@@ -48,16 +53,16 @@ const origin = 'http://127.0.0.1:5179';
     await row.getByRole('button',{name:'Inspect MC Proof'}).click();
     await expect(a.getByAltText('Medical Certificate Proof')).toBeVisible();
     await expect.poll(()=>a.getByAltText('Medical Certificate Proof').evaluate(el=>el.complete&&el.naturalWidth>0)).toBe(true);
-    await a.getByRole('button',{name:'Approve MC',exact:true}).click();
-    await a.getByRole('button',{name:'Yes, Approve MC',exact:true}).click();
+    await a.getByRole('button',{name:action+' MC',exact:true}).click();
+    await a.getByRole('button',{name:'Yes, '+action+' MC',exact:true}).click();
     await expect(a.getByText('MC Updated',{exact:true})).toBeVisible();
     await p.reload();
-    await expect(p.getByRole('row').filter({hasText:'Playwright medical recovery'}).getByText('Approved',{exact:true})).toBeVisible();
+    await expect(p.getByRole('row').filter({hasText:'Playwright medical recovery'}).getByText(status,{exact:true})).toBeVisible();
     const h={Authorization:`Bearer ${student.session.access_token}`};
     const enrolments=await (await student.context.request.get(`${process.env.MC_API}/students/me/enrolments`,{headers:h})).json();
-    assert.equal(enrolments[0].attendance_rate,100);
+    assert.equal(enrolments[0].attendance_rate,expectedRate);
     await p.screenshot({path:path.join(__dirname,'artifacts','mc-student-success.png'),fullPage:true});
-    console.log('PASS: real browser multipart upload, real proof preview, admin approval, student Approved, actual attendance rate 100%; request '+request.id);
+    console.log('PASS: real browser multipart upload, real proof preview, admin '+decision+', student '+status+', actual attendance rate '+expectedRate+'%; request '+request.id);
   } catch(error) {
     for(const [name,user] of [['student',student],['admin',admin]]) if(user) {
       console.error(name, (await user.page.locator('body').innerText()).slice(-2400));

@@ -60,6 +60,8 @@ class _StaffDashboardState extends State<StaffDashboard> {
   final Set<String> _busyLessons = {};   // classes whose open / cancel / held / replacement request is on its way
 
   List<dynamic> myTimetable = [];
+  List<dynamic> _nextWeekTimetable = [];
+  String? _nextWeekDate;
   List<dynamic> myActiveSessions = [];
   List<dynamic> todayClasses = [];
   List<dynamic> classesNeedingAttention = [];
@@ -190,20 +192,20 @@ class _StaffDashboardState extends State<StaffDashboard> {
     final token = widget.authToken, server = widget.apiBaseUrl, cacheKey = _timetableCacheKey;
     bool current() => mounted && token == widget.authToken && server == widget.apiBaseUrl;
     final uri = Uri.parse("${widget.apiBaseUrl}/lecturers/me/timetable");
-    final response = await http
-        .get(
-          uri,
-          headers: {
-            "Authorization": "Bearer ${widget.authToken}",
-            "Content-Type": "application/json",
-          },
-        )
-        .timeout(const Duration(seconds: 8));
+    Future<http.Response> fetch(Uri url) => http.get(url, headers: {
+      "Authorization": "Bearer $token",
+      "Content-Type": "application/json",
+    }).timeout(const Duration(seconds: 8));
+    final now = ApiConfig.now;
+    final nextMonday = now.add(Duration(days: 8 - now.weekday));
+    final nextWeekDate = nextMonday.toIso8601String().split('T').first;
+    final nextWeekRequest = fetch(uri.replace(queryParameters: {'on_date': nextWeekDate}))
+        .then<http.Response?>((response) => response, onError: (Object _) => null);
+    final response = await fetch(uri);
 
     if (requireSuccess && response.statusCode != 200) throw StateError('Timetable refresh rejected');
     if (!current() || response.statusCode != 200) return;
-    final List<dynamic> data = jsonDecode(response.body);
-    final timetable = data
+    List<dynamic> asTimetable(http.Response answer) => (jsonDecode(answer.body) as List<dynamic>)
         .map(
           (t) => {
             'id': t['id'],
@@ -223,9 +225,17 @@ class _StaffDashboardState extends State<StaffDashboard> {
           },
         )
         .toList();
+    final timetable = asTimetable(response);
     if (current()) setState(() => myTimetable = timetable);
     final prefs = await SharedPreferences.getInstance();
     if (current()) await prefs.setString(cacheKey, jsonEncode(timetable));
+    final nextWeek = await nextWeekRequest;
+    if (current()) {
+      setState(() {
+        _nextWeekDate = nextWeekDate;
+        _nextWeekTimetable = nextWeek?.statusCode == 200 ? asTimetable(nextWeek!) : [];
+      });
+    }
   }
 
   Future<void> fetchTodayClasses({bool requireSuccess = false}) async {
@@ -1798,7 +1808,6 @@ class _StaffDashboardState extends State<StaffDashboard> {
   }
 
   Map<String, dynamic>? _getUpcomingSlot() {
-    if (myTimetable.isEmpty) return null;
     final now = ApiConfig.now;
     final todayName = _dayOfWeekName(now.weekday);
 
@@ -1831,7 +1840,10 @@ class _StaffDashboardState extends State<StaffDashboard> {
       final targetDate = now.add(Duration(days: dayOffset));
       final targetDayName = _dayOfWeekName(targetDate.weekday);
 
-      final matchingSlots = myTimetable.where((slot) {
+      final crossesWeek = now.weekday + dayOffset > 7;
+      final expectedWeek = now.add(Duration(days: 8 - now.weekday)).toIso8601String().split('T').first;
+      final slots = crossesWeek ? (_nextWeekDate == expectedWeek ? _nextWeekTimetable : []) : myTimetable;
+      final matchingSlots = slots.where((slot) {
         return (slot['day'] as String).toLowerCase() ==
             targetDayName.toLowerCase() && (SemesterWindow.parse(slot['semester'])?.contains(targetDate) ?? true);
       }).toList();

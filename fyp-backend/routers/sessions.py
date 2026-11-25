@@ -20,21 +20,23 @@ from db.models import (
     Student,
     User,
 )
-from domain.attendance import require_session_enrolment
+from domain.attendance import attendance_status, preserve_approved_leave, require_session_enrolment
 from domain import timetable_access
 from domain.semesters import campus_date, course_semester, require_semester_date, within_semester
 from domain.checkin_challenge import consume_challenge, issue_challenge
 from domain.audit import log_audit_event
+from domain.risk_access import require_risk_access, scoped_enrolments
 from domain.attendance_audit import attendance_snapshot, audit_attendance_edit
 from domain.class_lifecycle import (
     barred_list_readiness,
     class_can_open,
-    has_active_replacement,
     mark_class_held,
     needs_admin_escalation,
 )
 from domain.medical_leave import apply_approved_medical_leave
 from domain.scheduler import (
+    active_slot,
+    schedule_versions,
     get_course_group_slots,
     lecture_meetings,
     session_checkin_state,
@@ -91,7 +93,7 @@ def require_course_access(db: Session, current_user: User, course_id: str, actio
 
 def validate_session_opening(db: Session, course_id: str, class_group: str, now: datetime,
                              meeting_id: str | None = None):
-    slots = get_course_group_slots(db, course_id, class_group)
+    slots = get_course_group_slots(db, course_id, class_group, now.date())
     if meeting_id:
         slots = [slot for slot in slots if str(slot.get("meeting_id")) == str(meeting_id)]
     if not slots:
@@ -111,6 +113,8 @@ def validate_session_opening(db: Session, course_id: str, class_group: str, now:
         if day.lower() == current_day.lower():
             try:
                 start_dt, end_dt = slot_bounds_local(slot, now.date())
+                if slot.get("effective_from") and start_dt - local_offset() < slot["effective_from"]:
+                    continue
                 
                 open_start = start_dt - timedelta(hours=1)
                 
@@ -171,7 +175,7 @@ def _audit_class_action(db: Session, user: User, action: str, lesson: ClassSessi
 
 
 def validate_student_checkin(db: Session, course_id: str, class_group: str, now: datetime):
-    slots = get_course_group_slots(db, course_id, class_group)
+    slots = get_course_group_slots(db, course_id, class_group, now.date())
     if not slots:
         return
         
@@ -280,11 +284,15 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
     """Return today's owned timetable rows, materialized without opening attendance."""
     today = campus_now().date()
     day = today.strftime("%A")
-    query = db.query(ClassMeeting).filter(ClassMeeting.day == day)
+    query = db.query(ClassMeeting)
     if current_user.role != "admin":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
         query = query.filter(ClassMeeting.lecturer_id == lecturer.id)
     meetings = query.order_by(ClassMeeting.id).with_for_update().all()
+    versions = schedule_versions(db, meetings)
+    slots = [(m, active_slot(m, versions, today)) for m in meetings]
+    slots = [(m, slot) for m, slot in slots if slot and slot["day"] == day]
+    meetings = [m for m, _ in slots]
     # The staff app refreshes this every 10 s with an 8 s limit: read courses and today's rows once, not per meeting.
     day_start, day_end = _scheduled_bounds({"start": "00:00", "end": "23:59"}, today)
     courses = {c.id: c for c in db.query(Course).filter(Course.id.in_({m.course_id for m in meetings}))} if meetings else {}
@@ -293,17 +301,19 @@ def get_todays_classes(db: Session = Depends(get_db), current_user: User = Depen
         ClassSession.scheduled_start >= day_start, ClassSession.scheduled_start <= day_end,
     )} if meetings else {}
     result = []
-    for meeting in meetings:
+    for meeting, slot in slots:
         course = courses.get(meeting.course_id)
         if not within_semester(course.semester if course and course.semester_id else None, today):
             continue
-        start, end = _scheduled_bounds({"start": meeting.start, "end": meeting.end}, today)
+        start, end = _scheduled_bounds(slot, today)
+        if slot.get("effective_from") and start < slot["effective_from"]:
+            continue
         lesson = todays_rows.get((str(meeting.id), start))
         if not lesson:
             lesson = ClassSession(
                 course_id=meeting.course_id, meeting_id=meeting.id,
                 scheduled_start=start, scheduled_end=end, status="scheduled", is_open=False,
-                class_group=_class_group(meeting), room=meeting.room,
+                class_group=_class_group(meeting), room=slot["room"],
                 semester=_semester_for(db, meeting.course_id), opened_at=None,
             )
             db.add(lesson)
@@ -385,7 +395,7 @@ def get_classes_needing_attention(db: Session = Depends(get_db),
 
 @router.post("/{id}/open", response_model=SessionResponse)
 def open_scheduled_class(id: str, db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
-    lesson = get_or_404(db, ClassSession, id, "Class")
+    lesson = _lock_class_session(db, id)
     require_course_access(db, current_user, lesson.course_id, "open this class")
     now = utcnow()
     require_semester_date(db, lesson.course_id, campus_date(now))
@@ -409,7 +419,7 @@ def open_scheduled_class(id: str, db: Session = Depends(get_db), current_user: U
 @router.post("/{id}/held", response_model=SessionResponse)
 def mark_missed_class_as_held(id: str, db: Session = Depends(get_db),
                               current_user: User = Depends(require_lecturer)):
-    lesson = get_or_404(db, ClassSession, id, "Class")
+    lesson = _lock_class_session(db, id)
     require_course_access(db, current_user, lesson.course_id, "resolve this class")
     try:
         mark_class_held(lesson, current_user.id)
@@ -428,7 +438,7 @@ def mark_missed_class_as_held(id: str, db: Session = Depends(get_db),
 @router.post("/{id}/cancel", response_model=SessionResponse)
 def cancel_class(id: str, body: ClassCancellation, db: Session = Depends(get_db),
                  current_user: User = Depends(require_lecturer)):
-    lesson = get_or_404(db, ClassSession, id, "Class")
+    lesson = _lock_class_session(db, id)
     course = require_course_access(db, current_user, lesson.course_id, "cancel this class")
     if lesson.status not in ("scheduled", "needs_attention"):
         raise HTTPException(status_code=400, detail=f"A {lesson.status} class cannot be cancelled")
@@ -445,6 +455,13 @@ def cancel_class(id: str, body: ClassCancellation, db: Session = Depends(get_db)
     return lesson
 
 
+def _lock_class_session(db: Session, id: str):
+    lesson = db.query(ClassSession).filter_by(id=id).populate_existing().with_for_update().first()
+    if lesson is None:
+        raise HTTPException(404, "Class not found")
+    return lesson
+
+
 @router.post("/{id}/replacement", response_model=SessionResponse, status_code=201)
 def arrange_replacement_class(id: str, body: ReplacementClassCreate,
                               db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
@@ -455,11 +472,25 @@ def arrange_replacement_class(id: str, body: ReplacementClassCreate,
     require_semester_date(db, course.id, campus_date(body.scheduled_end))
     if cancelled.status != "cancelled":
         raise HTTPException(status_code=400, detail="A replacement can only be arranged for a cancelled class")
-    existing_replacements = db.query(ClassSession).filter(
-        ClassSession.replacement_for_session_id == cancelled.id
-    ).all()
-    if has_active_replacement(existing_replacements):
+    from domain.replacements import replacement_descendants, replacement_root, scheduled_minutes
+    root = replacement_root(cancelled, lambda key: db.get(ClassSession, key))
+    if root is None:
+        raise HTTPException(409, "The original class could not be verified")
+    # Every branch locks the same original row before inspecting its descendants.
+    root = db.query(ClassSession).filter_by(id=root.id).populate_existing().with_for_update().one()
+    original = scheduled_minutes(root)
+    requested = (body.scheduled_end - body.scheduled_start).total_seconds()
+    if original is None or requested != original * 60:
+        raise HTTPException(400, "The replacement must match the original class duration")
+    db.refresh(cancelled)
+    if cancelled.status != "cancelled" or root.status != "cancelled":
+        raise HTTPException(409, "The original and selected classes must be cancelled")
+    descendants = replacement_descendants(db, root.id)
+    if any(row.status != "cancelled" for row in descendants):
         raise HTTPException(status_code=400, detail="A replacement class has already been arranged")
+    by_id = {row.id: row for row in [root, *descendants]}
+    if any(scheduled_minutes(row) != original or replacement_root(row, by_id.get) is not root for row in descendants):
+        raise HTTPException(409, "Existing replacement history requires review")
     replacement = ClassSession(
         course_id=cancelled.course_id, class_group=cancelled.class_group,
         scheduled_start=body.scheduled_start, scheduled_end=body.scheduled_end,
@@ -693,10 +724,10 @@ def get_session_attendance(id: str, db: Session = Depends(get_db), current_user:
     course = require_course_access(db, current_user, session.course_id, "view attendance")
 
     # Fetch all students enrolled in this course group
-    query = db.query(Student).join(Enrolment).filter(Enrolment.course_id == session.course_id)
+    visible = scoped_enrolments(db, current_user).filter(Enrolment.course_id == session.course_id)
     if session.class_group != "All":
-        query = query.filter(Enrolment.class_group == session.class_group)
-    enrolled_students = query.all()
+        visible = visible.filter(Enrolment.class_group == session.class_group)
+    enrolled_students = db.query(Student).filter(Student.id.in_(visible.with_entities(Enrolment.student_id))).all()
 
     # Fetch attendance records for this session
     records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id == id).all()
@@ -711,7 +742,7 @@ def get_session_attendance(id: str, db: Session = Depends(get_db), current_user:
                 student_id=s.id,
                 student_name=s.name,
                 student_code=s.student_code,
-                status=rec.status,
+                status=attendance_status(rec.status),
                 marked_at=rec.marked_at,
                 confidence_score=rec.confidence_score,
                 network_verified=rec.network_verified,
@@ -830,6 +861,8 @@ def update_lecturer_attendance(
         raise HTTPException(status_code=400, detail="Invalid status. Must be 'present' or 'absent'")
 
     require_session_enrolment(db, session, student_id)
+    if current_user.role == "lecturer":
+        require_risk_access(db, current_user, session.course_id, student_id)
 
     student = db.query(Student).filter(Student.id == student_id).with_for_update().one()
 
@@ -839,6 +872,7 @@ def update_lecturer_attendance(
     ).first()
     
     before = attendance_snapshot(record)
+    preserve_approved_leave(record)
     if record:
         record.status = body.status
         record.marked_at = utcnow()

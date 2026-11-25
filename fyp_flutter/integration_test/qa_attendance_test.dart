@@ -23,6 +23,7 @@ Future<void> work(WidgetTester tester,Future<void> future) async {
   if(failure!=null) throw failure!;
 }
 void main() {
+  app.ApiConfig.pinIntegrationTestServer(server);
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets('App attendance lost-response reconciliation duplicate guard and exact 5pm closure',(tester) async {
     expect(email,isNotEmpty);expect(owner,isNotEmpty);expect(lesson,isNotEmpty);

@@ -1,334 +1,78 @@
-"""
-Analytics router — computes and serves attendance risk scores.
-
-Risk is predicted per (student, course) pair by a trained Random Forest model
-(ml/risk_model.pkl). For each enrolment we build the student's attendance
-sequence in chronological order and derive 3 features:
-  - attendance_rate    : fraction of sessions attended
-  - consecutive_absent : longest run of absences in a row
-  - trend              : 2nd-half rate minus 1st-half rate (negative = declining)
-
-Attendance is credited by HOURS (a 2h lecture missed hurts more than a 1h
-tutorial), matching the rule attended_hours / total_hours >= 80%.
-
-Each (student, course) goes through a funnel of symmetric certainty gates with
-ML in the middle:
-  Layer 0  — cold start: < 30% of the semester elapsed => "observing", no verdict
-  Layer 1  — certainty (bad): if even attending every remaining hour cannot reach
-             80% (needs course.planned_total_hours), the bar is unavoidable => HIGH
-  Layer 1b — certainty (good): if the student has already secured >=80% of total
-             hours, the bar is impossible even skipping all remaining => LOW
-  Layer 2  — ML: otherwise the classifier predicts the probability of ending
-             barred, from attendance_rate + consecutive_absent + trend.
-
-risk_label is derived from risk_score:
-  < 0.35 → "low" | < 0.60 → "medium" | else → "high"
-risk_factors carries a human-readable explanation for the dashboard.
-
-POST /analytics/recompute refreshes all RiskScore rows (lecturer/admin).
-GET  /analytics/risk-scores returns the latest snapshot, optionally filtered.
-"""
+"""Attendance analytics and current, role-scoped At-Risk snapshots."""
+from collections import defaultdict
+from datetime import timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from utils.timeutil import iso_utc, local_offset, utcnow
 
 from db.database import get_db
-import math
-from db.models import (
-    Student, Course, Enrolment, ClassSession,
-    AttendanceRecord, RiskScore, User, Lecturer, CourseStaffAssignment,
-)
-from utils.security import require_lecturer
-from utils.db_helpers import require_own_profile
+from db.models import AcademicSemester, AttendanceRecord, ClassSession, Course, Enrolment, Lecturer, RiskScore, Student, TeachingPlan, User
+from domain.attendance import CREDITED_STATUSES, session_hours
+from domain.risk_access import risk_course_ids, scoped_enrolments
+from domain.risk_service import ended_course_plans, lock_assessment, recompute_course
 from domain.semesters import campus_date
-from domain.timetable_access import teaching_course_ids
-from domain.attendance import effective_planned_hours, session_hours, build_attendance_sequence
-
-# --- At-risk decision policy ----------------------------------------------
-BAR_THRESHOLD = 0.80     # university rule: < 80% attendance => barred
-COLD_START_FRACTION = 0.30   # need >=30% of the semester elapsed to predict
-
-# --- ML risk model loading -------------------------------------------------
-# The trained Random Forest is loaded once at import. If the .pkl is missing
-# (e.g. model never trained), we fall back to the legacy formula so the
-# endpoint still works — no crash, no frontend change.
-import os
-from collections import defaultdict
-from datetime import timedelta
-_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "ml", "risk_model.pkl")
-try:
-    import joblib
-    from ml.features import compute_features, features_to_row
-    _RISK_MODEL = joblib.load(_MODEL_PATH)
-except Exception as _e:  # missing model or deps -> formula fallback
-    _RISK_MODEL = None
-    print(f"[analytics] ML risk model not loaded ({_e}); using formula fallback.")
+from domain.timetable_access import held_in_semester, teaching_course_ids
+from utils.db_helpers import require_own_profile
+from utils.security import require_admin, require_lecturer
+from utils.timeutil import campus_now, iso_utc, local_offset, utcnow
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
-_LOW_THRESHOLD    = 0.35   # risk_score < this → "low"
-_MEDIUM_THRESHOLD = 0.60   # risk_score < this → "medium", else → "high"
+
+@router.post("/recompute")
+def recompute_risk_scores(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    visible = scoped_enrolments(db, current_user).filter(Enrolment.course_id.in_(teaching_course_ids(db)))
+    by_course = defaultdict(set)
+    for course_id, student_id in visible.with_entities(Enrolment.course_id, Enrolment.student_id):
+        by_course[course_id].add(student_id)
+    count = 0
+    for course_id, student_ids in sorted(by_course.items()):
+        lock_assessment(db, course_id)
+        count += recompute_course(db, course_id, allowed=student_ids)
+        db.commit()
+    return {"recomputed": count}
 
 
-def _risk_label(score: float) -> str:
-    if score < _LOW_THRESHOLD:
-        return "low"
-    if score < _MEDIUM_THRESHOLD:
-        return "medium"
-    return "high"
-
-
-def _ml_probability(feats: dict) -> float:
-    """Probability of ending barred, from the trained classifier. Falls back to
-    the formula (1 - rate) if no model is loaded. Takes pre-computed features so
-    the caller (_assess) doesn't pay for compute_features twice."""
-    if _RISK_MODEL is not None:
-        import pandas as pd
-        from ml.features import FEATURE_ORDER
-        row_df = pd.DataFrame([features_to_row(feats)], columns=FEATURE_ORDER)
-        return round(float(_RISK_MODEL.predict_proba(row_df)[0][1]), 4)
-    return round(1.0 - feats["attendance_rate"], 4)
-
-
-def _reasons(feats: dict, rate: float, label: str) -> str:
-    """Human-readable risk factors for the dashboard. Guarantees a flagged
-    student (medium/high) always carries at least one explanatory factor, so the
-    verdict never looks self-contradictory (e.g. '89% ok' but HIGH)."""
-    parts = []
-    # The attendance % already has its own column, so the reason states the
-    # concern, not the number.
-    if rate < BAR_THRESHOLD:
-        parts.append("Below 80% requirement")
-    if feats["consecutive_absent"] >= 3:
-        parts.append(f"Missed {feats['consecutive_absent']} classes in a row")
-    if feats["trend"] <= -0.10:
-        parts.append("Attendance dropping in recent weeks")
-
-    if label == "low":
-        # Reassure: a low-risk student needs no alarming factors.
-        return "; ".join(parts) if parts else "Consistent attendance"
-    if not parts:
-        # ML flagged risk but no single hard factor fired — be honest about why.
-        parts.append("At-risk attendance pattern")
-    return "; ".join(parts)
-
-
-def _assess(sequence: list[int], hours: list[float],
-            held_hours: float, total_hours: float | None) -> dict:
-    """Run the 3-layer funnel. Returns dict(score, label, rate, factors)."""
-    feats = compute_features(sequence, hours)
-    rate = feats["attendance_rate"]
-
-    # Layer 0 — cold start: too early in the semester to predict.
-    if total_hours and total_hours > 0 and held_hours < COLD_START_FRACTION * total_hours:
-        return {"score": 0.0, "label": "observing",
-                "rate": rate, "factors": "Too early to assess"}
-
-    # Layers 1 & 1b are two symmetric certainty gates: once the outcome is
-    # arithmetically fixed, there is nothing left to *predict*, so ML steps aside.
-    if total_hours and total_hours > 0:
-        attended_hours = rate * held_hours
-        remaining_hours = max(0.0, total_hours - held_hours)
-
-        # Layer 1 — cannot reach 80% even by attending every remaining hour.
-        best_case = (attended_hours + remaining_hours) / total_hours
-        if best_case < BAR_THRESHOLD:
-            # Floor, not round: 79.9% must not display as "80%" (self-contradictory).
-            return {"score": 1.0, "label": "high", "rate": rate,
-                    "factors": f"Cannot reach 80% (best case {math.floor(best_case*100)}%)"}
-
-        # Layer 1b — already secured 80% of total hours; cannot drop below it
-        # even by skipping every remaining class. Guaranteed safe.
-        worst_case = attended_hours / total_hours
-        if worst_case >= BAR_THRESHOLD:
-            return {"score": 0.0, "label": "low", "rate": rate,
-                    "factors": "Requirement already secured"}
-
-    # Layer 2 — ML: still recoverable, let the classifier decide.
-    score = _ml_probability(feats)
-    label = _risk_label(score)
-    return {"score": score, "label": label,
-            "rate": rate, "factors": _reasons(feats, rate, label)}
-
-
-def _still_enrolled(db: Session):
-    """A saved score is current only while its student is still enrolled in that course: one moved or removed by an admin keeps the stored row as history, but drops out of current lists and counts."""
-    return db.query(Enrolment.id).filter(Enrolment.student_id == RiskScore.student_id, Enrolment.course_id == RiskScore.course_id).exists()
-
-
-def _semester_sessions(sessions, course) -> list:
-    """Only the classes held inside the course's own semester (Malaysia dates), so classes from before a course joined its semester never count."""
-    semester = course.semester if course and course.semester_id else None
-    if semester is None:
-        return []
-    return [s for s in sessions if (when := s.scheduled_start or s.opened_at) and semester.start_date <= campus_date(when) <= semester.end_date]
-
-
-@router.post("/recompute", status_code=200)
-def recompute_risk_scores(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_lecturer),
-):
-    """Recompute risk scores for enrolments in current-semester courses: a lecturer's own, or every course for an admin.
-
-    An ended semester's scores stay as they were; they are history, not current teaching data."""
-    lecturer = db.query(Lecturer).filter(Lecturer.user_id == current_user.id).first() if current_user.role == "lecturer" else None
-    if current_user.role == "lecturer" and lecturer is None:
-        raise HTTPException(status_code=404, detail="Lecturer profile not found")
-    course_ids = teaching_course_ids(db, lecturer.id if lecturer else None)
-    enrolments = db.query(Enrolment).filter(Enrolment.course_id.in_(course_ids)).all() if course_ids else []
-    if not enrolments:
-        return {"recomputed": 0}
-
-    all_course_ids  = list({e.course_id  for e in enrolments})
-    all_student_ids = list({e.student_id for e in enrolments})
-
-    # Planned total contact hours per course (denominator of the 80% rule).
-    total_hours_by_course = {
-        cid: tot for cid, tot in
-        db.query(Course.id, Course.planned_total_hours)
-        .filter(Course.id.in_(all_course_ids)).all()
+def risk_result(score):
+    return {
+        "attendance_rate": score.attendance_rate, "risk_score": score.risk_score,
+        "risk_label": score.risk_label, "risk_factors": score.risk_factors,
+        "assessment_source": score.assessment_source, "updated_at": iso_utc(score.updated_at),
     }
-    lifecycle_by_course = {}
-    for lesson in db.query(ClassSession).filter(
-        ClassSession.course_id.in_(all_course_ids),
-        ClassSession.status.in_(["cancelled", "completed"]),
-    ).all():
-        lifecycle_by_course.setdefault(lesson.course_id, []).append(lesson)
-    total_hours_by_course = {
-        course_id: effective_planned_hours(hours, lifecycle_by_course.get(course_id, []))
-        for course_id, hours in total_hours_by_course.items()
-    }
-
-    # Batch: all closed sessions per course, ordered by time (oldest first).
-    # Each entry carries its contact hours = (closed_at - opened_at), default 2h.
-    closed_sessions = (
-        db.query(ClassSession)
-        .filter(ClassSession.status == "completed", ClassSession.course_id.in_(all_course_ids))
-        .order_by(ClassSession.course_id, ClassSession.scheduled_start.asc().nullslast(), ClassSession.id.asc())
-        .all()
-    )
-    courses_by_id = {c.id: c for c in db.query(Course).filter(Course.id.in_(all_course_ids)).all()}
-    sessions_by_course: dict = {}
-    for lesson in closed_sessions:
-        sessions_by_course.setdefault(lesson.course_id, []).append(lesson)
-    sessions_by_course = {
-        cid: [(s.id, s.class_group, session_hours(s.opened_at, s.closed_at, scheduled_start=s.scheduled_start, scheduled_end=s.scheduled_end))
-              for s in _semester_sessions(lessons, courses_by_id.get(cid))]
-        for cid, lessons in sessions_by_course.items()
-    }
-
-    # Batch: set of (student_id, session_id) counted as attended.
-    # Policy: "present" (face check-in) AND "leave" (approved medical leave)
-    # both count as attended. Only "absent" counts against the student.
-    present_raw = (
-        db.query(AttendanceRecord.student_id, AttendanceRecord.session_id)
-        .filter(
-            AttendanceRecord.status.in_(["present", "leave"]),
-            AttendanceRecord.student_id.in_(all_student_ids),
-        )
-        .all()
-    )
-    present_set = {(sid, sess_id) for sid, sess_id in present_raw}
-
-    # Batch: existing RiskScore rows keyed by (student_id, course_id)
-    existing_scores = {
-        (rs.student_id, rs.course_id): rs
-        for rs in db.query(RiskScore)
-        .filter(RiskScore.student_id.in_(all_student_ids), RiskScore.course_id.in_(all_course_ids))
-        .all()
-    }
-
-    updated = 0
-    now = utcnow()
-
-    for enr in enrolments:
-        # Build this enrolment's attendance sequence + hours in chronological
-        # order. A session counts if it's "All" group or the student's group.
-        course_sessions = sessions_by_course.get(enr.course_id, [])
-        sequence, hours = build_attendance_sequence(
-            course_sessions, present_set, enr.student_id, enr.class_group)
-
-        if not sequence:
-            continue
-
-        held_hours  = sum(hours)
-        total_hours = total_hours_by_course.get(enr.course_id)
-        result = _assess(sequence, hours, held_hours, total_hours)
-        key    = (enr.student_id, enr.course_id)
-
-        existing = existing_scores.get(key)
-        if existing:
-            existing.risk_score      = result["score"]
-            existing.risk_label      = result["label"]
-            existing.attendance_rate = round(result["rate"], 4)
-            existing.risk_factors    = result["factors"]
-            existing.updated_at      = now
-        else:
-            new_rs = RiskScore(
-                student_id=enr.student_id,
-                course_id=enr.course_id,
-                risk_score=result["score"],
-                risk_label=result["label"],
-                attendance_rate=round(result["rate"], 4),
-                risk_factors=result["factors"],
-            )
-            db.add(new_rs)
-            existing_scores[key] = new_rs
-        updated += 1
-
-    db.commit()
-    return {"recomputed": updated}
 
 
 @router.get("/risk-scores")
-def get_risk_scores(
-    course_id: str | None = None,
-    student_id: str | None = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_lecturer),
-):
-    """Return latest risk scores, optionally filtered."""
-    allowed_course_ids = None
-    if current_user.role == "lecturer":
-        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        allowed_course_ids = teaching_course_ids(db, lecturer.id)
-
-    q = (
-        db.query(RiskScore, Student, Course)
-        .join(Student, Student.id == RiskScore.student_id)
-        .join(Course, Course.id == RiskScore.course_id)
-        .filter(_still_enrolled(db))
-    )
-    
-    if allowed_course_ids is not None:
-        q = q.filter(RiskScore.course_id.in_(allowed_course_ids))
-        
+def get_risk_scores(course_id: UUID | None = None, student_id: UUID | None = None,
+                    db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+    visible = scoped_enrolments(db, current_user)
     if course_id:
-        if allowed_course_ids is not None and course_id not in allowed_course_ids:
-            raise HTTPException(status_code=403, detail="Not authorized to view risk scores for this course")
-        q = q.filter(RiskScore.course_id == course_id)
+        if current_user.role == "lecturer":
+            lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+            if str(course_id) not in risk_course_ids(db, lecturer.id):
+                raise HTTPException(403, "Not authorized to view risk scores for this course")
+        visible = visible.filter_by(course_id=str(course_id))
     if student_id:
-        q = q.filter(RiskScore.student_id == student_id)
+        visible = visible.filter_by(student_id=str(student_id))
+    pairs = visible.with_entities(Enrolment.student_id, Enrolment.course_id).distinct().subquery()
+    rows = db.query(RiskScore, Student, Course).join(Student, Student.id == RiskScore.student_id).join(
+        Course, Course.id == RiskScore.course_id,
+    ).join(pairs, (pairs.c.student_id == RiskScore.student_id) & (pairs.c.course_id == RiskScore.course_id)).filter(
+        RiskScore.assessment_source.isnot(None),
+    ).order_by(RiskScore.risk_score.desc().nullslast(), RiskScore.id).all()
+    return [dict(id=rs.id, student_id=s.id, student_name=s.name, student_code=s.student_code,
+                 course_id=c.id, course_code=c.course_code, course_name=c.course_name, **risk_result(rs))
+            for rs, s, c in rows]
 
-    rows = q.order_by(RiskScore.risk_score.desc()).all()
-    return [
-        {
-            "student_id":      rs.student_id,
-            "student_name":    s.name,
-            "student_code":    s.student_code,
-            "course_id":       rs.course_id,
-            "course_code":     c.course_code,
-            "course_name":     c.course_name,
-            "attendance_rate": rs.attendance_rate,
-            "risk_score":      rs.risk_score,
-            "risk_label":      rs.risk_label,
-            "risk_factors":    rs.risk_factors,
-            "updated_at":      iso_utc(rs.updated_at),
-        }
-        for rs, s, c in rows
-    ]
+
+@router.get("/pending-teaching")
+def pending_teaching(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    closeout = TeachingPlan.details["closeout"]
+    rows = ended_course_plans(db, campus_now().date()).with_entities(
+        Course.id, Course.course_code, AcademicSemester.name, closeout
+    ).filter(closeout.as_string() != "[]").order_by(Course.course_code)
+    return [dict(course_id=cid, course_code=code, semester=name, **exception)
+            for cid, code, name, exceptions in rows for exception in exceptions]
 
 
 @router.get("/overview")
@@ -340,7 +84,7 @@ def get_analytics_overview(
     """Role-scoped, real-data analytics for one course at a time."""
     if current_user.role == "lecturer":
         lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-        allowed_ids = teaching_course_ids(db, lecturer.id)
+        allowed_ids = risk_course_ids(db, lecturer.id)
     else:
         allowed_ids = [row[0] for row in db.query(Course.id).all()]
 
@@ -353,17 +97,23 @@ def get_analytics_overview(
     if selected_id not in {c.id for c in courses}:
         raise HTTPException(status_code=403, detail="Not authorized to view analytics for this course")
 
-    enrolments = db.query(Enrolment).filter(Enrolment.course_id == selected_id).all()
+    enrolments = scoped_enrolments(db, current_user).filter(Enrolment.course_id == selected_id).all()
     sessions = db.query(ClassSession).filter(ClassSession.course_id == selected_id).order_by(
         ClassSession.scheduled_start.asc().nullslast(), ClassSession.opened_at.asc().nullslast()
     ).all()
     if current_user.role == "lecturer":
-        sessions = _semester_sessions(sessions, next(c for c in courses if c.id == selected_id))
+        term = next(c for c in courses if c.id == selected_id).semester
+        sessions = [s for s in sessions if held_in_semester(term, s.scheduled_start or s.opened_at)]
+    visible_groups = {e.class_group for e in enrolments} | {"All"}
+    if current_user.role == "lecturer":
+        sessions = [s for s in sessions if s.class_group in visible_groups]
     completed = [s for s in sessions if s.status == "completed"]
     tracked = [s for s in sessions if s.status != "cancelled"]
     session_ids = [s.id for s in completed]
     records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id.in_(session_ids)).all() if session_ids else []
     records_by_session = defaultdict(list)
+    visible_student_ids = {e.student_id for e in enrolments}
+    records = [r for r in records if r.student_id in visible_student_ids]
     for record in records:
         records_by_session[record.session_id].append(record)
 
@@ -375,7 +125,7 @@ def get_analytics_overview(
         eligible = eligible_students(session)
         attended = {
             r.student_id for r in records_by_session.get(session.id, [])
-            if r.student_id in eligible and r.status in ("present", "leave")
+            if r.student_id in eligible and r.status in CREDITED_STATUSES
         }
         hours = session_hours(session.opened_at, session.closed_at,
                               scheduled_start=session.scheduled_start, scheduled_end=session.scheduled_end)
@@ -389,8 +139,9 @@ def get_analytics_overview(
     dated_sessions = []
     for session in tracked:
         when = session.scheduled_start or session.opened_at
-        if when and when.date() <= current_day:
-            monday = when.date() - timedelta(days=when.weekday())
+        if when and campus_date(when) <= current_day:
+            day = campus_date(when)
+            monday = day - timedelta(days=day.weekday())
             dated_sessions.append(monday)
             weekly[monday][3] += 1
 
@@ -408,19 +159,21 @@ def get_analytics_overview(
         eligible_total += eligible
         when = session.scheduled_start or session.opened_at
         if when:
-            monday = when.date() - timedelta(days=when.weekday())
+            day = campus_date(when)
+            monday = day - timedelta(days=day.weekday())
             weekly[monday][0] += attended
             weekly[monday][1] += eligible
             weekly[monday][2] += 1
-            weekdays[when.strftime("%a")][0] += attended
-            weekdays[when.strftime("%a")][1] += eligible
-            weekdays[when.strftime("%a")][2] += 1
+            weekdays[day.strftime("%a")][0] += attended
+            weekdays[day.strftime("%a")][1] += eligible
+            weekdays[day.strftime("%a")][2] += 1
 
     risk_students = {
         row.student_id for row in db.query(RiskScore).filter(
             RiskScore.course_id == selected_id,
             RiskScore.risk_label.in_(["medium", "high"]),
-            _still_enrolled(db),
+            RiskScore.assessment_source.isnot(None),
+            RiskScore.student_id.in_(visible_student_ids),
         ).all()
     }
     group_rows = []
@@ -434,7 +187,7 @@ def get_analytics_overview(
             if (session.class_group or "All") == "All":
                 hours = session_hours(session.opened_at, session.closed_at,
                                       scheduled_start=session.scheduled_start, scheduled_end=session.scheduled_end)
-                present += len({r.student_id for r in records_by_session.get(session.id, []) if r.student_id in members and r.status in ("present", "leave")}) * hours
+                present += len({r.student_id for r in records_by_session.get(session.id, []) if r.student_id in members and r.status in CREDITED_STATUSES}) * hours
                 possible += len(members) * hours
             else:
                 present += attended

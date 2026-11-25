@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, or_
 
 from db.models import AttendanceRecord, ClassSession, Course, Enrolment, Student
-from domain.attendance import attendance_rate_percent, session_hours
+from domain.attendance import CREDITED_STATUSES, attendance_rate_percent, session_hours
 
 
 Intent = Literal[
@@ -224,8 +224,10 @@ def context_follow_up_plan(question: str, context: dict | None) -> AIPlan | None
     )
 
 
-def resolve_student(db, course_ids: list[str], *, hint: str | None, student_id: str | None = None) -> StudentResolution:
+def resolve_student(db, course_ids: list[str], *, hint: str | None, student_id: str | None = None, enrolment_scope=None) -> StudentResolution:
     query = db.query(Student).join(Enrolment, Enrolment.student_id == Student.id).filter(Enrolment.course_id.in_(course_ids))
+    if enrolment_scope is not None:
+        query = query.filter(enrolment_scope)
     if student_id and _CODE.fullmatch(student_id):
         hint, student_id = student_id, None
     if student_id:
@@ -250,11 +252,14 @@ def resolve_student(db, course_ids: list[str], *, hint: str | None, student_id: 
     return StudentResolution(student=partial[0] if len(partial) == 1 else None, matches=tuple(partial))
 
 
-def student_course_rates(db, student: Student, course_ids: list[str], course_id: str | None = None) -> list[tuple[Course, str, float]]:
-    enrolments = db.query(Enrolment, Course).join(Course, Course.id == Enrolment.course_id).filter(
+def student_course_rates(db, student: Student, course_ids: list[str], course_id: str | None = None, enrolment_scope=None) -> list[tuple[Course, str, float]]:
+    enrolment_query = db.query(Enrolment, Course).join(Course, Course.id == Enrolment.course_id).filter(
         Enrolment.student_id == student.id,
         Enrolment.course_id.in_([course_id] if course_id else course_ids),
-    ).order_by(Course.course_code).all()
+    )
+    if enrolment_scope is not None:
+        enrolment_query = enrolment_query.filter(enrolment_scope)
+    enrolments = enrolment_query.order_by(Course.course_code).all()
     selected_ids = [course.id for _, course in enrolments]
     sessions_by_course: dict[str, list[tuple]] = {}
     if selected_ids:
@@ -265,7 +270,7 @@ def student_course_rates(db, student: Student, course_ids: list[str], course_id:
             ))
     attended = {(student.id, session_id) for (session_id,) in db.query(AttendanceRecord.session_id).filter(
         AttendanceRecord.student_id == student.id,
-        AttendanceRecord.status.in_(["present", "leave"]),
+        AttendanceRecord.status.in_(CREDITED_STATUSES),
     ).all()}
     return [
         (course, enrolment.class_group, attendance_rate_percent(sessions_by_course.get(course.id, []), attended, student.id, enrolment.class_group))
@@ -273,11 +278,13 @@ def student_course_rates(db, student: Student, course_ids: list[str], course_id:
     ]
 
 
-def scoped_student_rates(db, course_ids: list[str], group: str | None = None) -> list[tuple[Student, Course, str, float]]:
+def scoped_student_rates(db, course_ids: list[str], group: str | None = None, enrolment_scope=None) -> list[tuple[Student, Course, str, float]]:
     """Bulk dashboard-consistent rates without per-student database queries."""
     enrolment_query = db.query(Enrolment, Student, Course).join(Student, Student.id == Enrolment.student_id).join(Course, Course.id == Enrolment.course_id).filter(
         Enrolment.course_id.in_(course_ids)
     )
+    if enrolment_scope is not None:
+        enrolment_query = enrolment_query.filter(enrolment_scope)
     if group:
         enrolment_query = enrolment_query.filter(func.lower(Enrolment.class_group) == group.casefold())
     enrolments = enrolment_query.order_by(Student.name, Course.course_code).all()
@@ -296,7 +303,7 @@ def scoped_student_rates(db, course_ids: list[str], group: str | None = None) ->
             AttendanceRecord.student_id, AttendanceRecord.session_id
         ).filter(
             AttendanceRecord.student_id.in_(student_ids),
-            AttendanceRecord.status.in_(["present", "leave"]),
+            AttendanceRecord.status.in_(CREDITED_STATUSES),
         ).all()}
     return [
         (student, course, enrolment.class_group, attendance_rate_percent(

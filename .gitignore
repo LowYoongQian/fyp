@@ -180,6 +180,10 @@ test_*.py
 !/fyp-backend/tests/test_auth_access_regression.py
 !/fyp-backend/tests/test_account_endpoints.py
 !/fyp-backend/tests/test_invalid_class_time.py
+!/fyp-backend/tests/test_at_risk_phase1.py
+!/fyp-backend/tests/test_planned_hours.py
+!/fyp-backend/tests/at_risk_ui.cjs
+!/fyp-backend/tests/timetable_revision_test.dart
 !/fyp-backend/tests/test_dashboard_sessions.py
 !/fyp-backend/tests/test_alembic_isolated.py
 !/fyp-backend/tests/test_mc_acceptance_local.py
@@ -208,3 +212,4 @@ test_*.py
 !/fyp_flutter/test/
 /fyp_flutter/test/*
 !/fyp_flutter/test/face_flow_test.dart
+!/fyp_flutter/test/qa_api_guard_test.dart

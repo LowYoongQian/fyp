@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,7 +11,8 @@ from db.database import get_db
 from domain import timetable_access
 from domain.attendance import require_no_attendance_history
 from domain.audit import log_admin_action
-from domain.scheduler import (DAY_END_MIN, DAY_START_MIN, TIMES, add_missing_meetings, conflicting_meetings, groups_for_course,
+from domain.planned_hours import next_teaching_week
+from domain.scheduler import (WEEKDAYS, DAY_END_MIN, DAY_START_MIN, TIMES, active_slot, schedule_versions, add_missing_meetings, conflicting_meetings, groups_for_course,
                               lecturer_slot_conflict, lecture_meetings, meeting_key_for, pick_slot_for_new)
 from domain.session_sync import sync_class_sessions
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, AcademicSemester, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
@@ -345,8 +346,7 @@ def _add_role(db, user, course, lecturer, role, single=False):
 
 
 def _role_meetings(db, assignment):
-    """The timetable slots that leave with this role: a Tutor's or Practical's own group meetings (the database deletes them with the
-    assignment). A Lecturer's lecture is never deleted; it stays on the timetable without a lecturer."""
+    """Group slots owned by this assignment. A lecture stays on the timetable without a lecturer."""
     if assignment.role == "Lecturer":
         return []
     return db.query(ClassMeeting).filter(ClassMeeting.assignment_id == assignment.id).order_by(ClassMeeting.class_group).all()
@@ -374,11 +374,17 @@ def role_impact(db, assignments) -> dict:
 
 
 def _remove_role(db, user, assignment):
-    """Remove one teaching role inside the caller's transaction. Completed classes and attendance are kept (their sessions only lose the
-    link to the deleted slot); other staff members' roles are never touched. Refused while one of its classes is in progress."""
+    """Revoke staff access while preserving the active week's teaching obligations."""
     if role_impact(db, [assignment])["blocked"]:
         raise HTTPException(409, f"A {assignment.role.lower()} class is in progress. Remove this role after it ends.")
     course = assignment.course
+    today = campus_now().date()
+    if course.semester and course.semester.start_date <= today <= course.semester.end_date:
+        for meeting in _role_meetings(db, assignment):
+            meeting.assignment_id = None
+            meeting.lecturer_id = None
+            meeting.retire_on = meeting.retire_on or next_teaching_week(today)
+        db.flush()  # Detach before the assignment's cascading delete.
     if assignment.role == "Lecturer" and course.lecturer_id == assignment.lecturer_id:
         course.lecturer_id = None
         db.query(ClassMeeting).filter_by(course_id=assignment.course_id, role="Lecture",
@@ -440,7 +446,7 @@ def delete_assignment(assignment_id: str, db: Session = Depends(get_db), current
 
 @router.get("/timetable", response_model=List[dict])
 def get_global_timetable(semester_id: UUID = Query(...), programme_id: UUID = Query(...), course_id: Optional[UUID] = Query(None),
-                         db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+                         db: Session = Depends(get_db), current_user: User = Depends(require_admin), on_date: date | None = None):
     # Read the class_meetings table (source of truth). meeting_id lets the admin UI edit a specific slot. One programme's courses in one
     # semester (or just one of them), and only the current semester: programme, course and semester must belong together, so no id can
     # widen the read beyond the chosen programme. Each course stays its own record; a course with no meetings simply has no rows here.
@@ -451,9 +457,13 @@ def get_global_timetable(semester_id: UUID = Query(...), programme_id: UUID = Qu
     meetings = db.query(ClassMeeting).filter(ClassMeeting.course_id.in_(course_ids)).options(
         joinedload(ClassMeeting.course), joinedload(ClassMeeting.lecturer)
     ).all() if course_ids else []
+    versions = schedule_versions(db, meetings)
     result = []
     for m in meetings:
         c = m.course
+        slot = active_slot(m, versions, on_date or campus_now().date())
+        if slot is None:
+            continue
         result.append({
             "meeting_id": m.id,
             "id": m.id,
@@ -461,12 +471,12 @@ def get_global_timetable(semester_id: UUID = Query(...), programme_id: UUID = Qu
             "semester_id": semester.id,
             "course_code": c.course_code if c else "Unknown",
             "course_name": c.course_name if c else "Unknown",
-            "schedule_day": m.day,
+            "schedule_day": slot["day"],
             "programme_id": c.programme_id if c else None,
             "programme_name": c.programme.name if c and c.programme else None,
-            "schedule_start": m.start,
-            "schedule_end": m.end,
-            "schedule_room": m.room,
+            "schedule_start": slot["start"],
+            "schedule_end": slot["end"],
+            "schedule_room": slot["room"],
             "lecturer_name": m.lecturer.name if m.lecturer else "TBA",
             "role": m.role,
             # Required by the admin UI: tutorial/practical rows are group-specific.
@@ -490,6 +500,10 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     meeting = db.query(ClassMeeting).filter_by(id=meeting_id).with_for_update().first()
     if meeting is None:
         raise HTTPException(404, "Timetable slot not found")
+    if meeting.retire_on is not None:
+        raise HTTPException(409, "This timetable slot is scheduled for removal")
+    if body.day not in WEEKDAYS:
+        raise HTTPException(400, "Invalid timetable weekday")
 
     def _to_min(hhmm: str) -> int:
         try:
@@ -515,16 +529,25 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
         raise HTTPException(status_code=400,
             detail=f"Class times must fall within the {TIMES[0][0]}-{TIMES[-1][1]} teaching day")
 
-    time_changed = (meeting.day, meeting.start, meeting.end) != (body.day, body.start, body.end)
+    local = campus_now()
+    term = meeting.course.semester
+    today = local.date()
+    boundary = next_teaching_week(today) if term and term.start_date <= today else today
+    candidate_times = (body.day, body.start, body.end)
+    latest_times = (meeting.day, meeting.start, meeting.end)
+    current_slot = active_slot(meeting, schedule_versions(db, [meeting]), today)
+    current_times = tuple(current_slot[key] for key in ("day", "start", "end")) if current_slot else latest_times
+    # A room edit made on this week's card must preserve an already queued time change.
+    room_only = current_times == candidate_times and current_slot and current_slot["room"] != body.room
+    time_changed = not room_only and latest_times != candidate_times
     if time_changed:
-        local = campus_now()
         midnight = local.replace(hour=0, minute=0, second=0, microsecond=0) - local_offset()
         session_start = func.coalesce(ClassSession.scheduled_start, ClassSession.opened_at)
         generated = db.query(ClassSession.id).filter(
             ClassSession.meeting_id == meeting.id, session_start >= midnight,
             session_start < midnight + timedelta(days=1)).first()
-        term = meeting.course.semester
-        in_window = (meeting.day == local.strftime("%A") and meeting.start <= local.strftime("%H:%M") < meeting.end
+        day, start, end = current_times
+        in_window = (day == local.strftime("%A") and start <= local.strftime("%H:%M") < end
                      and (term is None or term.start_date <= local.date() <= term.end_date))
         if generated or in_window:
             raise HTTPException(409, "Today's class has already been generated or is in progress. Its day and times must stay fixed; edit the weekly slot on another day.")
@@ -532,27 +555,26 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     # Clash check against every OTHER meeting on the same day. Two classes clash
     # when their time ranges OVERLAP (not just when identical): [a,b) overlaps
     # [c,d) iff a < d and c < b. No shared room, no double-booked lecturer.
-    others = conflicting_meetings(db, meeting.course).filter(ClassMeeting.id != meeting_id, ClassMeeting.day == body.day).all()
-    for o in others:
-        if not (new_start < _to_min(o.end) and _to_min(o.start) < new_end):
-            continue  # no time overlap
-        if o.room == body.room:
-            raise HTTPException(status_code=400,
-                detail=f"Room {body.room} is already booked on {body.day} during {o.start}-{o.end}")
-        if meeting.lecturer_id and o.lecturer_id == meeting.lecturer_id:
-            raise HTTPException(status_code=400,
-                detail=f"This lecturer already teaches another class on {body.day} during {o.start}-{o.end}")
-        # Same students cannot be in two places at once. A lecture has no group
-        # because the whole course attends it, so it overlaps EVERY group — treating
-        # its NULL as just another value would let a lecture and a tutorial for the
-        # same students be booked at the same hour.
-        if o.course_id == meeting.course_id and (
-            meeting.class_group is None or o.class_group is None
-            or o.class_group == meeting.class_group
-        ):
-            who = o.class_group or "all groups"
-            raise HTTPException(status_code=400,
-                detail=f"{o.role} for {who} is already scheduled on {body.day} during {o.start}-{o.end}")
+    others = conflicting_meetings(db, meeting.course).filter(ClassMeeting.id != meeting_id).all()
+    versions = schedule_versions(db, others)
+    bookings = [(boundary, candidate_times if time_changed else latest_times)]
+    if boundary == today and not time_changed and current_slot:
+        bookings.append((today, current_times))
+    for effective_day, (weekday, start, end) in bookings:
+        for other in others:
+            slot = active_slot(other, versions, effective_day)
+            if (not slot or slot["day"] != weekday
+                    or not (_to_min(start) < _to_min(slot["end"]) and _to_min(slot["start"]) < _to_min(end))):
+                continue
+            when = f"{weekday} during {slot['start']}-{slot['end']}"
+            if slot["room"] == body.room:
+                raise HTTPException(400, f"Room {body.room} is already booked on {when}")
+            if meeting.lecturer_id and other.lecturer_id == meeting.lecturer_id:
+                raise HTTPException(400, f"This lecturer already teaches another class on {when}")
+            if other.course_id == meeting.course_id and (
+                meeting.class_group is None or other.class_group is None or other.class_group == meeting.class_group
+            ):
+                raise HTTPException(400, f"{other.role} for {other.class_group or 'all groups'} is already scheduled on {when}")
 
     was = f"{meeting.day} {meeting.start}-{meeting.end} in {meeting.room}"
     course_code = meeting.course.course_code if meeting.course else meeting.course_id
@@ -562,10 +584,12 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
     normalized_start = f"{new_start // 60:02d}:{new_start % 60:02d}"
     normalized_end = f"{new_end // 60:02d}:{new_end % 60:02d}"
     if time_changed:
-        meeting.effective_from = utcnow()   # a moved class is new from now on; days before the move must not become missed classes
-    meeting.day, meeting.start, meeting.end, meeting.room = body.day, normalized_start, normalized_end, body.room
+        meeting.effective_from = (datetime.combine(boundary, datetime.min.time()) - local_offset()
+                                  if boundary != today else utcnow())
+        meeting.day, meeting.start, meeting.end = body.day, normalized_start, normalized_end
+    meeting.room = body.room
     from routers.attendance_features import notify_timetable_change
-    notify_timetable_change(db, meeting, was)
+    notify_timetable_change(db, meeting, was, effective_date=boundary if time_changed or boundary > today else None)
     db.commit()
 
     # Timetable edits can make a class eligible to open immediately. Bypass the
@@ -578,22 +602,26 @@ def update_timetable_slot(meeting_id: str, body: TimetableSlotUpdate,
                      f"{f' {meeting.class_group}' if meeting.class_group else ''}: "
                      f"{was} -> {body.day} {normalized_start}-{normalized_end} in {body.room}")
 
-    return {"message": "Timetable slot updated successfully"}
+    return {"message": f"Timetable slot updated. Effective {boundary.isoformat()} (Malaysia time)."
+            if time_changed and boundary != today else "Timetable slot updated successfully"}
 
 
 @router.delete("/timetable/{meeting_id}", response_model=MessageResponse)
 def delete_timetable_slot(meeting_id: str, db: Session = Depends(get_db),
                           current_user: User = Depends(require_admin)):
-    meeting = get_or_404(db, ClassMeeting, meeting_id, detail="Timetable slot not found")
+    meeting = db.query(ClassMeeting).filter_by(id=meeting_id).with_for_update().first()
+    if meeting is None:
+        raise HTTPException(404, "Timetable slot not found")
     course_code = meeting.course.course_code if meeting.course else str(meeting.course_id)
     slot_description = (
         f"{meeting.role}{f' {meeting.class_group}' if meeting.class_group else ''} "
         f"on {meeting.day} {meeting.start}-{meeting.end}"
     )
 
-    # ClassSession.meeting_id uses ON DELETE SET NULL, so completed attendance
-    # history remains available while this recurring timetable slot is removed.
-    db.delete(meeting)
+    today = campus_now().date()
+    term = meeting.course.semester
+    if meeting.retire_on is None:
+        meeting.retire_on = next_teaching_week(today) if term and term.start_date <= today else today
     db.commit()
 
     log_admin_action(
@@ -602,7 +630,7 @@ def delete_timetable_slot(meeting_id: str, db: Session = Depends(get_db),
         "DELETE_TIMETABLE",
         f"Removed {slot_description} for {course_code}",
     )
-    return {"message": "Timetable slot deleted successfully"}
+    return {"message": f"Timetable slot removal takes effect {meeting.retire_on.isoformat()} (Malaysia time)."}
 
 
 # =====================================================================

@@ -6,6 +6,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiService, clearApiCache } from '../../services/api';
 import { apiErrorMessage } from '../../utils/apiError';
 import type { RiskScore, AlertLog } from '../../services/api';
+import { useLiveRefresh } from '../../hooks/useLiveRefresh';
 import { swalSuccess, swalError, swalInfo } from '../../utils/swal';
 import {
   AlertTriangle,
@@ -28,14 +29,9 @@ import {
   Check,
 } from 'lucide-react';
 
-type RiskLevel = RiskScore['risk_label'];
-
-const normalizeRiskLevel = (value: unknown): RiskLevel => {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  return normalized === 'high' || normalized === 'medium' || normalized === 'low'
-    ? normalized
-    : 'observing';
-};
+type RiskLevel = NonNullable<RiskScore['risk_label']> | 'observing';
+const formatRate = (rate: number | null) => rate === null ? '—' :
+  `${(rate < 0.8 ? Math.min(79.9, rate * 100) : rate * 100).toFixed(1)}%`;
 
 // Custom CustomDropdown Option Interface
 interface DropdownOption<T> {
@@ -148,13 +144,15 @@ export const AtRisk: React.FC = () => {
   const [sendingAlert, setSendingAlert] = useState(false);
   const [alertId, setAlertId] = useState('');
   const [sendError, setSendError] = useState('');
+  const [assessmentToken, setAssessmentToken] = useState('');
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     setLoadFailed(false);
     try {
       const [riskData, alertData] = await Promise.all([
@@ -169,9 +167,10 @@ export const AtRisk: React.FC = () => {
       console.error('Failed to load risk dashboard data:', err);
       setLoadFailed(true);   // what is already shown stays; nothing pretends there are no records
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
+  useLiveRefresh(() => loadData(false), ['attendance', 'timetable', 'sessions'], 'at-risk');
 
   const handleRunNightlyJob = async () => {
     setLoading(true);
@@ -179,7 +178,7 @@ export const AtRisk: React.FC = () => {
       await apiService.runNightlyRiskScorerJob();
       clearApiCache();
       await loadData();
-      await swalInfo('ML Job Completed', 'Recomputed attendance risk scores and refreshed the risk register.');
+      await swalInfo('Risk Scores Updated', 'Recomputed attendance risk scores and refreshed the risk register.');
     } catch (err) {
       console.error(err);
       await swalError('Execution Failed', 'Failed to recompute risk scores.');
@@ -188,12 +187,20 @@ export const AtRisk: React.FC = () => {
     }
   };
 
-  const openAlertModal = (score: RiskScore) => {
-    setSelectedStudentForAlert(score);
-    setAlertId(crypto.randomUUID());
-    setSendError('');
-    const body = `DEAR ${score.student_name?.toUpperCase()},\n\nThis is an official warning regarding your attendance in ${score.course_code}. Your current attendance rate is ${Math.round(score.attendance_rate * 100)}%${score.risk_factors ? ` (${score.risk_factors})` : ''}, which puts you at risk of falling below the university's 80% minimum requirement.\n\nContinued absences may result in a bar from final examinations. Please contact your lecturer or academic office immediately to discuss your status.\n\nBest regards,\nDepartment of Computing\nAcademic Counseling Office`;
-    setCustomDraft(body);
+  const openAlertModal = async (score: RiskScore) => {
+    setLoadingPreview(true);
+    try {
+      const { assessment_token, email_body, ...latest } = await apiService.previewManualAlert(score.student_id, score.course_id);
+      setSelectedStudentForAlert({ ...score, ...latest });
+      setAssessmentToken(assessment_token);
+      setAlertId(crypto.randomUUID());
+      setSendError('');
+      setCustomDraft(email_body);
+    } catch (error) {
+      await swalError('Warning Preview Unavailable', apiErrorMessage(error, 'The latest assessment could not be loaded.'));
+    } finally {
+      setLoadingPreview(false);
+    }
   };
 
   const handleSendManualAlert = async () => {
@@ -202,7 +209,7 @@ export const AtRisk: React.FC = () => {
     setSendError('');
     try {
       // The edited draft is sent exactly as shown; the server picks the recipient (the student's verified recovery email).
-      await apiService.triggerManualAlert(selectedStudentForAlert.student_id, selectedStudentForAlert.course_id, alertId, customDraft);
+      await apiService.triggerManualAlert(selectedStudentForAlert.student_id, selectedStudentForAlert.course_id, alertId, customDraft, assessmentToken);
       clearApiCache();
       void loadData();
       setSelectedStudentForAlert(null);
@@ -242,7 +249,8 @@ export const AtRisk: React.FC = () => {
   const filteredRisk = useMemo(() => {
     return riskList
       .filter(item => courseFilter === 'all' || item.course_code === courseFilter)
-      .filter(item => activeFilter === 'all' || normalizeRiskLevel(item.risk_label) === activeFilter)
+      .filter(item => activeFilter === 'all' || item.risk_label === activeFilter ||
+        (activeFilter === 'observing' && item.assessment_source === 'Observing'))
       .filter(item => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
@@ -252,7 +260,7 @@ export const AtRisk: React.FC = () => {
           (item.course_code && item.course_code.toLowerCase().includes(q))
         );
       })
-      .sort((a, b) => b.risk_score - a.risk_score);
+      .sort((a, b) => (b.risk_score ?? -1) - (a.risk_score ?? -1));
   }, [riskList, courseFilter, activeFilter, searchQuery]);
 
   // Reset page when filter or search changes
@@ -297,7 +305,8 @@ export const AtRisk: React.FC = () => {
 
   const counts = useMemo(() => scoped.reduce(
     (totals, item) => {
-      totals[normalizeRiskLevel(item.risk_label)] += 1;
+      if (item.risk_label) totals[item.risk_label] += 1;
+      else if (item.assessment_source === 'Observing') totals.observing += 1;
       return totals;
     },
     { high: 0, medium: 0, low: 0, observing: 0 } as Record<RiskLevel, number>,
@@ -504,7 +513,7 @@ export const AtRisk: React.FC = () => {
                     </tr>
                   ) : (
                     paginatedRisk.map((item, idx) => {
-                      const ratePct = Math.round(item.attendance_rate * 100);
+                      const ratePct = (item.attendance_rate ?? 0) * 100;
                       const itemKey = item.id || `${item.student_id || item.student_code || 'st'}-${item.course_id || item.course_code || 'cr'}-${safeCurrentPage}-${idx}`;
 
                       return (
@@ -539,7 +548,7 @@ export const AtRisk: React.FC = () => {
                                     : 'text-slate-800 dark:text-slate-200'
                                 }`}
                               >
-                                {ratePct}%
+                                {formatRate(item.attendance_rate)}
                               </span>
                               <div className="w-12 h-1 bg-slate-100 dark:bg-slate-800 rounded-full mt-1 overflow-hidden">
                                 <div
@@ -560,25 +569,29 @@ export const AtRisk: React.FC = () => {
                           <td className="py-3.5 px-4 text-center">
                             <span
                               className={`px-3 py-1 rounded-full text-[10px] uppercase tracking-wider inline-block ${badgeClass(
-                                item.risk_label
+                                item.risk_label ?? 'observing'
                               )}`}
                             >
-                              {item.risk_label}
+                              {item.risk_label ?? '—'}
                             </span>
                           </td>
 
                           {/* Risk Factors / Reason */}
                           <td className="py-3.5 px-4 max-w-[240px]">
                             <span className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug font-medium line-clamp-2">
-                              {item.risk_factors || 'Standard monitoring'}
+                              {item.risk_factors}
                             </span>
+                            <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                              <span>{item.assessment_source}</span>
+                              {item.updated_at && <time className="block" dateTime={item.updated_at}>{new Date(item.updated_at).toLocaleString()}</time>}
+                            </div>
                           </td>
 
                           {/* Action Button */}
                           <td className="py-3.5 px-5 text-right">
                             <button
                               onClick={() => openAlertModal(item)}
-                              disabled={item.risk_label === 'low' || item.risk_label === 'observing'}
+                              disabled={loadingPreview}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 text-brand-blue dark:text-blue-400 border border-slate-200 dark:border-slate-700 hover:bg-brand-blue hover:text-white dark:hover:bg-blue-600 dark:hover:text-white hover:border-brand-blue disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs cursor-pointer"
                             >
                               <Mail className="h-3.5 w-3.5" />
@@ -742,7 +755,8 @@ export const AtRisk: React.FC = () => {
                   Recipient: {selectedStudentForAlert.student_name} ({selectedStudentForAlert.student_code})
                 </p>
                 <p className="text-slate-500 dark:text-slate-400 mt-0.5">
-                  Course: {selectedStudentForAlert.course_code} · {selectedStudentForAlert.risk_factors}
+                  {selectedStudentForAlert.course_code} · {formatRate(selectedStudentForAlert.attendance_rate)} · {selectedStudentForAlert.assessment_source}
+                  <br />{selectedStudentForAlert.risk_factors}
                 </p>
               </div>
             </div>

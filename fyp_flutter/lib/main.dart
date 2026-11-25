@@ -423,6 +423,20 @@ class ApiConfig {
   static String baseUrl = AppConfig.apiBaseUrl;
   static String emulatorBaseUrl = AppConfig.emulatorApiBaseUrl;
   static String? customUrl;
+  static String? _integrationTestServer;
+
+  @visibleForTesting
+  static void pinIntegrationTestServer(String expected) {
+    final uri = Uri.tryParse(expected);
+    if (uri == null || uri.scheme != 'http' ||
+        !{'127.0.0.1', '10.0.2.2'}.contains(uri.host) ||
+        !uri.hasPort || expected != 'http://${uri.host}:${uri.port}' ||
+        const String.fromEnvironment('API_BASE_URL') != expected ||
+        const String.fromEnvironment('EMULATOR_API_BASE_URL') != expected) {
+      throw StateError('Android QA requires both API URLs to match the isolated local test server.');
+    }
+    _integrationTestServer = expected;
+  }
 
   // true  = tunnel active: use baseUrl (localhost) on every device.
   // false = no tunnel: rewrite to the emulator URL on Android.
@@ -441,6 +455,7 @@ class ApiConfig {
   }
 
   static String getEffectiveUrl() {
+    if (_integrationTestServer != null) return _integrationTestServer!;
     // 1. Flutter Web -> ALWAYS use Production Railway HTTPS Backend
     if (kIsWeb) {
       if (customUrl != null &&
@@ -745,7 +760,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // discovery would scan 254 LAN IPs on port 443 over plain HTTP, find nothing,
     // and — worse — a stale cached custom_api_url would keep overriding it,
     // because customUrl wins over productionApiUrl in getEffectiveUrl().
-    if (!kIsWeb && !AppConfig.isRemoteBackend) {
+    if (ApiConfig._integrationTestServer != null) {
+      ApiConfig.customUrl = ApiConfig._integrationTestServer;
+    } else if (!kIsWeb && !AppConfig.isRemoteBackend) {
       try {
         final prefs = await SharedPreferences.getInstance();
         final savedCustomUrl = prefs.getString('custom_api_url');
@@ -1181,14 +1198,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     return schedule;
   }
 
-  Future<List<Map<String, dynamic>>> refreshStudentTimetable() async {
+  Future<List<Map<String, dynamic>>> refreshStudentTimetable({DateTime? onDate}) async {
     final owner = _studentUserId, token = studentAuthToken,
         server = ApiConfig.getEffectiveUrl();
     final generation = _studentGeneration;
     bool current() => mounted && isStudentLoggedIn &&
         owner == _studentUserId && token == studentAuthToken &&
         server == ApiConfig.getEffectiveUrl() && generation == _studentGeneration;
-    if (token.isEmpty || owner.isEmpty || !current()) return studentSchedule;
+    final fallback = onDate == null ? studentSchedule : <Map<String, dynamic>>[];
+    if (token.isEmpty || owner.isEmpty || !current()) return fallback;
     try {
       // A unique query and explicit no-cache headers prevent an old empty timetable
       // from being reused by the device, CDN, or reverse proxy after an admin edit.
@@ -1196,7 +1214,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       final refreshKey = DateTime.now().millisecondsSinceEpoch;
       final response = await http
           .get(
-            Uri.parse('$apiUrl/students/me/courses?refresh=$refreshKey'),
+            Uri.parse('$apiUrl/students/me/courses').replace(queryParameters: {
+              'refresh': '$refreshKey',
+              if (onDate != null) 'on_date': onDate.toIso8601String().split('T').first,
+            }),
             headers: {
               'Content-Type': 'application/json',
               'Cache-Control': 'no-cache, no-store',
@@ -1205,11 +1226,12 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             },
           )
           .timeout(const Duration(seconds: 12));
-      if (!current() || response.statusCode != 200) return studentSchedule;
+      if (!current() || response.statusCode != 200) return fallback;
 
       final courses = jsonDecode(response.body) as List<dynamic>;
       final schedule = _mapStudentSchedule(courses);
-      if (!current()) return studentSchedule;
+      if (!current()) return fallback;
+      if (onDate != null) return schedule;
 
       setState(() => studentSchedule = schedule);
       final prefs = await SharedPreferences.getInstance();
@@ -1218,7 +1240,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       return current() ? schedule : studentSchedule;
     } catch (e) {
       debugPrint('Timetable refresh failed: $e');
-      return studentSchedule;
+      return fallback;
     }
   }
 
@@ -2176,6 +2198,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       onLogout: () => _signOutWithCover(true),
                       onSyncRequested: () => syncData(context),
                       onTimetableRefresh: refreshStudentTimetable,
+                      onTimetableWeek: (day) => refreshStudentTimetable(onDate: day),
                       onAttendanceRefresh: refreshStudentAttendance,
                       onAnnouncementsRefresh: refreshStudentAnnouncements,
                       onCheckInComplete:

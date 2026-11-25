@@ -13,6 +13,7 @@ import 'package:fyp_flutter/screens/staff/staff_dashboard_screen.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   const server='http://10.0.2.2:58004';
+  app.ApiConfig.pinIntegrationTestServer(server);
   Future<void> until(WidgetTester tester, bool Function() ready) async {
     final watch=Stopwatch()..start();
     while(!ready() && watch.elapsed < const Duration(seconds:45)) {

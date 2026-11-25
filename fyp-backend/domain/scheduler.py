@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from db.models import AcademicSemester, ClassMeeting, Course, CourseStaffAssignment, Enrolment
+from db.models import AcademicSemester, ClassMeeting, Course, CourseStaffAssignment, Enrolment, TeachingRuleVersion
 from utils.timeutil import campus_now, local_offset
 
 # ---------------------------------------------------------------------------
@@ -21,6 +21,7 @@ from utils.timeutil import campus_now, local_offset
 # ---------------------------------------------------------------------------
 
 DAYS  = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+WEEKDAYS = (*DAYS, "Saturday", "Sunday")
 TIMES = [
     ("08:00", "10:00"), ("10:00", "12:00"), ("12:00", "14:00"),
     ("14:00", "16:00"), ("16:00", "18:00"), ("18:00", "20:00"),
@@ -54,7 +55,8 @@ def meeting_key_for(role: str, course_id, assignment_id, class_group=None) -> st
     return f"{role}-{assignment_id}-{class_group}"
 
 
-def calculate_schedule(db: Session, *, course_id=None, for_session_creation=False) -> dict:
+def calculate_schedule(db: Session, *, course_id=None, for_session_creation=False, on_date=None,
+                       meetings=None, versions=None) -> dict:
     """Return { meeting_key: {day,start,end,room,role,course_id,assignment_id,class_group} }
     read from class_meetings.
 
@@ -75,17 +77,52 @@ def calculate_schedule(db: Session, *, course_id=None, for_session_creation=Fals
         # Keep the schedule read and the dated session insert atomic with a timetable edit.
         rows = rows.order_by(ClassMeeting.id).with_for_update(read=True, of=ClassMeeting)
 
-    return {
-        meeting_key_for(r.role, r.course_id, r.assignment_id, r.class_group): {
-            "day": r.day, "start": r.start, "end": r.end, "room": r.room,
+    meetings = rows.all() if meetings is None else meetings
+    versions = schedule_versions(db, meetings) if versions is None else versions
+    day = on_date or campus_now().date()
+    result = {}
+    for r in meetings:
+        version = active_slot(r, versions, day)
+        if version is None:
+            continue
+        key = (meeting_key_for(r.role, r.course_id, r.assignment_id, r.class_group)
+               if r.role == "Lecture" or r.assignment_id else r.meeting_key)
+        result[key] = {
+            **version,
             "role": r.role, "course_id": r.course_id,
             "assignment_id": r.assignment_id, "class_group": r.class_group,
-            "meeting_id": r.id, "effective_from": r.effective_from,
+            "meeting_id": r.id, "lecturer_id": r.lecturer_id,
             "semester": {"name": r.course.semester.name, "start_date": r.course.semester.start_date,
                          "end_date": r.course.semester.end_date} if r.course and r.course.semester_id else None,
         }
-        for r in rows
-    }
+    return result
+
+
+def schedule_versions(db, meetings):
+    ids = [m.id for m in meetings]
+    result = {}
+    if ids:
+        for version in db.query(TeachingRuleVersion).filter(TeachingRuleVersion.meeting_id.in_(ids)).order_by(
+            TeachingRuleVersion.effective_date.desc(),
+        ):
+            result.setdefault(version.meeting_id, []).append(version)
+    return result
+
+
+def active_slot(meeting, versions, day):
+    if meeting.retire_on and meeting.retire_on <= day:
+        return None
+    history = versions.get(meeting.id)
+    if not history:
+        return {"day": meeting.day, "start": meeting.start, "end": meeting.end, "room": meeting.room,
+                "effective_from": meeting.effective_from}
+    version = next((v for v in history if v.effective_date <= day), None)
+    if version is None or version.slot is None:
+        return None
+    starts = datetime.combine(version.effective_date, datetime.min.time()) - local_offset()
+    if meeting.effective_from and starts <= meeting.effective_from < starts + timedelta(days=1):
+        starts = meeting.effective_from
+    return {**version.slot, "effective_from": starts}
 
 
 def lecture_meetings(db: Session, course_ids) -> dict:
@@ -96,11 +133,12 @@ def lecture_meetings(db: Session, course_ids) -> dict:
     """
     if not course_ids:
         return {}
-    return {
-        m.course_id: m for m in db.query(ClassMeeting).filter(
-            ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(list(course_ids))
-        ).all()
-    }
+    meetings = db.query(ClassMeeting).filter(
+        ClassMeeting.role == "Lecture", ClassMeeting.course_id.in_(list(course_ids))
+    ).all()
+    versions = schedule_versions(db, meetings)
+    today = campus_now().date()
+    return {m.course_id: active_slot(m, versions, today) for m in meetings}
 
 
 def slots_for_assignment(schedule_map: dict, assignment_id) -> list:
@@ -115,7 +153,7 @@ def slots_for_assignment(schedule_map: dict, assignment_id) -> list:
     )
 
 
-def get_course_group_slots(db: Session, course_id: str, class_group: str) -> list:
+def get_course_group_slots(db: Session, course_id: str, class_group: str, on_date=None) -> list:
     """The timetabled slots a session for this course and group may run in.
 
     "All" means the whole course is invited, which is the lecture. Any other value names
@@ -124,7 +162,7 @@ def get_course_group_slots(db: Session, course_id: str, class_group: str) -> lis
     check using another group's slot, and left the window calculation taking whichever
     tutorial the database happened to list first.
     """
-    slots = calculate_schedule(db, course_id=course_id).values()
+    slots = calculate_schedule(db, course_id=course_id, on_date=on_date).values()
     if class_group == "All":
         return [s for s in slots if s["course_id"] == course_id and s["role"] == "Lecture"]
     return [
@@ -309,7 +347,8 @@ def conflicting_meetings(db, course):
     overlaps = AcademicSemester.end_date >= (term.start_date if term else campus_now().date())
     if term:
         overlaps &= AcademicSemester.start_date <= term.end_date
-    return query.filter(or_(Course.semester_id.is_(None), overlaps))
+    return query.filter(or_(Course.semester_id.is_(None), overlaps),
+                        or_(ClassMeeting.retire_on.is_(None), ClassMeeting.retire_on > campus_now().date()))
 
 
 def lecturer_slot_conflict(db, meeting, lecturer_id):
