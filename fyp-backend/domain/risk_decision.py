@@ -1,22 +1,47 @@
-"""Contact-minute assessments and the existing Random Forest classifier."""
+"""Contact-minute assessments and the Random Forest Risk Score."""
+import hashlib
+import io
 import logging
 import math
+import os
+import warnings
 from pathlib import Path
 
-from ml.features import FEATURE_ORDER, compute_features, features_to_row
+from ml.features import FEATURE_ORDER, FEATURE_ORDER_V2, compute_features_v2, features_to_row
 
 logger = logging.getLogger(__name__)
+
+# Model, features and Risk Score bands travel together, so a rollback can never mix them.
+# v2 and its bands: docs/03-MLModel/phase2/INTEGRATION_REPORT.md (owner-approved option A).
+_MODELS = {
+    "v2": ("risk_model_v2.pkl", "5c8245529e3c204519074b4891c7bd12bbac439a4477768834d371e34c3b5145",
+           FEATURE_ORDER_V2, (.32, .87)),
+    "v1": ("risk_model.pkl", "dd01a3074b4869aca2e22f34e806ac07ae791d467b468f01e789d4d5aa7e3e60",
+           FEATURE_ORDER, (.35, .60)),   # rollback: AT_RISK_MODEL_VERSION=v1
+}
+MODEL_VERSION = os.getenv("AT_RISK_MODEL_VERSION", "v2")
+_FILE, _SHA256, _ORDER, _BANDS = _MODELS.get(MODEL_VERSION, (None, None, None, None))
 
 
 def _load_model():
     try:
         import joblib
+        from sklearn.exceptions import InconsistentVersionWarning
 
-        model = joblib.load(Path(__file__).resolve().parents[1] / "ml" / "risk_model.pkl")
+        if _FILE is None:
+            raise KeyError(MODEL_VERSION)
+        data = (Path(__file__).resolve().parents[1] / "ml" / _FILE).read_bytes()
+        if hashlib.sha256(data).hexdigest() != _SHA256:
+            raise ValueError("model file checksum mismatch")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", InconsistentVersionWarning)   # a different scikit-learn is refused
+            model = joblib.load(io.BytesIO(data))
+        if list(getattr(model, "feature_names_in_", [])) != _ORDER:
+            raise ValueError("model features differ from the extractor")
     except Exception as error:
-        logger.warning("At-Risk model unavailable (%s)", type(error).__name__)
+        logger.warning("At-Risk model %s unavailable (%s)", MODEL_VERSION, type(error).__name__)
         return None
-    logger.info("At-Risk model loaded: %s", type(model).__name__)
+    logger.info("At-Risk model %s loaded: %s", MODEL_VERSION, type(model).__name__)
     return model
 
 
@@ -60,23 +85,28 @@ def assess(sequence, minutes, planned, issue=None, *, semester_ended=False, outs
         try:
             import pandas as pd
 
-            features = compute_features(sequence, minutes)
-            row = pd.DataFrame([features_to_row(features)], columns=FEATURE_ORDER)
+            features = compute_features_v2(sequence, minutes, planned)
+            row = pd.DataFrame([features_to_row(features, _ORDER)], columns=_ORDER)
             probability = float(_MODEL.predict_proba(row)[0][list(_MODEL.classes_).index(1)])
             if not math.isfinite(probability) or not 0 <= probability <= 1:
-                raise ValueError("Invalid model probability")
+                raise ValueError("Invalid model output")
         except Exception as error:
             logger.warning("At-Risk model prediction failed (%s)", type(error).__name__)
         else:
-            score = round(probability, 4)
-            label = "low" if score < .35 else "medium" if score < .60 else "high"
-            factors = []
+            score = round(probability, 4)   # a ranking Risk Score, not a calibrated probability
+            medium, high = _BANDS
+            label = "low" if score < medium else "medium" if score < high else "high"
+            remaining = planned - held
+            needed = -(-(4 * planned - 5 * credited) // 5)   # whole minutes still to be credited for 80%
+            # Observed inputs only; they describe the data, not how the forest weighed it.
+            factors = [f"Teaching {100 * held // planned}% complete",
+                       f"needs {needed} of the remaining {remaining} planned minutes "
+                       f"({-(-100 * needed // remaining)}%) to reach 80%"]
             if 5 * credited < 4 * held:
-                factors.append("Current attendance is below 80%")
+                factors.append("current attendance is below 80%")
             if features["consecutive_absent"] >= 3:
-                factors.append(f"Missed {features['consecutive_absent']} classes in a row")
+                factors.append(f"missed {features['consecutive_absent']} classes in a row")
             if features["trend"] <= -.10:
-                factors.append("Attendance has declined")
-            reason = "; ".join(factors) or "Random Forest assessment of the attendance pattern"
-            return result("ML Prediction", reason, label, score)
+                factors.append("attendance has declined")
+            return result("ML Prediction", "; ".join(factors), label, score)
     return result("Model Unavailable", "The attendance model is unavailable")

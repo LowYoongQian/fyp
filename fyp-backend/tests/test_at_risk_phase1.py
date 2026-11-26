@@ -674,7 +674,7 @@ def test_warning_rejects_preview_when_only_rf_probability_changes(offering, monk
         db.commit()
         after = lecturers.warning_preview(body, db, teacher)
         assert before['risk_score'] != after['risk_score']
-        assert before['risk_label'] == after['risk_label'] == 'high'
+        assert before['risk_label'] == after['risk_label']   # label unchanged; only the Risk Score moved
         body.assessment_token = before['assessment_token']
         with pytest.raises(HTTPException) as stale:
             lecturers.trigger_manual_alert(body, db, teacher)

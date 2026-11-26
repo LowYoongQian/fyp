@@ -356,7 +356,8 @@ export const AtRisk: React.FC = () => {
               At-Risk Early-Warning Dashboard
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-sans">
-              See which students are at risk and send warnings.
+              See which students are at risk and send warnings. Medium means early attention; High means priority intervention.
+              The Risk Score ranks attendance risk; it is not the probability of failing.
             </p>
           </div>
 
@@ -574,11 +575,14 @@ export const AtRisk: React.FC = () => {
                             >
                               {item.risk_label ?? '—'}
                             </span>
+                            {item.assessment_source === 'ML Prediction' && item.risk_score != null && (
+                              <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">Risk Score {item.risk_score.toFixed(2)}</div>
+                            )}
                           </td>
 
                           {/* Risk Factors / Reason */}
                           <td className="py-3.5 px-4 max-w-[240px]">
-                            <span className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug font-medium line-clamp-2">
+                            <span title={item.risk_factors ?? undefined} className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug font-medium line-clamp-2">
                               {item.risk_factors}
                             </span>
                             <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
@@ -756,6 +760,7 @@ export const AtRisk: React.FC = () => {
                 </p>
                 <p className="text-slate-500 dark:text-slate-400 mt-0.5">
                   {selectedStudentForAlert.course_code} · {formatRate(selectedStudentForAlert.attendance_rate)} · {selectedStudentForAlert.assessment_source}
+                  {selectedStudentForAlert.assessment_source === 'ML Prediction' && selectedStudentForAlert.risk_score != null && ` · Risk Score ${selectedStudentForAlert.risk_score.toFixed(2)}`}
                   <br />{selectedStudentForAlert.risk_factors}
                 </p>
               </div>

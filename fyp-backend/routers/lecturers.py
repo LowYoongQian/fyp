@@ -36,7 +36,7 @@ from domain.scheduler import (
     session_end_utc,
     slots_for_assignment,
 )
-from domain import personal_email
+from domain import personal_email, risk_decision
 from domain.risk_access import require_risk_access, scoped_enrolments
 from domain.risk_service import lock_assessment, recompute_course
 from integrations import resend_mail
@@ -171,8 +171,10 @@ def _warning_assessment(db, current_user, body):
     recompute_course(db, body.course_id, allowed={body.student_id})
     db.flush()
     score = db.query(RiskScore).filter_by(student_id=body.student_id, course_id=body.course_id).populate_existing().one()
-    token = hashlib.sha256(repr((score.attendance_rate, score.risk_score, score.risk_label, score.assessment_source,
-                                 score.risk_factors)).encode()).hexdigest()
+    shown = (score.attendance_rate, score.risk_score, score.risk_label, score.assessment_source, score.risk_factors)
+    if score.assessment_source == "ML Prediction":   # a model switch voids old previews even if the numbers match
+        shown += (risk_decision.MODEL_VERSION,)
+    token = hashlib.sha256(repr(shown).encode()).hexdigest()
     return score, token
 
 

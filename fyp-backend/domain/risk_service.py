@@ -255,3 +255,55 @@ def process_risk_updates(limit=20):
                     limit -= 1
             except Exception:
                 logger.exception("At-Risk refresh failed; update remains queued")
+
+
+def _model_course_ids(db):
+    return [row[0] for row in db.query(RiskScore.course_id).filter(
+        RiskScore.assessment_source.in_(("ML Prediction", "Model Unavailable"))).distinct()]
+
+
+def queue_model_refresh(db):
+    """After a model switch or rollback: queue every course with a model-dependent snapshot so the
+    existing worker reassesses it with the loaded model. Rule-based snapshots never depend on the
+    model. Safe to repeat: the worker folds duplicate course events into one recompute."""
+    ids = _model_course_ids(db)
+    db.add_all(RiskUpdate(course_id=course_id) for course_id in ids)
+    return len(ids)
+
+
+def stale_model_courses(db):
+    """Reassess every model-dependent course with THIS process's model inside a transaction that is
+    always rolled back; return the courses whose stored snapshots differ. Writes nothing."""
+    stale = []
+    for course_id in _model_course_ids(db):
+        lock_assessment(db, course_id)
+
+        def stored():
+            return {row.student_id: (row.assessment_source, row.risk_score, row.risk_label, row.risk_factors,
+                                     row.attendance_rate)
+                    for row in db.query(RiskScore).filter_by(course_id=course_id).populate_existing()}
+        before = stored()
+        recompute_course(db, course_id)
+        db.flush()
+        if stored() != before:
+            stale.append(course_id)
+        db.rollback()
+    return stale
+
+
+if __name__ == "__main__":   # deploy step, see docs/03-MLModel/phase2/INTEGRATION_REPORT.md §6
+    import sys
+
+    from domain.risk_decision import _MODEL, MODEL_VERSION
+    if sys.argv[1:] == []:
+        with SessionLocal.begin() as session:
+            print(f"Queued {queue_model_refresh(session)} course(s) for At-Risk reassessment")
+    elif sys.argv[1:] == ["verify"]:
+        if _MODEL is None:
+            sys.exit(f"At-Risk model {MODEL_VERSION} did not load here; cannot verify")
+        with SessionLocal() as session:
+            stale = stale_model_courses(session)
+        print(f"Model {MODEL_VERSION}: {len(stale)} course(s) with snapshots not matching this model", *stale, sep="\n")
+        sys.exit(1 if stale else 0)
+    else:
+        sys.exit("usage: python -m domain.risk_service [verify]")

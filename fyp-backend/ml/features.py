@@ -65,8 +65,25 @@ def compute_features(sequence: list[int], hours: list[float] | None = None) -> d
 
 # Fixed feature order — the model expects columns in exactly this sequence.
 FEATURE_ORDER = ["attendance_rate", "consecutive_absent", "trend"]
+# risk_model_v2.pkl (docs/03-MLModel/phase2): the original three plus plan headroom.
+FEATURE_ORDER_V2 = FEATURE_ORDER + ["progress", "required_future_rate"]
 
 
-def features_to_row(feats: dict) -> list[float]:
+def compute_features_v2(sequence: list[int], minutes: list[int], planned: int) -> dict:
+    """compute_features plus teaching progress and the share of the remaining planned minutes
+    that must still be credited to reach 80%. Same expressions and rounding as the training
+    data (docs/03-MLModel/phase2/sim.py `features`). Only defined while teaching remains."""
+    held = sum(minutes)
+    remaining = planned - held if planned else 0
+    if remaining <= 0:   # no plan, negative plan, or teaching already complete
+        raise ValueError("progress features need a positive plan with minutes remaining")
+    credited = sum(m for s, m in zip(sequence, minutes) if s)
+    feats = compute_features(sequence, minutes)
+    feats["progress"] = round(held / planned, 4)
+    feats["required_future_rate"] = round((0.8 * planned - credited) / remaining, 4)
+    return feats
+
+
+def features_to_row(feats: dict, order: list[str] = FEATURE_ORDER) -> list[float]:
     """Convert a feature dict into an ordered list for model input."""
-    return [feats[name] for name in FEATURE_ORDER]
+    return [feats[name] for name in order]
