@@ -12,7 +12,7 @@ export function TextInput({ showCounter = true, ...props }: InputHTMLAttributes<
 export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const id = useId();
   const [length, setLength] = useState(String(props.defaultValue ?? '').length);
-  const limit = Math.min(props.maxLength ?? 255, 255);
+  const limit = props.maxLength ?? 255;   // 255 unless a caller states the backend's own limit
   return <><textarea {...props} maxLength={limit} aria-describedby={[props['aria-describedby'], id].filter(Boolean).join(' ')} onChange={event => {
     setLength(event.currentTarget.value.length); props.onChange?.(event);
   }} /><span id={id} className="block text-right text-[9px] leading-4 text-slate-400" aria-hidden="true">{props.value == null ? length : String(props.value).length}/{limit}</span></>;

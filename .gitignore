@@ -185,6 +185,7 @@ test_*.py
 !/fyp-backend/tests/at_risk_ui.cjs
 !/fyp-backend/tests/test_at_risk_ml_v2.py
 !/fyp-backend/tests/at_risk_ml_v2_ui.cjs
+!/fyp-backend/tests/test_enrolment_authorization.py
 !/fyp-backend/tests/timetable_revision_test.dart
 !/fyp-backend/tests/test_dashboard_sessions.py
 !/fyp-backend/tests/test_alembic_isolated.py

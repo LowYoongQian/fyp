@@ -771,6 +771,7 @@ export const AtRisk: React.FC = () => {
                 Email Body
               </label>
               <TextArea
+                maxLength={5000}   // lecturers.AlertCreate.email_body max_length
                 value={customDraft}
                 onChange={e => setCustomDraft(e.target.value)}
                 rows={8}

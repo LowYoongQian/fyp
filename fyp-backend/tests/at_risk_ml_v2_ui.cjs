@@ -48,6 +48,7 @@ const { chromium, expect, localUrl } = require('../../qa/browser.cjs');
     await expect(page.getByRole('row').filter({ hasText: 'Synthetic Certain' })).not.toContainText('Risk Score');
     await medium.getByRole('button', { name: 'Alert' }).click();
     await expect(page.getByText('QA101 · 50.0% · ML Prediction · Risk Score 0.48')).toBeVisible();
+    await expect(page.getByText(/^\d+\/5000$/)).toBeVisible();   // counter shows the backend's email_body limit
     await page.screenshot({ path: require('path').join(__dirname, 'artifacts', 'at_risk_ml_v2_ui.png'), fullPage: true });
     console.log('PASS At-Risk V2 Risk Score semantics, band meaning, data-based factors and warning preview score.');
   } finally {

@@ -17,7 +17,7 @@ from domain.scheduler import (WEEKDAYS, DAY_END_MIN, DAY_START_MIN, TIMES, activ
 from domain.session_sync import sync_class_sessions
 from db.models import User, Student, Lecturer, Course, Enrolment, Programme, AcademicSemester, CourseStaffAssignment, RiskScore, Alert, ClassSession, AttendanceRecord, ClassMeeting
 from domain.semesters import lock_programme, lock_programmes, enrolment_semester, run_transaction, semester_dict
-from utils.security import require_admin, require_lecturer
+from utils.security import require_admin
 from utils.db_helpers import get_or_404, ensure_unique
 from utils.timeutil import campus_now, local_offset, utcnow
 from schemas import (
@@ -638,7 +638,8 @@ def delete_timetable_slot(meeting_id: str, db: Session = Depends(get_db),
 # =====================================================================
 
 @router.get("/enrolments", response_model=List[dict])
-def get_enrolments(db: Session = Depends(get_db), current_user: User = Depends(require_lecturer)):
+def get_enrolments(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+    # Every enrolment in the system: administration only. Staff use the scoped /lecturers/me/enrolments.
     enrolments = db.query(Enrolment).options(
         joinedload(Enrolment.student),
         joinedload(Enrolment.course)

@@ -9,6 +9,7 @@ from db.database import get_db
 from db.models import Course, Enrolment, Lecturer, User
 from domain import programme_groups as groups
 from domain.audit import log_admin_action
+from domain.risk_access import teaches_group
 from domain.scheduler import groups_for_course
 from domain.semesters import run_transaction
 from routers.admin_academic import enrol_student
@@ -77,7 +78,13 @@ def move_course_group(enrolment_id: UUID, body: GroupChange, db: Session = Depen
     if current_user.role == "admin":
         allowed = None
     elif current_user.role == "lecturer":
-        allowed = my_course_ids(db, require_own_profile(db, Lecturer, current_user.id, "Lecturer").id)
+        lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
+        allowed = my_course_ids(db, lecturer.id)
+        enrolment = db.get(Enrolment, str(enrolment_id))
+        target = groups.valid_group(body.class_group)
+        if enrolment is not None and not (teaches_group(db, lecturer.id, enrolment.course_id, enrolment.class_group)
+                                          and teaches_group(db, lecturer.id, enrolment.course_id, target)):
+            raise HTTPException(403, "You can only move students between groups you teach.")
     else:
         raise HTTPException(403, "Lecturer or Admin permission required")
     return groups.move_course_group(db, current_user, enrolment_id, body.class_group, body.dry_run, allowed)
@@ -94,6 +101,8 @@ def staff_add_course(body: StaffEnrolment, db: Session = Depends(get_db), curren
     if course is None or course.id not in set(my_course_ids(db, lecturer.id)):
         raise HTTPException(403, "You can only add students to courses you teach.")
     group = groups.valid_group(body.class_group)
+    if not teaches_group(db, lecturer.id, course.id, group):
+        raise HTTPException(403, "You can only add students to groups you teach.")
     student_id = str(body.student_id)
 
     def work():

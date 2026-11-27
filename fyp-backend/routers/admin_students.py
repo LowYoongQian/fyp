@@ -10,6 +10,7 @@ from utils.timeutil import iso_utc
 from utils.security import require_admin, require_lecturer, hash_password
 from utils.db_helpers import get_or_404, ensure_unique, require_email_domain
 from domain.audit import log_admin_action
+from domain.risk_access import scoped_enrolments
 from domain.semesters import lock_programmes, run_transaction
 from schemas import (
     AdminStudentCreate, AdminStudentUpdate,
@@ -27,6 +28,8 @@ def get_students(
     current_user: User = Depends(require_lecturer)
 ):
     query = db.query(Student).options(joinedload(Student.user))
+    if current_user.role != "admin":   # staff: only students in their own teaching scope (course + group)
+        query = query.filter(Student.id.in_(scoped_enrolments(db, current_user).with_entities(Enrolment.student_id)))
     if search:
         search_val = f"%{search}%"
         query = query.outerjoin(User, User.id == Student.user_id).filter(

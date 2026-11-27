@@ -38,6 +38,16 @@ def teaching_group_filter(db, lecturer_id):
     ).correlate(Enrolment).exists()
 
 
+def teaches_group(db, lecturer_id, course_id, group):
+    """The same rule as teaching_group_filter for one named group: a Lecture covers every group of the course."""
+    return db.query(ClassMeeting.id).filter(
+        ClassMeeting.lecturer_id == lecturer_id,
+        ClassMeeting.course_id == course_id,
+        _active_meeting(db),
+        or_(ClassMeeting.role == "Lecture", ClassMeeting.class_group == group),
+    ).first() is not None
+
+
 def scoped_enrolments(db, user):
     query = db.query(Enrolment)
     if user.role == "admin":

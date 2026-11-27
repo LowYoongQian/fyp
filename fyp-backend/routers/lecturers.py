@@ -433,14 +433,12 @@ def get_lecturer_enrolments(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_lecturer),
 ):
-    """Return only enrolments for the current lecturer's assigned courses in the current semester."""
-    lecturer = require_own_profile(db, Lecturer, current_user.id, "Lecturer")
-    course_ids = timetable_access.teaching_course_ids(db, lecturer.id)
+    """Return only enrolments in the current lecturer's teaching groups (a Lecture covers every group) in the current semester."""
+    require_own_profile(db, Lecturer, current_user.id, "Lecturer")
     rows = (
-        db.query(Enrolment, Student, Course)
+        scoped_enrolments(db, current_user).with_entities(Enrolment, Student, Course)
         .join(Student, Student.id == Enrolment.student_id)
         .join(Course, Course.id == Enrolment.course_id)
-        .filter(Enrolment.course_id.in_(course_ids))
         .all()
     )
     return [
